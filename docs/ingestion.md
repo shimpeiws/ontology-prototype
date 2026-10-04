@@ -43,7 +43,7 @@ Evidence lands under `<workspace>/.ontology/`:
 Ingestion diagnostics reuse the workspace diagnostic shape: `file` is the snapshot name and `path` is `record[<n>].<field>` (1-based record index). Codes:
 
 - `INGEST.UNREADABLE_SOURCE`, `INGEST.SOURCE_TOO_LARGE`, `INGEST.ENCODING_ERROR` — the snapshot cannot be read.
-- `INGEST.INVALID_SOURCE` — unparseable JSON, a non-array JSON top level, or a CSV without a header row.
+- `INGEST.INVALID_SOURCE` — unparseable JSON (including `NaN`/`Infinity` literals, which reject the whole snapshot rather than a single record), a non-array JSON top level, or a CSV without a header row.
 - `INGEST.DUPLICATE_COLUMN` — a CSV header declares a column twice.
 - `INGEST.INVALID_ROW` — a row is not a flat field mapping (extra cells, non-object JSON element).
 - `INGEST.NON_SCALAR` — a field value is a nested object or list.

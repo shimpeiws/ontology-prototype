@@ -625,13 +625,15 @@ def _parse_json(
 
 
 def _mapping_digest(workspace: Workspace) -> str:
-    """Digest of the mapping definition plus the workspace schema version."""
-    try:
-        raw = (Path(workspace.path) / "mapping.yaml").read_bytes()
-    except OSError:
-        raw = json.dumps(
-            dataclasses.asdict(workspace.mapping), sort_keys=True, default=str
-        ).encode("utf-8")
+    """Digest of the mapping definition plus the workspace schema version.
+
+    Computed from the loaded mapping object — the definition the records are
+    actually resolved with — so a concurrent edit of ``mapping.yaml`` cannot
+    make the recorded digest point at a different mapping.
+    """
+    raw = json.dumps(
+        dataclasses.asdict(workspace.mapping), sort_keys=True, default=str
+    ).encode("utf-8")
     payload = f"schema_version={SUPPORTED_SCHEMA_VERSION}\n".encode("utf-8") + raw
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
