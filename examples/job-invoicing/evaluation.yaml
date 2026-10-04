@@ -1,0 +1,23 @@
+schema_version: 1
+kind: evaluation
+evaluation:
+  name: completion-to-invoice-latency
+  description: Days from JobCompleted to InvoiceIssued for the same job.
+  interval:
+    start_event: JobCompleted
+    end_event: InvoiceIssued
+  metric: duration
+  aggregation: median
+  unit: days
+  baseline:
+    value: 9
+    description: Baseline median completion-to-invoice latency.
+  target:
+    comparator: lt
+    value: 4
+    description: Strict target; a median of exactly 4 days is a miss.
+  guardrails:
+    - name: invoice-error-rate
+      metric: invoice_error_rate
+      comparator: not_increase
+      description: Invoice-error rate must not increase versus baseline.

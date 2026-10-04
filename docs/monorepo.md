@@ -1,6 +1,6 @@
 # Monorepo and application boundaries
 
-Status: accepted planning constraint for v0.1. Implementation is tracked in issue #1.
+Status: accepted planning constraint for v0.1. The core/CLI packages and workspace validation are implemented under issue #1; the workspace definition format is documented in [workspace.md](workspace.md).
 
 ## Goal
 
