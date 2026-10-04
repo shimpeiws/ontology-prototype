@@ -58,7 +58,11 @@ def load_workspace(path: str | Path) -> LoadResult:
     diag = Diagnostics()
     root = Path(path)
 
-    if not root.is_dir():
+    try:
+        is_dir = root.is_dir()
+    except (OSError, ValueError):
+        is_dir = False
+    if not is_dir:
         diag.error(
             "WORKSPACE.NOT_A_DIRECTORY",
             f"workspace path is not a directory: {root}",
@@ -68,7 +72,16 @@ def load_workspace(path: str | Path) -> LoadResult:
     docs: dict[str, dict] = {}
     for kind, filename in WORKSPACE_FILES.items():
         file_path = root / filename
-        if not file_path.is_file():
+        try:
+            exists = file_path.is_file()
+        except OSError as exc:
+            diag.error(
+                "WORKSPACE.UNREADABLE_FILE",
+                f"cannot stat file: {exc.strerror or exc}",
+                file=filename,
+            )
+            continue
+        if not exists:
             diag.error(
                 "WORKSPACE.MISSING_FILE",
                 f"missing required definition file {filename}",
@@ -88,7 +101,9 @@ def load_workspace(path: str | Path) -> LoadResult:
     if domain is None and downstream_kinds:
         diag.warning(
             "WORKSPACE.CROSS_VALIDATION_SKIPPED",
-            "domain definition has errors; cross-file reference checks were skipped",
+            "domain.yaml is missing or invalid; cross-file reference checks "
+            "were skipped",
+            file=WORKSPACE_FILES["domain"],
         )
 
     mapping = (

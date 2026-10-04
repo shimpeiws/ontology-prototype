@@ -31,6 +31,19 @@ def test_diagnostics_are_deterministic(tmp_path: Path) -> None:
     ]
 
 
+def test_missing_domain_warns_distinctly(tmp_path: Path) -> None:
+    docs = base_docs()
+    workspace = make_workspace(tmp_path, docs)
+    (workspace / "domain.yaml").unlink()
+    result = load_workspace(workspace)
+    assert not result.ok
+    warning = next(
+        d for d in result.diagnostics if d.code == "WORKSPACE.CROSS_VALIDATION_SKIPPED"
+    )
+    assert warning.file == "domain.yaml"
+    assert "missing or invalid" in warning.message
+
+
 def test_each_error_class_is_rejected(tmp_path: Path) -> None:
     # Representative case per acceptance-criterion rejection class.
     cases = {

@@ -1,6 +1,6 @@
 # Workspace definitions and validation
 
-A workspace is a directory containing four YAML definition files. The FDE checks these files in; loading them is data-only — no environment interpolation, no external includes, no Python or SQL execution.
+A workspace is a directory containing four YAML definition files. The FDE checks these files in; loading them is data-only — no environment interpolation, no external includes, no Python or SQL execution. Files must be UTF-8 and at most 1 MiB each. Anchors/aliases are permitted; a merge key that overrides an explicit key is reported as `WORKSPACE.DUPLICATE_KEY`, never silently merged.
 
 | File | Content |
 | --- | --- |
@@ -47,7 +47,7 @@ domain:
 - Property `type` is one of `string`, `integer`, `number`, `boolean`, `date`, `datetime`, `ref`.
 - `ref` properties require `ref: <entity name>`; references resolve to entities only (never events or projections).
 - Every event and projection requires a `subject` entity.
-- Events always carry occurrence and observation times named by `policies.event_times`; schema v1 supports only `date_only_timezone: UTC`.
+- Every event carries an occurrence time and an observation time. Schema v1 fixes the canonical field names: `occurrence_field` must be `occurred_at` and `observation_field` must be `observed_at` — the policy declares them explicitly so all four files agree on the same temporal contract. `date_only_timezone` must be `UTC`: a date-only value means midnight UTC.
 - `entity_id_type` must be `string` — entity ids are never cast to numbers.
 
 ## mapping.yaml
@@ -67,11 +67,13 @@ mapping:
       subject: { entity: Job, id: { field: id } }
       when: { op: and, args: [ { op: eq, field: status, value: completed }, { op: not_null, field: completed_at } ] }
       occurred_at: { field: completed_at, as: datetime }
+      observed_at: { field: seen_at, as: datetime }   # optional
 ```
 
 - An assignment is `{ field: <column> }` or `{ literal: <scalar> }` — exactly one — plus optional `as` cast.
 - `as` must equal the target property's type and is required for non-`string` scalar properties. It is forbidden on `ref` properties and on entity ids.
-- `occurred_at` requires `as: date` or `as: datetime`.
+- Literals for entity ids, subject ids, and event times must be strings — ids and times are never numeric literals.
+- `occurred_at` is required and `observed_at` optional on each event binding; both require `as: date` or `as: datetime`. The key names are the ones pinned by `domain.policies.event_times`.
 - `subject.entity` must equal the event's declared subject in the domain.
 - Entity names, event names, and property names must exist in the domain.
 

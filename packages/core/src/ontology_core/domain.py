@@ -20,6 +20,11 @@ from .schema import check_name, err_at, get_map, get_str, unknown_keys, warn_at
 
 SUPPORTED_TIMEZONES = ("UTC",)
 
+# Schema v1 fixes the canonical event time field names. The policy declares
+# them explicitly so every file agrees on the same temporal contract.
+OCCURRENCE_FIELD = "occurred_at"
+OBSERVATION_FIELD = "observed_at"
+
 
 def suggest(name: str, candidates: list[str] | tuple[str, ...] | Any) -> str | None:
     matches = difflib.get_close_matches(name, list(candidates), n=1, cutoff=0.6)
@@ -145,15 +150,20 @@ def _validate_policies(node: Any, err, path: str) -> DomainPolicies | None:
         occurrence = get_str(times, "occurrence_field", err, f"{path}.event_times")
         observation = get_str(times, "observation_field", err, f"{path}.event_times")
         timezone = get_str(times, "date_only_timezone", err, f"{path}.event_times")
-        if (
-            occurrence is not None
-            and observation is not None
-            and occurrence == observation
-        ):
+        if occurrence is not None and occurrence != OCCURRENCE_FIELD:
             err(
                 "DOMAIN.INVALID_TIME_POLICY",
-                f"{path}.event_times",
-                "occurrence_field and observation_field must be distinct",
+                f"{path}.event_times.occurrence_field",
+                f"schema v1 fixes the occurrence field name to {OCCURRENCE_FIELD!r}, "
+                f"got {occurrence!r}",
+            )
+            ok = False
+        if observation is not None and observation != OBSERVATION_FIELD:
+            err(
+                "DOMAIN.INVALID_TIME_POLICY",
+                f"{path}.event_times.observation_field",
+                f"schema v1 fixes the observation field name to {OBSERVATION_FIELD!r}, "
+                f"got {observation!r}",
             )
             ok = False
         if timezone is not None and timezone not in SUPPORTED_TIMEZONES:

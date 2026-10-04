@@ -33,10 +33,15 @@ def test_time_policy_fields_required(tmp_path: Path) -> None:
     assert "SCHEMA.MISSING_FIELD" in codes(result)
 
 
-def test_time_policy_fields_must_differ(tmp_path: Path) -> None:
+def test_time_policy_names_fixed_in_v1(tmp_path: Path) -> None:
     docs = base_docs()
-    times = docs["domain"]["domain"]["policies"]["event_times"]
-    times["observation_field"] = times["occurrence_field"]
+    docs["domain"]["domain"]["policies"]["event_times"]["occurrence_field"] = "happened_at"
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "DOMAIN.INVALID_TIME_POLICY" in codes(result)
+
+    docs = base_docs()
+    docs["domain"]["domain"]["policies"]["event_times"]["observation_field"] = "seen_at"
     result = load_workspace(make_workspace(tmp_path, docs))
     assert not result.ok
     assert "DOMAIN.INVALID_TIME_POLICY" in codes(result)

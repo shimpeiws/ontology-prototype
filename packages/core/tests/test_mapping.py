@@ -152,6 +152,57 @@ def test_occurred_at_rejects_non_time_cast(tmp_path: Path) -> None:
     assert "MAPPING.INVALID_CAST" in codes(result)
 
 
+def test_entity_id_literal_must_be_string(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["mapping"]["mapping"]["entities"][0]["id"] = {"literal": 101}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "MAPPING.INCOMPATIBLE_LITERAL" in codes(result)
+
+
+def test_subject_id_literal_must_be_string(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["mapping"]["mapping"]["events"][0]["subject"]["id"] = {"literal": 101}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "MAPPING.INCOMPATIBLE_LITERAL" in codes(result)
+
+
+def test_occurred_at_literal_must_be_string(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["mapping"]["mapping"]["events"][0]["occurred_at"] = {
+        "literal": 123,
+        "as": "date",
+    }
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "MAPPING.INCOMPATIBLE_LITERAL" in codes(result)
+
+
+def test_observed_at_binding(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["mapping"]["mapping"]["events"][0]["observed_at"] = {
+        "field": "seen_at",
+        "as": "datetime",
+    }
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert result.ok, [d.format() for d in result.diagnostics]
+    binding = result.workspace.mapping.events[0]
+    assert binding.observed_at is not None
+    assert binding.observed_at.field == "seen_at"
+
+
+def test_observed_at_rejects_non_time_cast(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["mapping"]["mapping"]["events"][0]["observed_at"] = {
+        "field": "seen_at",
+        "as": "string",
+    }
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "MAPPING.INVALID_CAST" in codes(result)
+
+
 def test_typed_mapping_model(valid_workspace: Path) -> None:
     result = load_workspace(valid_workspace)
     assert result.ok

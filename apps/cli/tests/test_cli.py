@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLE_WORKSPACE, copy_example, rewrite
+from clisupport import EXAMPLE_WORKSPACE, copy_example, rewrite
 
 from ontology_cli.main import EXIT_INVALID, EXIT_OK, main
 

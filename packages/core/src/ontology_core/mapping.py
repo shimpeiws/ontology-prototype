@@ -6,7 +6,7 @@ from typing import Any
 
 from .conditions import validate_condition
 from .diagnostics import Diagnostics
-from .domain import suggest
+from .domain import OBSERVATION_FIELD, OCCURRENCE_FIELD, suggest
 from .model import (
     CAST_TYPES,
     DomainDefinition,
@@ -155,6 +155,14 @@ def _validate_assignment(
                 )
                 ok = False
 
+    if target is None and ok and has_literal and not isinstance(literal, str):
+        err(
+            "MAPPING.INCOMPATIBLE_LITERAL",
+            f"{path}.literal",
+            "entity ids and event times are strings; literal must be a string",
+        )
+        ok = False
+
     if not ok:
         return None
     return FieldAssignment(field=field_name, literal=literal, cast=cast)
@@ -265,13 +273,25 @@ def validate_mapping(
 
     event_bindings: list[EventBinding] = []
     events_node = get_list(section, "events", err, "mapping")
+    # Event time keys are the names pinned by the domain's explicit policy.
+    occurrence_key = (
+        domain.policies.event_times.occurrence_field if domain else OCCURRENCE_FIELD
+    )
+    observation_key = (
+        domain.policies.event_times.observation_field if domain else OBSERVATION_FIELD
+    )
     if events_node is not None:
         for index, item in enumerate(events_node):
             path = f"mapping.events[{index}]"
             if not isinstance(item, dict):
                 err("SCHEMA.INVALID_TYPE", path, "event binding must be a mapping")
                 continue
-            unknown_keys(item, {"event", "subject", "when", "occurred_at"}, err, path)
+            unknown_keys(
+                item,
+                {"event", "subject", "when", occurrence_key, observation_key},
+                err,
+                path,
+            )
             event_name = get_str(item, "event", err, path)
             event_type = None
             if event_name is not None and domain is not None:
@@ -294,19 +314,29 @@ def validate_mapping(
             when = None
             if "when" in item:
                 when = validate_condition(item["when"], err, f"{path}.when")
-            occurred_node = item.get("occurred_at")
+            occurred_node = item.get(occurrence_key)
             occurred_at = None
             if occurred_node is None:
                 err(
                     "SCHEMA.MISSING_FIELD",
-                    f"{path}.occurred_at",
-                    "event binding requires 'occurred_at'",
+                    f"{path}.{occurrence_key}",
+                    f"event binding requires '{occurrence_key}'",
                 )
             else:
                 occurred_at = _validate_assignment(
                     occurred_node,
                     err,
-                    f"{path}.occurred_at",
+                    f"{path}.{occurrence_key}",
+                    None,
+                    allowed_casts=TIME_CASTS,
+                    require_cast=True,
+                )
+            observed_at = None
+            if observation_key in item:
+                observed_at = _validate_assignment(
+                    item[observation_key],
+                    err,
+                    f"{path}.{observation_key}",
                     None,
                     allowed_casts=TIME_CASTS,
                     require_cast=True,
@@ -318,6 +348,7 @@ def validate_mapping(
                         subject=subject,
                         occurred_at=occurred_at,
                         when=when,
+                        observed_at=observed_at,
                     )
                 )
 

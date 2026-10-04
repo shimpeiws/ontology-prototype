@@ -2,7 +2,11 @@
 
 Loading is data-only: a restricted SafeLoader rejects Python object tags,
 performs no environment interpolation, and reports duplicate mapping keys
-instead of silently keeping the last value.
+instead of silently keeping the last value. Anchors/aliases are permitted;
+a merge key that overrides an explicit key is reported as a duplicate.
+Files are UTF-8 only and capped in size; every failure mode — including
+parser-level recursion or allocation errors — becomes a diagnostic rather
+than an exception.
 """
 
 from __future__ import annotations
@@ -13,6 +17,8 @@ import yaml
 from yaml.nodes import MappingNode
 
 from .diagnostics import Diagnostics
+
+MAX_FILE_BYTES = 1_000_000
 
 
 class DuplicateKeyError(Exception):
@@ -51,11 +57,28 @@ def load_yaml_file(path: Path, file: str, diag: Diagnostics) -> dict | None:
     Every failure is reported to ``diag``; this function never raises.
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        size = path.stat().st_size
+        raw = path.read_bytes()
+        text = raw.decode("utf-8")
     except OSError as exc:
         diag.error(
             "WORKSPACE.UNREADABLE_FILE",
             f"cannot read file: {exc.strerror or exc}",
+            file=file,
+        )
+        return None
+    except UnicodeDecodeError as exc:
+        diag.error(
+            "WORKSPACE.ENCODING_ERROR",
+            f"file is not valid UTF-8: {exc}",
+            file=file,
+        )
+        return None
+
+    if size > MAX_FILE_BYTES:
+        diag.error(
+            "WORKSPACE.FILE_TOO_LARGE",
+            f"file is {size} bytes; limit is {MAX_FILE_BYTES}",
             file=file,
         )
         return None
@@ -74,11 +97,19 @@ def load_yaml_file(path: Path, file: str, diag: Diagnostics) -> dict | None:
     except yaml.YAMLError as exc:
         mark = getattr(exc, "problem_mark", None)
         line = mark.line + 1 if getattr(mark, "line", None) is not None else None
+        problem = getattr(exc, "problem", None) or "invalid YAML"
         diag.error(
             "WORKSPACE.YAML_ERROR",
-            f"invalid YAML: {exc}",
+            f"invalid YAML: {problem}",
             file=file,
             line=line,
+        )
+        return None
+    except Exception as exc:
+        diag.error(
+            "WORKSPACE.YAML_ERROR",
+            f"cannot parse YAML: {type(exc).__name__}",
+            file=file,
         )
         return None
 

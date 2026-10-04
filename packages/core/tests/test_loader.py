@@ -113,6 +113,60 @@ def test_kind_mismatch(tmp_path: Path) -> None:
     assert "SCHEMA.KIND_MISMATCH" in codes(result)
 
 
+def test_non_utf8_file_becomes_diagnostic(tmp_path: Path) -> None:
+    docs = base_docs()
+    workspace = make_workspace(tmp_path, docs)
+    (workspace / "domain.yaml").write_bytes(b"schema_version: 1\nname: caf\xe9\n")
+    result = load_workspace(workspace)
+    assert not result.ok
+    assert "WORKSPACE.ENCODING_ERROR" in codes(result)
+
+
+def test_embedded_null_path_becomes_diagnostic() -> None:
+    result = load_workspace("bad\0path")
+    assert not result.ok
+    assert "WORKSPACE.NOT_A_DIRECTORY" in codes(result)
+
+
+def test_deeply_nested_yaml_becomes_diagnostic(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"] = "x: " + "[" * 5000 + "]" * 5000
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "WORKSPACE.YAML_ERROR" in codes(result)
+
+
+def test_oversized_file_rejected(tmp_path: Path) -> None:
+    docs = base_docs()
+    workspace = make_workspace(tmp_path, docs)
+    (workspace / "agent.yaml").write_bytes(b"# " + b"x" * 1_100_000)
+    result = load_workspace(workspace)
+    assert not result.ok
+    assert "WORKSPACE.FILE_TOO_LARGE" in codes(result)
+
+
+def test_merge_key_override_is_duplicate(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"] = (
+        "schema_version: 1\nkind: domain\n"
+        "domain:\n  name: &n first\n  <<: {name: second}\n"
+    )
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "WORKSPACE.DUPLICATE_KEY" in codes(result)
+
+
+def test_yaml_error_message_has_no_file_body(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"] = 'schema_version: 1\nkind: domain\nsecret_line: "BODY-SENTINEL"\nbad: ['
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    yaml_errors = [d for d in result.diagnostics if d.code == "WORKSPACE.YAML_ERROR"]
+    assert yaml_errors
+    for diagnostic in yaml_errors:
+        assert "BODY-SENTINEL" not in diagnostic.message
+
+
 def test_no_env_interpolation(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ONTOLOGY_TEST_SENTINEL", "expanded-value")
     docs = base_docs()

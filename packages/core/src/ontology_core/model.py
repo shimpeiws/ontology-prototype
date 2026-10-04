@@ -116,6 +116,7 @@ class EventBinding:
     subject: SubjectRef
     occurred_at: FieldAssignment
     when: Condition | None = None
+    observed_at: FieldAssignment | None = None
 
 
 @dataclass(frozen=True)
