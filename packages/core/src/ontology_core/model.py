@@ -1,0 +1,201 @@
+"""Typed workspace definition objects.
+
+These dataclasses are the transport-independent contract between the core and
+any app. Validation builds them only when the corresponding file is error free.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+SCALAR_TYPES = ("string", "integer", "number", "boolean", "date", "datetime")
+PROPERTY_TYPES = SCALAR_TYPES + ("ref",)
+CAST_TYPES = SCALAR_TYPES
+
+
+@dataclass(frozen=True)
+class PropertySpec:
+    name: str
+    type: str
+    required: bool = False
+    ref: str | None = None
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class EntityType:
+    name: str
+    properties: dict[str, PropertySpec] = field(default_factory=dict)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class EventType:
+    name: str
+    subject: str
+    properties: dict[str, PropertySpec] = field(default_factory=dict)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class ProjectionSpec:
+    name: str
+    subject: str
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class EventTimePolicy:
+    """Explicit temporal policy for canonical events.
+
+    Every event carries an occurrence time (``occurrence_field``) and an
+    observation time (``observation_field``). Date-only values are interpreted
+    as midnight in ``date_only_timezone`` (only ``UTC`` is supported in
+    schema version 1).
+    """
+
+    occurrence_field: str
+    observation_field: str
+    date_only_timezone: str
+
+
+@dataclass(frozen=True)
+class DomainPolicies:
+    """Explicit workspace policies. ``entity_id_type`` is always ``string``:
+    entity identifiers are opaque strings and are never coerced to numbers."""
+
+    entity_id_type: str
+    event_times: EventTimePolicy
+
+
+@dataclass(frozen=True)
+class DomainDefinition:
+    name: str
+    policies: DomainPolicies
+    entities: dict[str, EntityType] = field(default_factory=dict)
+    events: dict[str, EventType] = field(default_factory=dict)
+    projections: dict[str, ProjectionSpec] = field(default_factory=dict)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class Condition:
+    """A validated declarative condition tree (see conditions.py)."""
+
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class FieldAssignment:
+    """Maps one value from a source record: exactly one of ``field`` /
+    ``literal``, plus an optional explicit scalar ``cast``."""
+
+    field: str | None = None
+    literal: str | int | float | bool | None = None
+    cast: str | None = None
+
+
+@dataclass(frozen=True)
+class EntityBinding:
+    entity: str
+    id: FieldAssignment
+    properties: dict[str, FieldAssignment] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SubjectRef:
+    entity: str
+    id: FieldAssignment
+
+
+@dataclass(frozen=True)
+class EventBinding:
+    event: str
+    subject: SubjectRef
+    occurred_at: FieldAssignment
+    when: Condition | None = None
+    observed_at: FieldAssignment | None = None
+
+
+@dataclass(frozen=True)
+class SourceSpec:
+    name: str
+    format: str
+
+
+@dataclass(frozen=True)
+class MappingDefinition:
+    name: str
+    source: SourceSpec
+    entities: list[EntityBinding] = field(default_factory=list)
+    events: list[EventBinding] = field(default_factory=list)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class IntervalSpec:
+    start_event: str
+    end_event: str
+
+
+@dataclass(frozen=True)
+class TargetSpec:
+    comparator: str
+    value: float
+
+
+@dataclass(frozen=True)
+class GuardrailSpec:
+    name: str
+    metric: str
+    comparator: str
+    value: float | None = None
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class EvaluationDefinition:
+    name: str
+    interval: IntervalSpec
+    metric: str
+    aggregation: str
+    unit: str
+    baseline: float
+    target: TargetSpec
+    guardrails: list[GuardrailSpec] = field(default_factory=list)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    goal: str
+    deliverables: list[str]
+
+
+@dataclass(frozen=True)
+class ActionSpec:
+    name: str
+    params: dict[str, PropertySpec] = field(default_factory=dict)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentDefinition:
+    name: str
+    projection: str
+    task: TaskSpec
+    permitted_actions: dict[str, ActionSpec] = field(default_factory=dict)
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class Workspace:
+    """A fully validated workspace: the four definitions an FDE checks in."""
+
+    path: Path
+    domain: DomainDefinition
+    mapping: MappingDefinition
+    evaluation: EvaluationDefinition
+    agent: AgentDefinition

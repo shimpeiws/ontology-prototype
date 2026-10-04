@@ -1,0 +1,50 @@
+schema_version: 1
+kind: domain
+domain:
+  name: job-invoicing
+  description: Minimal model for the completed-jobs-to-invoice workflow.
+  policies:
+    entity_id_type: string
+    event_times:
+      occurrence_field: occurred_at
+      observation_field: observed_at
+      date_only_timezone: UTC
+  entities:
+    Job:
+      description: A unit of work delivered for a customer.
+      properties:
+        status:
+          type: string
+          required: true
+        assignee:
+          type: ref
+          ref: Person
+          description: Person responsible for the job.
+    Invoice:
+      description: A bill issued for a job.
+      properties:
+        job:
+          type: ref
+          ref: Job
+        error:
+          type: boolean
+          description: True when the invoice was issued with an error.
+    Person:
+      properties:
+        name:
+          type: string
+  events:
+    JobCompleted:
+      subject: Job
+      description: A job was completed.
+    InvoiceIssued:
+      subject: Job
+      description: An invoice was issued for a job.
+      properties:
+        invoice:
+          type: ref
+          ref: Invoice
+  projections:
+    CompletedButNotInvoiced:
+      subject: Job
+      description: Jobs whose completion is observed without a later invoice.
