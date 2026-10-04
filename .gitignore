@@ -7,3 +7,7 @@ dist/
 .pytest_cache/
 .verification/
 .letta/
+
+# Runtime artifacts: ingested snapshots, observation evidence, and traces
+# live under a workspace's .ontology/ directory and are never committed.
+.ontology/

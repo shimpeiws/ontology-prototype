@@ -33,11 +33,15 @@ python -m pytest -q
 ```bash
 ontology check examples/job-invoicing
 ontology check examples/job-invoicing --json
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs.csv
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs.csv --json
 ```
 
 `ontology check` loads a workspace directory (the four files `domain.yaml`, `mapping.yaml`, `evaluation.yaml`, `agent.yaml`), prints structured diagnostics, and exits `0` when the workspace is valid, `1` otherwise. See [docs/workspace.md](docs/workspace.md) for the definition format and validation rules.
 
-Implemented in the v0.1 bootstrap: `ontology check`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — ingestion, projections, agent runs, approval review, write-back, evaluation, and trace — are not commands yet; they will land as later issues on the same shared core.
+`ontology ingest` reads a CSV/JSON snapshot, normalizes every record through one boundary, and stores immutable observation evidence under `<workspace>/.ontology/` (git-ignored). Records with missing ids, malformed timestamps, or absent required fields are rejected with per-record diagnostics. See [docs/ingestion.md](docs/ingestion.md).
+
+Implemented so far: `ontology check`, `ontology ingest`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — canonical state, projections, agent runs, approval review, write-back, evaluation, and trace inspection — are not commands yet; they will land as later issues on the same shared core.
 
 ## Library use
 
