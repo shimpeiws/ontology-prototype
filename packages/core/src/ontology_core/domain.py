@@ -16,7 +16,7 @@ from .model import (
     ProjectionSpec,
     PropertySpec,
 )
-from .schema import check_name, err_at, get_bool, get_map, get_str, unknown_keys, warn_at
+from .schema import check_name, err_at, get_map, get_str, unknown_keys, warn_at
 
 SUPPORTED_TIMEZONES = ("UTC",)
 

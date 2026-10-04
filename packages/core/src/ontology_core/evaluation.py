@@ -13,7 +13,7 @@ from .model import (
     IntervalSpec,
     TargetSpec,
 )
-from .schema import err_at, get_list, get_map, get_num, get_str, unknown_keys
+from .schema import err_at, get_map, get_num, get_str, unknown_keys
 
 AGGREGATIONS = ("median", "mean", "min", "max", "count")
 UNITS = ("seconds", "minutes", "hours", "days")
