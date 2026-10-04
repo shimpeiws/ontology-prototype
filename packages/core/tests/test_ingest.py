@@ -403,3 +403,205 @@ def test_empty_snapshot_warns_not_fails(tmp_path: Path) -> None:
     assert result.ok
     assert result.observations == []
     assert any(d.code == "INGEST.EMPTY" for d in result.diagnostics)
+
+
+def test_huge_json_integer_is_rejected_not_raised(tmp_path: Path) -> None:
+    # Regression: float(10**400) raises OverflowError, which used to escape
+    # ingest_snapshot and lose the whole run's evidence.
+    workspace = make_ws(tmp_path, source_format="json")
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.json",
+        json.dumps(
+            [{"id": "101", "status": "completed", "assignee": "taro", "amount": 10**400}]
+        ),
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert not result.ok
+    (obs,) = result.observations
+    assert obs.status == "rejected"
+    assert "INGEST.INVALID_VALUE" in codes_of(obs)
+
+
+def test_huge_integer_in_when_condition_does_not_raise(tmp_path: Path) -> None:
+    # The same OverflowError escaped through the numeric coercion used by
+    # `when` comparisons.
+    docs = support.base_docs()
+    docs["mapping"]["mapping"]["source"]["format"] = "json"
+    del docs["mapping"]["mapping"]["entities"][0]["properties"]["amount"]
+    docs["mapping"]["mapping"]["events"][1]["when"] = {
+        "op": "gt",
+        "field": "amount",
+        "value": 0,
+    }
+    workspace = load_workspace(support.make_workspace(tmp_path / "ws", docs)).workspace
+    assert workspace is not None
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.json",
+        json.dumps(
+            [{"id": "101", "status": "ok", "assignee": "taro", "amount": 10**400}]
+        ),
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert result.ok, [d.format() for d in result.diagnostics]
+    (obs,) = result.observations
+    assert obs.status == "accepted"
+    # The huge value is non-numeric for comparisons; the gated event is off.
+    assert not any(e.event == "InvoiceIssued" for e in obs.events)
+
+
+def test_long_digit_string_integer_cast_is_rejected(tmp_path: Path) -> None:
+    # int() on digit strings beyond the platform limit raises ValueError;
+    # it must surface as INVALID_VALUE, not crash the run.
+    docs = support.base_docs()
+    docs["domain"]["domain"]["entities"]["Job"]["properties"]["seq"] = {
+        "type": "integer"
+    }
+    docs["mapping"]["mapping"]["entities"][0]["properties"]["seq"] = {
+        "field": "seq",
+        "as": "integer",
+    }
+    workspace = load_workspace(support.make_workspace(tmp_path / "ws", docs)).workspace
+    assert workspace is not None
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        f"id,status,assignee,seq\n101,completed,taro,{'9' * 5000}\n",
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert not result.ok
+    assert "INGEST.INVALID_VALUE" in codes_of(result.observations[0])
+
+
+def test_date_cast_rejects_non_extended_formats(tmp_path: Path) -> None:
+    # `as: date` accepts strict YYYY-MM-DD only: datetime strings, ISO basic
+    # format, and week dates all produce INVALID_TIMESTAMP diagnostics.
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        "id,status,assignee,completed_at\n"
+        "101,completed,taro,2026-10-01T09:30:00Z\n"
+        "102,completed,taro,20261001\n"
+        "103,completed,taro,2026-W40-1\n",
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert not result.ok
+    assert all(o.status == "rejected" for o in result.observations)
+    for obs in result.observations:
+        assert "INGEST.INVALID_TIMESTAMP" in codes_of(obs)
+
+
+def test_id_with_surrounding_whitespace_is_preserved_with_warning(
+    tmp_path: Path,
+) -> None:
+    # Ids stay verbatim (opaque strings); padding emits a warning so the
+    # likely-duplicate entity is visible without fabricating a trimmed id.
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        "id,status,assignee,completed_at\n101 ,completed,taro,2026-10-01\n",
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert result.ok, [d.format() for d in result.diagnostics]
+    (obs,) = result.observations
+    assert obs.status == "accepted"
+    job = next(e for e in obs.entities if e.entity == "Job")
+    assert job.id == "101 "
+    assert any(
+        d.code == "INGEST.SUSPICIOUS_ID" and d.severity == "warning"
+        for d in obs.diagnostics
+    )
+
+
+def test_same_observed_at_second_run_does_not_clobber_evidence(
+    tmp_path: Path,
+) -> None:
+    # Replaying an identical snapshot with an identical observed_at must still
+    # produce a distinct run: separate observation files and observation ids.
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    first = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    second = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert first.ok and second.ok
+    assert first.ingest_id != second.ingest_id
+    observations_dir = workspace.path / RUNTIME_DIR / "observations"
+    assert len(list(observations_dir.iterdir())) == 2
+    assert first.observations_path != second.observations_path
+    for a, b in zip(first.observations, second.observations):
+        assert a.observation_id != b.observation_id
+
+
+def test_observation_write_never_overwrites(tmp_path: Path) -> None:
+    from ontology_core.evidence import FileEvidenceStore
+
+    store = FileEvidenceStore(tmp_path / "rt")
+    store.write_observations("run-1", ["{}"])
+    with pytest.raises(FileExistsError):
+        store.write_observations("run-1", ["{}"])
+
+
+def test_atomic_write_leaves_no_temp_files(tmp_path: Path) -> None:
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    assert result.ok
+
+    leftovers = [
+        p
+        for p in (workspace.path / RUNTIME_DIR).rglob("*")
+        if p.is_file() and p.suffix == ".tmp"
+    ]
+    assert leftovers == []
+
+
+def test_preexisting_tmp_decoy_is_not_touched(tmp_path: Path) -> None:
+    # A pre-planted temp-named file must not be consumed or corrupted by the
+    # atomic write path (the temp name is now unpredictable).
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+    snapshots_dir = workspace.path / RUNTIME_DIR / "snapshots"
+    snapshots_dir.mkdir(parents=True)
+    decoy = snapshots_dir / "sha256-decoy.csv.tmp-1"
+    decoy.write_text("attacker controlled", encoding="utf-8")
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert result.ok
+    assert decoy.read_text(encoding="utf-8") == "attacker controlled"
+
+
+def test_trace_write_failure_is_reported_as_diagnostic(tmp_path: Path) -> None:
+    class FailingSink:
+        def emit(self, stage, kind, data):
+            raise OSError("read-only trace file")
+
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    result = ingest_snapshot(
+        workspace, snapshot, observed_at=FIXED_NOW, trace=FailingSink()
+    )
+
+    # No exception escapes; the run completes and reports the store error.
+    assert not result.ok
+    assert len(result.observations) == 2
+    store_errors = [
+        d for d in result.diagnostics if d.code == "INGEST.STORE_ERROR"
+    ]
+    assert len(store_errors) == 1  # reported once, not once per record

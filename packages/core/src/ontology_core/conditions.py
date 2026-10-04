@@ -171,7 +171,11 @@ def _num(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        result = float(value)
+        try:
+            result = float(value)
+        except OverflowError:
+            # Arbitrary-precision integers that cannot be a float.
+            return None
         return result if math.isfinite(result) else None
     if isinstance(value, str) and _NUM_RE.match(value):
         result = float(value)

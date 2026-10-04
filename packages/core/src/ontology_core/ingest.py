@@ -25,6 +25,7 @@ import dataclasses
 import hashlib
 import io
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -35,7 +36,7 @@ from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
 from .model import FieldAssignment, Workspace
 from .normalize import FAILED, Normalized, as_event_time, cast_scalar, normalize_record
-from .schema import err_at
+from .schema import ErrorFn, err_at, warn_at
 from .trace import TraceSink
 from .workspace import SUPPORTED_SCHEMA_VERSION
 
@@ -177,6 +178,8 @@ def ingest_snapshot(
         store = FileEvidenceStore(Path(workspace.path) / RUNTIME_DIR)
     if trace is None:
         trace = store.trace_sink()
+    # A failing trace sink becomes a diagnostic, never a mid-run crash.
+    trace = _GuardedTrace(trace, diag, label)
 
     source = workspace.mapping.source
     result.source = source.name
@@ -218,8 +221,11 @@ def ingest_snapshot(
             file=label,
         )
 
+    # The uuid component keeps the id unique per run even when a caller
+    # replays the same snapshot with the same observed_at.
     result.ingest_id = (
         f"ing-{observed_at:%Y%m%dT%H%M%S%fZ}-{result.content_digest[7:15]}"
+        f"-{uuid.uuid4().hex[:8]}"
     )
 
     for row, raw in records:
@@ -262,6 +268,9 @@ def ingest_snapshot(
             "records": len(result.observations),
             "accepted": len(result.accepted),
             "rejected": len(result.rejected),
+            "store_errors": sum(
+                1 for d in diag.items if d.code == "INGEST.STORE_ERROR"
+            ),
             "snapshot": str(result.snapshot_path) if result.snapshot_path else None,
             "observations": (
                 str(result.observations_path) if result.observations_path else None
@@ -286,6 +295,7 @@ def _process_record(
     """Normalize and resolve one record into an accepted/rejected observation."""
     rdiag = Diagnostics()
     err = err_at(rdiag, file_label)
+    warn = warn_at(rdiag, file_label)
 
     entities: list[ResolvedEntity] = []
     events: list[ResolvedEvent] = []
@@ -305,7 +315,9 @@ def _process_record(
             )
         record = normalize_record(raw, err, row)
         if not rdiag.has_errors:
-            entities, events = _resolve(workspace, record, err, row, observed_at)
+            entities, events = _resolve(
+                workspace, record, err, warn, row, observed_at
+            )
 
     status = REJECTED if rdiag.has_errors else ACCEPTED
     if status == REJECTED:
@@ -332,7 +344,8 @@ def _process_record(
 def _resolve(
     workspace: Workspace,
     record: dict[str, Normalized],
-    err,
+    err: ErrorFn,
+    warn: ErrorFn,
     row: int,
     observed_at: datetime,
 ) -> tuple[list[ResolvedEntity], list[ResolvedEvent]]:
@@ -343,7 +356,7 @@ def _resolve(
     entities: list[ResolvedEntity] = []
     for binding in workspace.mapping.entities:
         entity_id = _resolve_id(
-            binding.id, record, err, row, f"entity {binding.entity!r} id"
+            binding.id, record, err, warn, row, f"entity {binding.entity!r} id"
         )
         if entity_id is None:
             continue
@@ -376,6 +389,7 @@ def _resolve(
             binding.subject.id,
             record,
             err,
+            warn,
             row,
             f"event {binding.event!r} subject {binding.subject.entity!r} id",
         )
@@ -425,11 +439,17 @@ def _resolve(
 def _resolve_id(
     assignment: FieldAssignment,
     record: dict[str, Normalized],
-    err,
+    err: ErrorFn,
+    warn: ErrorFn,
     row: int,
     what: str,
 ) -> str | None:
-    """Resolve an entity/subject id: always a non-empty string, never cast."""
+    """Resolve an entity/subject id: always a non-empty string, never cast.
+
+    Ids are opaque and kept verbatim — a whitespace-padded id is a different
+    id. Because such padding is almost always a data accident that would
+    duplicate an entity downstream, it emits ``INGEST.SUSPICIOUS_ID``.
+    """
     path = _assign_path(row, assignment)
     raw = record.get(assignment.field) if assignment.field is not None else assignment.literal
     if raw is None or (isinstance(raw, str) and raw.strip() == ""):
@@ -443,6 +463,13 @@ def _resolve_id(
             hint="entity ids are opaque strings and are never coerced",
         )
         return None
+    if raw != raw.strip():
+        warn(
+            "INGEST.SUSPICIOUS_ID",
+            path,
+            f"{what}: id {raw!r} has leading/trailing whitespace; kept verbatim",
+            hint="whitespace-padded ids are distinct ids and will not deduplicate",
+        )
     return raw
 
 
@@ -607,6 +634,34 @@ def _mapping_digest(workspace: Workspace) -> str:
         ).encode("utf-8")
     payload = f"schema_version={SUPPORTED_SCHEMA_VERSION}\n".encode("utf-8") + raw
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+class _GuardedTrace:
+    """Trace sink wrapper: a sink ``OSError`` becomes one run diagnostic.
+
+    Trace output is evidence persistence like the snapshot and observation
+    files; a failing sink must not crash the run after records are processed.
+    The failure is reported once — later events are still attempted so a
+    partially-recovering sink keeps recording.
+    """
+
+    def __init__(self, sink: TraceSink, diag: Diagnostics, label: str) -> None:
+        self._sink = sink
+        self._diag = diag
+        self._label = label
+        self._reported = False
+
+    def emit(self, stage: str, kind: str, data: dict[str, Any]) -> None:
+        try:
+            self._sink.emit(stage, kind, data)
+        except OSError as exc:
+            if not self._reported:
+                self._reported = True
+                self._diag.error(
+                    "INGEST.STORE_ERROR",
+                    f"cannot write trace: {exc.strerror or exc}",
+                    file=self._label,
+                )
 
 
 def _emit_observation(trace: TraceSink, observation: Observation) -> None:

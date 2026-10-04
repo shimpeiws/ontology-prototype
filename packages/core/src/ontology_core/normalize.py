@@ -8,10 +8,11 @@ regardless of format:
 - Empty or whitespace-only strings and explicit nulls become ``None``.
 - Values keep their scalar type until a mapping assignment applies an
   explicit ``as`` cast; entity ids and ``ref`` properties are never cast.
-- ``as: date`` parses an ISO 8601 date. ``as: datetime`` requires an explicit
-  UTC offset (``Z`` or ``±HH:MM``) and normalizes to UTC; a date-only value in
-  a datetime context means midnight in the workspace ``date_only_timezone``
-  (only ``UTC`` in schema v1). Naive datetimes are rejected, never guessed.
+- ``as: date`` parses a strict ``YYYY-MM-DD`` date. ``as: datetime`` requires an
+  explicit UTC offset (``Z`` or ``±HH:MM``) and normalizes to UTC; a date-only
+  value in a datetime context means midnight in the workspace
+  ``date_only_timezone`` (only ``UTC`` in schema v1). Naive datetimes are
+  rejected, never guessed.
 - ``nan``/``inf`` are not valid numbers, and ``bool`` is never a number.
 - Non-scalar values (nested objects or lists) are rejected.
 
@@ -111,14 +112,23 @@ def cast_scalar(
                 return int(value)
             return _fail(err, path, f"expected an integer, got {value!r}")
         if isinstance(value, str) and _INT_RE.match(value):
-            return int(value)
+            try:
+                return int(value)
+            except ValueError:
+                # Digit strings beyond the platform int-string limit.
+                pass
         return _fail(err, path, f"expected an integer, got {_kind(value)}")
 
     if cast == "number":
         if isinstance(value, bool):
             return _fail(err, path, "a boolean is not a number")
         if isinstance(value, (int, float)):
-            result = float(value)
+            try:
+                result = float(value)
+            except OverflowError:
+                # JSON integers have arbitrary precision; some are too large
+                # to represent as a finite number.
+                return _fail(err, path, "number is too large to represent")
             if math.isfinite(result):
                 return result
             return _fail(err, path, "number must be finite; nan/inf are not valid values")
@@ -137,10 +147,14 @@ def cast_scalar(
 
     if cast == "date":
         if isinstance(value, str):
-            try:
-                return date.fromisoformat(value.strip())
-            except ValueError:
-                pass
+            text = value.strip()
+            # Strict extended format; datetime strings, basic format
+            # (``20261001``), and week dates (``2026-W40-1``) are rejected.
+            if _DATE_ONLY_RE.match(text):
+                try:
+                    return date.fromisoformat(text)
+                except ValueError:
+                    pass
         return _fail(
             err,
             path,

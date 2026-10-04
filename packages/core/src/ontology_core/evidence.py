@@ -16,6 +16,7 @@ v0.1 assumes a single writer per workspace; no locking is added.
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Iterable, Protocol
 
@@ -68,8 +69,12 @@ class FileEvidenceStore:
         return path
 
     def write_observations(self, name: str, lines: Iterable[str]) -> Path:
-        text = "".join(line + "\n" for line in lines)
         path = self.observations_dir / f"{name}.jsonl"
+        if path.exists():
+            # Each run gets a unique ingest id; an existing file is a
+            # collision, and observation evidence must never be overwritten.
+            raise FileExistsError(f"observation file already exists: {path}")
+        text = "".join(line + "\n" for line in lines)
         _atomic_write(path, text.encode("utf-8"))
         return path
 
@@ -78,11 +83,19 @@ class FileEvidenceStore:
 
 
 def _atomic_write(path: Path, data: bytes) -> None:
-    """Write ``data`` to ``path`` atomically via a same-directory rename."""
+    """Write ``data`` to ``path`` atomically via a same-directory rename.
+
+    The temp file is created with ``mkstemp`` (exclusive, unpredictable name)
+    so a pre-planted file or symlink cannot redirect the write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+    )
+    tmp = Path(tmp_name)
     try:
-        tmp.write_bytes(data)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
         os.replace(tmp, path)
     except BaseException:
         tmp.unlink(missing_ok=True)
