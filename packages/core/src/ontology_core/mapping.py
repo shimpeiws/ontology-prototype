@@ -252,6 +252,13 @@ def validate_mapping(
                 else:
                     for prop_name, assignment_node in props_node.items():
                         prop_path = f"{path}.properties.{prop_name}"
+                        if not isinstance(prop_name, str):
+                            err(
+                                "SCHEMA.INVALID_TYPE",
+                                prop_path,
+                                "property name must be a string",
+                            )
+                            continue
                         target = None
                         if entity_type is not None:
                             target = entity_type.properties.get(prop_name)

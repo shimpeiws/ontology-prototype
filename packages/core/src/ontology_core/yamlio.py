@@ -58,8 +58,24 @@ def load_yaml_file(path: Path, file: str, diag: Diagnostics) -> dict | None:
     """
     try:
         size = path.stat().st_size
-        raw = path.read_bytes()
-        text = raw.decode("utf-8")
+    except OSError as exc:
+        diag.error(
+            "WORKSPACE.UNREADABLE_FILE",
+            f"cannot read file: {exc.strerror or exc}",
+            file=file,
+        )
+        return None
+
+    if size > MAX_FILE_BYTES:
+        diag.error(
+            "WORKSPACE.FILE_TOO_LARGE",
+            f"file is {size} bytes; limit is {MAX_FILE_BYTES}",
+            file=file,
+        )
+        return None
+
+    try:
+        text = path.read_bytes().decode("utf-8")
     except OSError as exc:
         diag.error(
             "WORKSPACE.UNREADABLE_FILE",
@@ -71,14 +87,6 @@ def load_yaml_file(path: Path, file: str, diag: Diagnostics) -> dict | None:
         diag.error(
             "WORKSPACE.ENCODING_ERROR",
             f"file is not valid UTF-8: {exc}",
-            file=file,
-        )
-        return None
-
-    if size > MAX_FILE_BYTES:
-        diag.error(
-            "WORKSPACE.FILE_TOO_LARGE",
-            f"file is {size} bytes; limit is {MAX_FILE_BYTES}",
             file=file,
         )
         return None

@@ -145,6 +145,24 @@ def test_oversized_file_rejected(tmp_path: Path) -> None:
     assert "WORKSPACE.FILE_TOO_LARGE" in codes(result)
 
 
+def test_oversized_file_is_never_read(tmp_path: Path, monkeypatch) -> None:
+    docs = base_docs()
+    workspace = make_workspace(tmp_path, docs)
+    oversized = workspace / "agent.yaml"
+    oversized.write_bytes(b"# " + b"x" * 1_100_000)
+    reads: list[Path] = []
+    original = Path.read_bytes
+
+    def spy(self: Path) -> bytes:
+        reads.append(self)
+        return original(self)
+
+    monkeypatch.setattr(Path, "read_bytes", spy)
+    result = load_workspace(workspace)
+    assert "WORKSPACE.FILE_TOO_LARGE" in codes(result)
+    assert oversized not in reads
+
+
 def test_merge_key_override_is_duplicate(tmp_path: Path) -> None:
     docs = base_docs()
     docs["domain"] = (

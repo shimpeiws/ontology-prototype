@@ -203,6 +203,20 @@ def test_observed_at_rejects_non_time_cast(tmp_path: Path) -> None:
     assert "MAPPING.INVALID_CAST" in codes(result)
 
 
+def test_numeric_property_key_is_diagnostic(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["mapping"]["mapping"]["entities"][0]["properties"][5] = {"literal": "x"}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(
+        d
+        for d in result.diagnostics
+        if d.code == "SCHEMA.INVALID_TYPE" and "properties.5" in (d.path or "")
+    )
+    assert "must be a string" in diag.message
+    assert "MAPPING.UNKNOWN_PROPERTY" not in codes(result)
+
+
 def test_typed_mapping_model(valid_workspace: Path) -> None:
     result = load_workspace(valid_workspace)
     assert result.ok

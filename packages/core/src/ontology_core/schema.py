@@ -92,7 +92,11 @@ def get_num(node: dict, key: str, err: ErrorFn, path: str, *, required: bool = T
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         err("SCHEMA.INVALID_TYPE", child_path, f"expected a number, got {_kind(value)}")
         return None
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:
+        err("SCHEMA.INVALID_TYPE", child_path, "number is too large to represent")
+        return None
 
 
 def get_bool(node: dict, key: str, err: ErrorFn, path: str, *, required: bool = True) -> bool | None:

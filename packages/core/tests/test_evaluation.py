@@ -26,6 +26,15 @@ def test_same_start_and_end_event(tmp_path: Path) -> None:
     assert "EVAL.SAME_EVENT" in codes(result)
 
 
+def test_oversized_number_is_diagnostic(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["evaluation"]["evaluation"]["baseline"]["value"] = 10**400
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(d for d in result.diagnostics if d.code == "SCHEMA.INVALID_TYPE")
+    assert diag.path == "evaluation.baseline.value"
+
+
 def test_interval_subject_mismatch(tmp_path: Path) -> None:
     docs = base_docs()
     docs["domain"]["domain"]["events"]["InvoiceIssued"]["subject"] = "Invoice"
