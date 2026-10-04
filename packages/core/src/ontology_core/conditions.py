@@ -7,6 +7,8 @@ field names and literal scalars, and validation rejects anything else.
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Any
 
 from .model import Condition
@@ -119,3 +121,133 @@ def _check_field(node: dict, err: ErrorFn, path: str) -> bool:
         err("CONDITION.INVALID_FIELD", f"{path}.field", "field must be a non-empty string")
         return False
     return True
+
+
+def evaluate_condition(condition: Condition, record: dict[str, Any]) -> bool:
+    """Evaluate a validated condition tree against a normalized record.
+
+    ``record`` holds the normalized scalar/null fields of one source record.
+    Comparison rules are deterministic: a ``None`` record value only matches
+    ``is_null``/``ne``/``not_in``; literals coerce to the record value's kind
+    (numbers compare numerically, ``"true"``/``"false"`` strings compare as
+    booleans); ordering operators compare numbers as numbers and strings
+    lexicographically, anything else is False.
+    """
+    return _eval_node(condition.raw, record)
+
+
+def _eval_node(node: dict, record: dict[str, Any]) -> bool:
+    op = node["op"]
+    if op == "and":
+        return all(_eval_node(arg, record) for arg in node["args"])
+    if op == "or":
+        return any(_eval_node(arg, record) for arg in node["args"])
+    if op == "not":
+        return not _eval_node(node["arg"], record)
+
+    value = record.get(node["field"])
+    if op == "is_null":
+        return value is None
+    if op == "not_null":
+        return value is not None
+
+    if op in ("in", "not_in"):
+        hit = any(_eq(value, item) for item in node["values"])
+        return hit if op == "in" else not hit
+
+    target = node["value"]
+    if op == "eq":
+        return _eq(value, target)
+    if op == "ne":
+        return not _eq(value, target)
+    return _ordered(value, target, op)
+
+
+_NUM_RE = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+_INT_RE = re.compile(r"^[+-]?\d+$")
+
+
+def _int_exact(value: Any) -> int | None:
+    """Exact integer value; None for non-integral or unrepresentable input.
+
+    Integers compare without the float coercion ``_num`` applies, which would
+    alias distinct integers above 2**53 to the same float.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str) and _INT_RE.match(value):
+        try:
+            return int(value)
+        except ValueError:
+            # Digit strings beyond the platform int limit.
+            return None
+    return None
+
+
+def _num(value: Any) -> float | None:
+    """Coerce to a finite number; None when the value is not numeric."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            result = float(value)
+        except OverflowError:
+            # Arbitrary-precision integers that cannot be a float.
+            return None
+        return result if math.isfinite(result) else None
+    if isinstance(value, str) and _NUM_RE.match(value):
+        result = float(value)
+        return result if math.isfinite(result) else None
+    return None
+
+
+def _bool(value: Any) -> bool | None:
+    """Coerce to a boolean; None when the value is not boolean-shaped."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.lower() in ("true", "false"):
+        return value.lower() == "true"
+    return None
+
+
+def _eq(value: Any, target: Any) -> bool:
+    if value is None or target is None:
+        return value is None and target is None
+    if isinstance(value, str) and isinstance(target, str):
+        return value == target
+    left_int, right_int = _int_exact(value), _int_exact(target)
+    if left_int is not None and right_int is not None:
+        return left_int == right_int
+    left_num, right_num = _num(value), _num(target)
+    if left_num is not None and right_num is not None:
+        return left_num == right_num
+    left_bool, right_bool = _bool(value), _bool(target)
+    if left_bool is not None and right_bool is not None:
+        return left_bool == right_bool
+    return False
+
+
+def _ordered(value: Any, target: Any, op: str) -> bool:
+    left_int, right_int = _int_exact(value), _int_exact(target)
+    if left_int is not None and right_int is not None:
+        pair: Any = (left_int, right_int)
+    else:
+        left_num, right_num = _num(value), _num(target)
+        if left_num is not None and right_num is not None:
+            pair = (left_num, right_num)
+        elif isinstance(value, str) and isinstance(target, str):
+            pair = (value, target)
+        else:
+            return False
+    left, right = pair
+    if op == "lt":
+        return left < right
+    if op == "lte":
+        return left <= right
+    if op == "gt":
+        return left > right
+    return left >= right

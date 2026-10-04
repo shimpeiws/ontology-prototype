@@ -6,6 +6,14 @@ only PyYAML at runtime.
 """
 
 from .diagnostics import Diagnostic, Diagnostics
+from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
+from .ingest import (
+    IngestResult,
+    Observation,
+    ResolvedEntity,
+    ResolvedEvent,
+    ingest_snapshot,
+)
 from .model import (
     ActionSpec,
     AgentDefinition,
@@ -30,6 +38,7 @@ from .model import (
     TaskSpec,
     Workspace,
 )
+from .trace import JsonlTraceSink, NullTraceSink, TraceSink
 from .workspace import (
     SUPPORTED_SCHEMA_VERSION,
     WORKSPACE_FILES,
@@ -53,20 +62,31 @@ __all__ = [
     "EventBinding",
     "EventTimePolicy",
     "EventType",
+    "EvidenceStore",
     "FieldAssignment",
+    "FileEvidenceStore",
     "GuardrailSpec",
+    "IngestResult",
     "IntervalSpec",
+    "JsonlTraceSink",
     "LoadResult",
     "MappingDefinition",
+    "NullTraceSink",
+    "Observation",
     "ProjectionSpec",
     "PropertySpec",
+    "RUNTIME_DIR",
+    "ResolvedEntity",
+    "ResolvedEvent",
     "SUPPORTED_SCHEMA_VERSION",
     "SourceSpec",
     "SubjectRef",
     "TargetSpec",
     "TaskSpec",
+    "TraceSink",
     "WORKSPACE_FILES",
     "Workspace",
     "__version__",
+    "ingest_snapshot",
     "load_workspace",
 ]

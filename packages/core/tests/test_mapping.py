@@ -66,6 +66,18 @@ def test_cast_required_for_non_string_property(tmp_path: Path) -> None:
     assert "MAPPING.MISSING_CAST" in codes(result)
 
 
+def test_required_property_needs_assignment(tmp_path: Path) -> None:
+    # A binding that omits a required property can never produce a complete
+    # entity; the workspace fails validation instead of silently accepting
+    # incomplete records at ingest time.
+    docs = base_docs()
+    del docs["mapping"]["mapping"]["entities"][0]["properties"]["status"]
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(d for d in result.diagnostics if d.code == "MAPPING.MISSING_REQUIRED")
+    assert "status" in diag.message
+
+
 def test_cast_forbidden_on_entity_id(tmp_path: Path) -> None:
     docs = base_docs()
     docs["mapping"]["mapping"]["entities"][0]["id"] = {"field": "id", "as": "integer"}
