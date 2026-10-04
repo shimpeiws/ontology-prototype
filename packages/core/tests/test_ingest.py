@@ -442,7 +442,15 @@ def test_huge_integer_in_when_condition_does_not_raise(tmp_path: Path) -> None:
         tmp_path,
         "jobs.json",
         json.dumps(
-            [{"id": "101", "status": "ok", "assignee": "taro", "amount": 10**400}]
+            [
+                {
+                    "id": "101",
+                    "status": "ok",
+                    "assignee": "taro",
+                    "amount": 10**400,
+                    "invoiced_at": "2026-10-02",
+                }
+            ]
         ),
     )
 
@@ -451,8 +459,9 @@ def test_huge_integer_in_when_condition_does_not_raise(tmp_path: Path) -> None:
     assert result.ok, [d.format() for d in result.diagnostics]
     (obs,) = result.observations
     assert obs.status == "accepted"
-    # The huge value is non-numeric for comparisons; the gated event is off.
-    assert not any(e.event == "InvoiceIssued" for e in obs.events)
+    # Huge integers compare exactly: 10**400 > 0 is true, so the gated event
+    # fires and resolves its occurred_at.
+    assert any(e.event == "InvoiceIssued" for e in obs.events)
 
 
 def test_long_digit_string_integer_cast_is_rejected(tmp_path: Path) -> None:
@@ -605,3 +614,116 @@ def test_trace_write_failure_is_reported_as_diagnostic(tmp_path: Path) -> None:
         d for d in result.diagnostics if d.code == "INGEST.STORE_ERROR"
     ]
     assert len(store_errors) == 1  # reported once, not once per record
+
+
+def test_invalid_calendar_date_datetime_cast_rejected(tmp_path: Path) -> None:
+    # Regression: the `as: datetime` date-only branch called
+    # date.fromisoformat without error handling, so a value like 2026-02-30
+    # crashed the run instead of producing a rejected observation.
+    docs = support.base_docs()
+    docs["mapping"]["mapping"]["events"][0]["occurred_at"]["as"] = "datetime"
+    workspace = load_workspace(support.make_workspace(tmp_path / "ws", docs)).workspace
+    assert workspace is not None
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        "id,status,assignee,completed_at\n101,completed,taro,2026-02-30\n",
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert not result.ok
+    (obs,) = result.observations
+    assert obs.status == "rejected"
+    assert "INGEST.INVALID_TIMESTAMP" in codes_of(obs)
+
+
+def test_unterminated_csv_quote_is_source_error(tmp_path: Path) -> None:
+    # Strict CSV mode: an unterminated quoted cell must not pass through as
+    # accepted evidence.
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(
+        tmp_path, "jobs.csv", 'id,status,assignee\n101,"completed\n'
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert not result.ok
+    assert any(d.code == "INGEST.INVALID_SOURCE" for d in result.diagnostics)
+
+
+def test_large_integer_when_comparison_is_exact(tmp_path: Path) -> None:
+    # Regression: `when` comparisons coerced both sides to float, so distinct
+    # integers above 2**53 aliased to the same value and fired wrong events.
+    docs = support.base_docs()
+    docs["mapping"]["mapping"]["source"]["format"] = "json"
+    docs["mapping"]["mapping"]["events"][1]["when"] = {
+        "op": "eq",
+        "field": "amount",
+        "value": 9007199254740992,
+    }
+    workspace = load_workspace(support.make_workspace(tmp_path / "ws", docs)).workspace
+    assert workspace is not None
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.json",
+        json.dumps(
+            [
+                {
+                    "id": "101",
+                    "status": "x",
+                    "assignee": "t",
+                    "amount": 9007199254740993,
+                    "invoiced_at": "2026-10-02",
+                },
+                {
+                    "id": "102",
+                    "status": "x",
+                    "assignee": "t",
+                    "amount": 9007199254740992,
+                    "invoiced_at": "2026-10-02",
+                },
+            ]
+        ),
+    )
+
+    result = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert result.ok, [d.format() for d in result.diagnostics]
+    first, second = result.observations
+    assert not any(e.event == "InvoiceIssued" for e in first.events)
+    assert any(e.event == "InvoiceIssued" for e in second.events)
+
+
+def test_trace_failure_on_completed_event_is_reported(tmp_path: Path) -> None:
+    class FailsOnCompleted:
+        def emit(self, stage, kind, data):
+            if kind == "ingest.completed":
+                raise OSError("disk full")
+
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    result = ingest_snapshot(
+        workspace, snapshot, observed_at=FIXED_NOW, trace=FailsOnCompleted()
+    )
+
+    # A failure on the final completion event must still mark the run failed.
+    assert not result.ok
+    assert any(d.code == "INGEST.STORE_ERROR" for d in result.diagnostics)
+
+
+def test_snapshot_store_detects_mismatched_bytes(tmp_path: Path) -> None:
+    # A content-addressed slot holding different bytes is corrupted or
+    # substituted evidence and must be reported, not trusted.
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    first = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    assert first.ok and first.snapshot_path is not None
+    first.snapshot_path.write_bytes(b"substituted")
+
+    second = ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    assert not second.ok
+    assert any(d.code == "INGEST.STORE_ERROR" for d in second.diagnostics)

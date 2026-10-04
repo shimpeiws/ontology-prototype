@@ -63,8 +63,13 @@ class FileEvidenceStore:
         name = digest.replace(":", "-") + "." + format
         path = self.snapshots_dir / name
         if path.exists():
-            # Content-addressed: an existing file is the same bytes.
-            return path
+            # Content-addressed: an existing file is accepted only when its
+            # bytes match; a mismatch means corrupted or substituted evidence.
+            if path.read_bytes() == content:
+                return path
+            raise FileExistsError(
+                f"snapshot evidence exists with different bytes: {path}"
+            )
         _atomic_write(path, content)
         return path
 

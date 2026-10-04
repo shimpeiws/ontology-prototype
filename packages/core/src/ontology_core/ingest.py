@@ -255,7 +255,6 @@ def ingest_snapshot(
             file=label,
         )
 
-    result.diagnostics = diag.items
     trace.emit(
         "ingest",
         "ingest.completed",
@@ -277,6 +276,9 @@ def ingest_snapshot(
             ),
         },
     )
+    # Assign last so a trace failure on the completion event is still
+    # reflected in the returned diagnostics.
+    result.diagnostics = diag.items
     return result
 
 
@@ -567,7 +569,7 @@ def _parse_csv(
 ) -> list[tuple[int, dict[Any, Any] | None]] | None:
     """Parse CSV text into (row, raw record) pairs; None on source errors."""
     try:
-        reader = csv.DictReader(io.StringIO(text, newline=""))
+        reader = csv.DictReader(io.StringIO(text, newline=""), strict=True)
         fieldnames = reader.fieldnames
         if not fieldnames:
             diag.error(

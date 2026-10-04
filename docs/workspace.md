@@ -75,6 +75,7 @@ mapping:
 - Literals for entity ids, subject ids, and event times must be strings — ids and times are never numeric literals.
 - `occurred_at` is required and `observed_at` optional on each event binding; both require `as: date` or `as: datetime`. The key names are the ones pinned by `domain.policies.event_times`.
 - `subject.entity` must equal the event's declared subject in the domain.
+- Every `required: true` domain property of a bound entity must have an assignment; a binding that can never produce a complete entity fails validation.
 - Entity names, event names, and property names must exist in the domain.
 
 ### Condition language

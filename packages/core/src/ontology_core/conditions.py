@@ -164,6 +164,28 @@ def _eval_node(node: dict, record: dict[str, Any]) -> bool:
 
 
 _NUM_RE = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
+_INT_RE = re.compile(r"^[+-]?\d+$")
+
+
+def _int_exact(value: Any) -> int | None:
+    """Exact integer value; None for non-integral or unrepresentable input.
+
+    Integers compare without the float coercion ``_num`` applies, which would
+    alias distinct integers above 2**53 to the same float.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str) and _INT_RE.match(value):
+        try:
+            return int(value)
+        except ValueError:
+            # Digit strings beyond the platform int limit.
+            return None
+    return None
 
 
 def _num(value: Any) -> float | None:
@@ -197,6 +219,9 @@ def _eq(value: Any, target: Any) -> bool:
         return value is None and target is None
     if isinstance(value, str) and isinstance(target, str):
         return value == target
+    left_int, right_int = _int_exact(value), _int_exact(target)
+    if left_int is not None and right_int is not None:
+        return left_int == right_int
     left_num, right_num = _num(value), _num(target)
     if left_num is not None and right_num is not None:
         return left_num == right_num
@@ -207,13 +232,17 @@ def _eq(value: Any, target: Any) -> bool:
 
 
 def _ordered(value: Any, target: Any, op: str) -> bool:
-    left_num, right_num = _num(value), _num(target)
-    if left_num is not None and right_num is not None:
-        pair: Any = (left_num, right_num)
-    elif isinstance(value, str) and isinstance(target, str):
-        pair = (value, target)
+    left_int, right_int = _int_exact(value), _int_exact(target)
+    if left_int is not None and right_int is not None:
+        pair: Any = (left_int, right_int)
     else:
-        return False
+        left_num, right_num = _num(value), _num(target)
+        if left_num is not None and right_num is not None:
+            pair = (left_num, right_num)
+        elif isinstance(value, str) and isinstance(target, str):
+            pair = (value, target)
+        else:
+            return False
     left, right = pair
     if op == "lt":
         return left < right

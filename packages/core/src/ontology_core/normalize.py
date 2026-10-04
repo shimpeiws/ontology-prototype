@@ -166,8 +166,17 @@ def cast_scalar(
         if isinstance(value, str):
             text = value.strip()
             if _DATE_ONLY_RE.match(text):
+                try:
+                    day = date.fromisoformat(text)
+                except ValueError:
+                    return _fail(
+                        err,
+                        path,
+                        f"invalid calendar date {text!r}",
+                        timestamp=True,
+                    )
                 return datetime.combine(
-                    date.fromisoformat(text),
+                    day,
                     time.min,
                     tzinfo=_DATE_ONLY_TIMEZONES.get(date_only_timezone, timezone.utc),
                 )

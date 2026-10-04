@@ -273,6 +273,16 @@ def validate_mapping(
                         result = _validate_assignment(assignment_node, err, prop_path, target)
                         if result is not None:
                             prop_assignments[prop_name] = result
+            if entity_type is not None:
+                mapped = props_node if isinstance(props_node, dict) else {}
+                for prop_name, spec in entity_type.properties.items():
+                    if spec.required and prop_name not in mapped:
+                        err(
+                            "MAPPING.MISSING_REQUIRED",
+                            path,
+                            f"required property {prop_name!r} of entity "
+                            f"{entity_name!r} has no assignment",
+                        )
             if entity_name is not None and id_assignment is not None:
                 bindings.append(
                     EntityBinding(entity=entity_name, id=id_assignment, properties=prop_assignments)
