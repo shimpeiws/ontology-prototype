@@ -39,6 +39,7 @@ ontology project examples/job-invoicing --as-of 2026-10-05T00:00:00Z
 ontology diagnose examples/job-invoicing --as-of 2026-10-05T00:00:00Z --provider stub
 ontology proposals examples/job-invoicing
 ontology decide examples/job-invoicing <proposal-id> --approve --reviewer fde-sato
+ontology execute examples/job-invoicing <proposal-id>
 ```
 
 `ontology check` loads a workspace directory (the four files `domain.yaml`, `mapping.yaml`, `evaluation.yaml`, `agent.yaml`), prints structured diagnostics, and exits `0` when the workspace is valid, `1` otherwise. See [docs/workspace.md](docs/workspace.md) for the definition format and validation rules.
@@ -49,9 +50,11 @@ ontology decide examples/job-invoicing <proposal-id> --approve --reviewer fde-sa
 
 `ontology diagnose` hands projection candidates to a replaceable AI provider (live via OpenRouter, or the offline `stub` adapter), validates the structured output in the core — explanation, labeled hypotheses, follow-up questions, permitted action proposals — and records the run append-only for `--inspect`. Validated proposals are persisted for review. See [docs/diagnosis.md](docs/diagnosis.md).
 
-`ontology proposals` lists and inspects persisted proposals; `ontology decide` records an explicit human approve/reject decision bound to the exact payload digest — a changed payload fails the executor-facing approval check and needs a new decision. Approval never executes anything; write-back is a separate later stage. See [docs/decisions.md](docs/decisions.md).
+`ontology proposals` lists and inspects persisted proposals; `ontology decide` records an explicit human approve/reject decision bound to the exact payload digest — a changed payload fails the executor-facing approval check and needs a new decision. Approval itself never executes anything. See [docs/decisions.md](docs/decisions.md).
 
-Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — write-back, evaluation, and trace inspection — are not commands yet; they will land as later issues on the same shared core.
+`ontology execute` runs an approved proposal through a write-back adapter after rechecking approval against the stored payload digest. The local `csv` adapter appends one inspectable row to `.ontology/reminders.csv`; every attempt is persisted append-only with an idempotency key, status (`succeeded`/`failed`/`uncertain`), and receipt — repeated success replays the receipt without duplicating, and an uncertain attempt refuses blind retry. See [docs/execution.md](docs/execution.md).
+
+Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — evaluation and trace inspection — are not commands yet; they will land as later issues on the same shared core.
 
 ## Library use
 

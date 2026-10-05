@@ -14,6 +14,7 @@
 | `diagnosis_runs` | Recorded diagnosis runs (see [diagnosis.md](diagnosis.md)). |
 | `proposals` | Validated action proposals with payload digests (see [decisions.md](decisions.md)). |
 | `decisions` | Append-only human approve/reject decisions; latest wins (see [decisions.md](decisions.md)). |
+| `executions` | Append-only write-back attempts: an `attempting` intent row then an outcome row (`succeeded`/`failed`/`uncertain`), latest row wins (see [execution.md](execution.md)). |
 
 ## Event identity and append-only history
 

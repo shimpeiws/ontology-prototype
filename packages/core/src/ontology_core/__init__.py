@@ -32,6 +32,15 @@ from .diagnosis import (
     run_diagnosis,
 )
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
+from .execution import (
+    AdapterFailed,
+    AdapterRequest,
+    CsvReminderAdapter,
+    ExecutionAdapter,
+    ExecutionResult,
+    execute,
+    execution_identity,
+)
 from .ingest import (
     IngestResult,
     Observation,
@@ -82,12 +91,15 @@ __version__ = "0.0.1"
 __all__ = [
     "ActionProposal",
     "ActionSpec",
+    "AdapterFailed",
+    "AdapterRequest",
     "AgentDefinition",
     "ApplyResult",
     "ApprovalCheck",
     "CanonicalEvent",
     "CanonicalStore",
     "Condition",
+    "CsvReminderAdapter",
     "Diagnostic",
     "DecisionResult",
     "Diagnostics",
@@ -102,6 +114,8 @@ __all__ = [
     "EventTimePolicy",
     "EventType",
     "EvidenceStore",
+    "ExecutionAdapter",
+    "ExecutionResult",
     "FieldAssignment",
     "FileEvidenceStore",
     "GuardrailSpec",
@@ -135,6 +149,8 @@ __all__ = [
     "check_approval",
     "decide",
     "event_fact_key",
+    "execute",
+    "execution_identity",
     "get_diagnosis_run",
     "get_projection_run",
     "ingest_snapshot",

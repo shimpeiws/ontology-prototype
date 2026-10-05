@@ -16,9 +16,11 @@ from pathlib import Path
 
 from ontology_core import __version__ as core_version
 from ontology_core import (
+    CsvReminderAdapter,
     Diagnostic,
     ProviderError,
     decide,
+    execute,
     get_diagnosis_run,
     get_projection_run,
     ingest_snapshot,
@@ -27,6 +29,7 @@ from ontology_core import (
     run_diagnosis,
     run_projection,
 )
+from ontology_core.evidence import RUNTIME_DIR
 
 from . import __version__
 from .providers import DEFAULT_MODEL, MODEL_ENV, PROVIDERS, resolve_provider
@@ -44,9 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
             "evidence and canonical state), 'project' (deterministic "
             "projection over canonical events), 'diagnose' "
             "(model-backed diagnosis with validated action proposals), "
-            "and 'proposals'/'decide' (proposal inspection and human "
-            "approve/reject decisions). Write-back and evaluation are "
-            "planned capabilities, not yet commands."
+            "'proposals'/'decide' (proposal inspection and human "
+            "approve/reject decisions), and 'execute' (write-back of an "
+            "approved proposal through a local CSV adapter with "
+            "receipts and retry protection). Evaluation is a planned "
+            "capability, not yet a command."
         ),
     )
     parser.add_argument(
@@ -220,6 +225,33 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the decision result as JSON",
     )
+
+    execute_parser = commands.add_parser(
+        "execute",
+        help="execute an approved proposal through a write-back adapter",
+    )
+    execute_parser.add_argument(
+        "workspace",
+        type=Path,
+        help="directory containing domain.yaml, mapping.yaml, evaluation.yaml, agent.yaml",
+    )
+    execute_parser.add_argument(
+        "proposal",
+        metavar="PROPOSAL_ID",
+        help="the persisted proposal to execute",
+    )
+    execute_parser.add_argument(
+        "--adapter",
+        choices=("csv",),
+        default="csv",
+        help="write-back adapter; 'csv' appends to "
+        "<workspace>/.ontology/reminders.csv",
+    )
+    execute_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the execution result as JSON",
+    )
     return parser
 
 
@@ -258,6 +290,13 @@ def main(argv: list[str] | None = None) -> int:
             decision="approved" if args.approve else "rejected",
             reviewer=args.reviewer,
             reason=args.reason,
+            as_json=args.json,
+        )
+    if args.command == "execute":
+        return _cmd_execute(
+            args.workspace,
+            args.proposal,
+            adapter_name=args.adapter,
             as_json=args.json,
         )
     return EXIT_INVALID  # pragma: no cover - argparse enforces the subcommand
@@ -843,6 +882,19 @@ def _print_proposal(view: dict, *, verbose: bool) -> None:
                 f"at {past['decided_at']}"
                 + (f" — {past['reason']}" if past["reason"] else "")
             )
+        for attempt in view["executions"]:
+            receipt = attempt["receipt"] or {}
+            detail = (
+                f" reminder {receipt['reminder_id']}"
+                if receipt.get("reminder_id")
+                else ""
+            )
+            error = f" — {attempt['error']}" if attempt["error"] else ""
+            print(
+                f"  execution: {attempt['execution_id']} "
+                f"attempt {attempt['attempt']} via {attempt['adapter']} "
+                f"— {attempt['status']}{detail}{error}"
+            )
 
 
 def _cmd_decide(
@@ -903,6 +955,89 @@ def _cmd_decide(
                 f"{result.decision}: {result.proposal_id} "
                 f"(decision {result.decision_id})"
             )
+    return EXIT_OK if result.ok else EXIT_INVALID
+
+
+def _cmd_execute(
+    workspace: Path,
+    proposal_id: str,
+    *,
+    adapter_name: str,
+    as_json: bool,
+) -> int:
+    loaded = load_workspace(workspace)
+    if not loaded.ok:
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "ok": False,
+                        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in loaded.diagnostics:
+                print(diagnostic.format())
+        return EXIT_INVALID
+    assert loaded.workspace is not None
+
+    # The CLI supplies the adapter and its destination; the approval
+    # gate lives inside the core executor, so no transport can bypass it.
+    adapters = {
+        "csv": lambda: CsvReminderAdapter(
+            Path(loaded.workspace.path) / RUNTIME_DIR / "reminders.csv"
+        ),
+    }
+    result = execute(loaded.workspace, proposal_id, adapters[adapter_name]())
+
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "workspace": str(workspace),
+                    "ok": result.ok,
+                    "execution_id": result.execution_id,
+                    "idempotency_key": result.idempotency_key,
+                    "proposal_id": result.proposal_id,
+                    "adapter": result.adapter,
+                    "status": result.status,
+                    "attempt": result.attempt,
+                    "attempts": result.attempts,
+                    "replayed": result.replayed,
+                    "receipt": result.receipt,
+                    "error": result.error,
+                    "recorded": result.recorded,
+                    "diagnostics": [d.to_dict() for d in result.diagnostics],
+                },
+                indent=2,
+            )
+        )
+    else:
+        for diagnostic in result.diagnostics:
+            print(diagnostic.format())
+        if result.status == "succeeded":
+            receipt = result.receipt or {}
+            suffix = " (already executed)" if result.replayed else ""
+            print(
+                f"{result.status}: {result.proposal_id} "
+                f"(execution {result.execution_id}, "
+                f"attempt {result.attempt}){suffix}"
+            )
+            if receipt.get("reminder_id"):
+                print(
+                    f"  reminder {receipt['reminder_id']} "
+                    f"-> {receipt.get('path')}"
+                )
+        elif result.status is not None:
+            print(
+                f"{result.status}: {result.proposal_id} "
+                f"(execution {result.execution_id})"
+            )
+            if result.error:
+                print(f"  error: {result.error}")
     return EXIT_OK if result.ok else EXIT_INVALID
 
 
