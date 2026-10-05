@@ -183,39 +183,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the proposal list or detail as JSON",
     )
 
-    decide = commands.add_parser(
+    decide_parser = commands.add_parser(
         "decide",
         help="record a human approve/reject decision on a proposal",
     )
-    decide.add_argument(
+    decide_parser.add_argument(
         "workspace",
         type=Path,
         help="directory containing domain.yaml, mapping.yaml, evaluation.yaml, agent.yaml",
     )
-    decide.add_argument(
+    decide_parser.add_argument(
         "proposal",
         metavar="PROPOSAL_ID",
         help="the persisted proposal to decide on",
     )
-    decision_group = decide.add_mutually_exclusive_group(required=True)
+    decision_group = decide_parser.add_mutually_exclusive_group(required=True)
     decision_group.add_argument(
         "--approve", action="store_true", help="approve the proposal"
     )
     decision_group.add_argument(
         "--reject", action="store_true", help="reject the proposal"
     )
-    decide.add_argument(
+    decide_parser.add_argument(
         "--reviewer",
         metavar="NAME",
         required=True,
         help="explicit reviewer identity recorded with the decision",
     )
-    decide.add_argument(
+    decide_parser.add_argument(
         "--reason",
         metavar="TEXT",
         help="optional reason recorded with the decision",
     )
-    decide.add_argument(
+    decide_parser.add_argument(
         "--json",
         action="store_true",
         help="print the decision result as JSON",

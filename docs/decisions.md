@@ -15,8 +15,10 @@ proposed ──(decide --approve)──▶ approved
 
 - `proposed` — validated by diagnosis, no decision yet.
 - `approved` / `rejected` — the latest recorded decision.
-- Decisions are append-only: re-deciding is allowed, the newest decision
-  wins, and the full history stays inspectable.
+- Decisions are append-only: re-deciding is allowed, the newest *recorded*
+  decision wins (insertion order, not wall-clock `decided_at` — a clock
+  rewind cannot resurrect an overridden decision), and the full history
+  stays inspectable.
 
 ## Usage
 
@@ -34,9 +36,10 @@ ontology decide <workspace> <proposal-id> --approve --reviewer fde-sato \
 ontology decide <workspace> <proposal-id> --reject --reviewer fde-sato
 ```
 
-Proposal ids derive from the diagnosis run (`<run-id>-p<index>`), so a
-proposal is always traceable back to the run and candidates that produced
-it. `--json` is supported on both commands.
+Proposal ids derive from the diagnosis run (`<run-id>-p<index>`), where
+`<index>` is the proposal's position in the model's raw `action_proposals`
+output — so a persisted proposal always points back at the exact recorded
+output item it was validated from. `--json` is supported on both commands.
 
 ## What is persisted
 
@@ -48,7 +51,9 @@ it. `--json` is supported on both commands.
 - `related_entities` — every other ref param as `{param, entity, id}`
 - `evidence` — the diagnosed candidate's evidence links (fact key,
   observation ids, ingest ids)
-- `payload_digest` — sha256 over canonical JSON of `{action, params}`
+- `payload_digest` — sha256 over `"v1\n" + canonical JSON of
+  `{action, params}` (the version tag lets a future recipe change be told
+  apart from a payload change)
 - `created_at`
 
 `decisions` (append-only):
@@ -59,20 +64,27 @@ it. `--json` is supported on both commands.
 
 ## Binding and the approval check
 
-`check_approval` is the executor-facing gate. It fails closed on every
-miss:
+`check_approval` is the executor-facing gate. It requires the exact
+payload about to execute (`action`/`params` are mandatory — there is no
+"check whatever is stored" mode) and fails closed on every miss:
 
 | case | result |
 |---|---|
 | unknown proposal id | `DECISION.UNKNOWN_PROPOSAL` |
 | no decision (`proposed`) | `DECISION.NOT_APPROVED` |
-| latest decision `rejected` | `DECISION.NOT_APPROVED` |
+| latest recorded decision `rejected` | `DECISION.NOT_APPROVED` |
 | presented action/params differ from the approved digest | `DECISION.PAYLOAD_CHANGED` |
-| approved + digest match | `approved` |
+| approved payload no longer satisfies the current contract | `DECISION.CONTRACT_CHANGED` |
+| approved + digest match + contract still holds | `approved` |
 
 Because proposals are immutable and the decision stores the reviewed
 digest, any edit to a payload is a *different* payload — it fails the
-check and requires a new proposal and a new decision.
+check and requires a new proposal and a new decision. The gate also
+revalidates the approved payload against the *current* workspace
+contract: an action removed from `permitted_actions`, a param schema
+change, or a ref target that no longer resolves all fail the check —
+an approval made under an old contract cannot silently ride into
+execution under a new one.
 
 ## What the agent cannot do
 
@@ -84,6 +96,9 @@ decision is the only thing that moves a proposal out of `proposed`.
 
 ## Trace
 
-Each decide emits `decision.recorded` (or `decision.failed`) to
-`.ontology/trace.jsonl` with the decision id, proposal id, and decision
-value.
+Every `decide` call — including failed attempts (unknown proposal,
+invalid decision value, missing reviewer) — emits `decision.recorded` or
+`decision.failed` to `.ontology/trace.jsonl` with the decision id,
+proposal id, and decision value. A trace write failure itself surfaces
+as a `DECISION.TRACE_ERROR` warning: a recorded decision without a
+trace event is never silently normal.

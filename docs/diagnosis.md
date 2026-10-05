@@ -120,6 +120,14 @@ candidates were in scope. Failures before a run exists (bad arguments, an
 unknown or mismatched projection run) emit a `diagnosis.failed` trace event
 with a null run id but are not recorded.
 
+Validated proposals are additionally indexed into the append-only
+`proposals` table in the same transaction — keyed by the proposal's index
+in the model's raw `action_proposals` output (`<run-id>-p<index>`), with the
+payload digest, canonical target, related entities, and evidence links — so
+a human can review and decide on exactly the payload the model proposed
+(see [decisions.md](decisions.md)). Rejected proposals stay only in the run
+record.
+
 Diagnosis never mutates entities, events, or existing projection runs —
 but note `--as-of` computes a projection first, which freezes a *new*
 `projection_runs` row and emits `projection.*` trace events, exactly as a

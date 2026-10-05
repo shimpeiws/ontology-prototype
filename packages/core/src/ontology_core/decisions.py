@@ -33,10 +33,16 @@ from typing import Any
 from .canonical import CanonicalStore, SqliteCanonicalStore
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
-from .model import Workspace
+from .model import Workspace, param_type_error
 from .trace import JsonlTraceSink, TraceSink
 
 DECISIONS = ("approved", "rejected")
+
+
+# Version tag folded into the payload digest, like the "v1" in
+# event_fact_key: if the digest recipe ever changes, stored digests from
+# the old recipe can be told apart from new ones.
+_DIGEST_VERSION = "v1"
 
 
 def payload_digest(action: str, params: dict[str, Any]) -> str:
@@ -46,11 +52,15 @@ def payload_digest(action: str, params: dict[str, Any]) -> str:
     reordering, addition, or value change produces a different digest —
     and therefore a failed approval check.
     """
-    raw = json.dumps(
-        {"action": action, "params": params},
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
+    raw = (
+        _DIGEST_VERSION
+        + "\n"
+        + json.dumps(
+            {"action": action, "params": params},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
@@ -69,7 +79,13 @@ def build_proposal_rows(
     evidence links of the diagnosed candidate the proposal cites — so an
     FDE can review a proposal with its context, and a decision can bind
     the exact payload digest.
+
+    ``proposal_index`` (and the ``-pN`` id suffix) use the proposal's
+    index in the model's raw ``action_proposals`` output, so a persisted
+    row always points back at the recorded output it was validated from.
     """
+    if not proposals:
+        return []
     subject_entity = workspace.domain.projections[
         workspace.agent.projection
     ].subject
@@ -77,7 +93,7 @@ def build_proposal_rows(
         c["subject"]["id"]: c.get("evidence", {}) for c in candidates
     }
     rows = []
-    for index, proposal in enumerate(proposals):
+    for proposal in proposals:
         spec = workspace.agent.permitted_actions[proposal.action]
         subject_id: str | None = None
         related: list[dict[str, str]] = []
@@ -91,6 +107,7 @@ def build_proposal_rows(
                 related.append(
                     {"param": pname, "entity": pspec.ref, "id": value}
                 )
+        index = proposal.index
         rows.append(
             {
                 "proposal_id": f"{run_id}-p{index}",
@@ -147,6 +164,19 @@ def decide(
     diag = Diagnostics()
     result = DecisionResult(proposal_id=proposal_id)
 
+    if store is None:
+        store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    if trace is None:
+        trace = JsonlTraceSink(Path(workspace.path) / RUNTIME_DIR / "trace.jsonl")
+
+    # Every exit goes through _finish so even a rejected *attempt* leaves
+    # a decision.failed trace event — a failed approval attempt is itself
+    # auditable.
+    def _finish() -> DecisionResult:
+        result.diagnostics = diag.items
+        _emit_trace(trace, result, diag)
+        return result
+
     if decision not in DECISIONS:
         diag.error(
             "DECISION.INVALID_DECISION",
@@ -158,13 +188,7 @@ def decide(
             "a decision requires an explicit reviewer identity",
         )
     if diag.has_errors:
-        result.diagnostics = diag.items
-        return result
-
-    if store is None:
-        store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
-    if trace is None:
-        trace = JsonlTraceSink(Path(workspace.path) / RUNTIME_DIR / "trace.jsonl")
+        return _finish()
 
     try:
         proposal = store.proposal(proposal_id)
@@ -182,8 +206,7 @@ def decide(
             "them; rejected proposals are never persisted",
         )
     if diag.has_errors:
-        result.diagnostics = diag.items
-        return result
+        return _finish()
 
     decided_at = datetime.now(timezone.utc)
     decision_id = f"dec-{decided_at:%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:8]}"
@@ -207,9 +230,7 @@ def decide(
             f"cannot record decision: {exc}",
         )
 
-    result.diagnostics = diag.items
-    _emit_trace(trace, result, diag)
-    return result
+    return _finish()
 
 
 @dataclass
@@ -230,17 +251,19 @@ def check_approval(
     workspace: Workspace,
     proposal_id: str,
     *,
-    action: str | None = None,
-    params: dict[str, Any] | None = None,
+    action: str,
+    params: dict[str, Any],
     store: CanonicalStore | None = None,
 ) -> ApprovalCheck:
     """Verify a proposal is approved for the exact payload presented.
 
     Fails closed on every miss: unknown proposal, no decision (status
-    ``proposed``), latest decision ``rejected``, or a payload whose
-    digest differs from the approved one. Pass ``action``/``params`` to
-    bind the check to the payload about to execute; omit them to check
-    the stored payload as recorded.
+    ``proposed``), latest decision ``rejected``, a payload whose digest
+    differs from the approved one, or an approved payload that no longer
+    satisfies the current workspace contract (the action was removed
+    from ``permitted_actions`` or its param schema changed).
+    ``action``/``params`` are required: the gate binds to the payload
+    about to execute, never to whatever happens to be stored.
     """
     diag = Diagnostics()
     result = ApprovalCheck(proposal_id=proposal_id)
@@ -278,9 +301,7 @@ def check_approval(
         return result
 
     expected = latest["payload_digest"]
-    check_action = action if action is not None else proposal["action"]
-    check_params = params if params is not None else proposal["params"]
-    presented = payload_digest(check_action, check_params)
+    presented = payload_digest(action, params)
     if presented != expected or presented != proposal["payload_digest"]:
         diag.error(
             "DECISION.PAYLOAD_CHANGED",
@@ -291,9 +312,62 @@ def check_approval(
         result.diagnostics = diag.items
         return result
 
+    contract_error = _contract_error(workspace, store, proposal)
+    if contract_error is not None:
+        diag.error("DECISION.CONTRACT_CHANGED", contract_error)
+        result.diagnostics = diag.items
+        return result
+
     result.approved = True
     result.diagnostics = diag.items
     return result
+
+
+def _contract_error(
+    workspace: Workspace, store: CanonicalStore, proposal: dict[str, Any]
+) -> str | None:
+    """Revalidate the approved payload against the *current* contract.
+
+    An approval binds to a payload, but the workspace contract can change
+    between review and execution — the action dropped from
+    ``permitted_actions``, a param added or retyped. Executing such a
+    proposal would act on an approval the reviewer never gave for the
+    current contract, so the gate rechecks: action still allowlisted,
+    params still schema-conformant, and ref targets still resolvable.
+    Candidate grounding is *not* rechecked — it describes the diagnosis
+    context, which is legitimately frozen in time.
+    """
+    action = proposal["action"]
+    params = proposal["params"]
+    spec = workspace.agent.permitted_actions.get(action)
+    if spec is None:
+        return (
+            f"action {action!r} is no longer in permitted_actions "
+            f"({', '.join(sorted(workspace.agent.permitted_actions))})"
+        )
+    unknown = sorted(set(params) - set(spec.params))
+    if unknown:
+        return f"params {unknown} are no longer declared for {action!r}"
+    for pname, pspec in spec.params.items():
+        value = params.get(pname)
+        if value is None:
+            if pspec.required:
+                return f"param {pname!r} is now required for {action!r}"
+            continue
+        type_error = param_type_error(value, pspec)
+        if type_error is not None:
+            return f"param {pname!r}: {type_error}"
+        if pspec.type == "ref":
+            try:
+                entity = store.entity_state(pspec.ref or "", value)
+            except Exception as exc:
+                return f"cannot resolve ref {pspec.ref}/{value}: {exc}"
+            if entity is None:
+                return (
+                    f"param {pname!r} resolves to unknown "
+                    f"{pspec.ref} entity {value!r}"
+                )
+    return None
 
 
 def proposal_view(
@@ -334,15 +408,17 @@ def _emit_trace(
                 ],
             },
         )
-    except OSError:
-        pass
+    except OSError as exc:
+        diag.warning(
+            "DECISION.TRACE_ERROR",
+            f"cannot write trace: {exc.strerror or exc}",
+        )
 
 
 __all__ = [
     "ApprovalCheck",
     "DECISIONS",
     "DecisionResult",
-    "build_proposal_rows",
     "check_approval",
     "decide",
     "payload_digest",

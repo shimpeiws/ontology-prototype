@@ -261,10 +261,16 @@ class CanonicalStore(Protocol):
     def record_diagnosis_run(
         self,
         record: dict[str, Any],
+        *,
         proposal_rows: list[dict[str, Any]] | None = None,
     ) -> None:
         """Append one diagnosis run record (and its validated proposal
-        rows) in a single transaction; both are append-only."""
+        rows) in a single transaction; both are append-only.
+
+        ``proposal_rows`` is keyword-only so the extension is explicit:
+        an implementation predating it fails loudly as a store error
+        rather than silently dropping the proposal index.
+        """
         ...
 
     def diagnosis_run(self, run_id: str) -> dict[str, Any] | None:
@@ -284,7 +290,9 @@ class CanonicalStore(Protocol):
         ...
 
     def decisions_for(self, proposal_id: str) -> list[dict[str, Any]]:
-        """All decisions on one proposal, ordered by decided_at."""
+        """All decisions on one proposal, in insertion order — the
+        current state derives from the latest *recorded* decision, never
+        wall-clock ``decided_at``."""
         ...
 
 
@@ -572,6 +580,7 @@ class SqliteCanonicalStore:
     def record_diagnosis_run(
         self,
         record: dict[str, Any],
+        *,
         proposal_rows: list[dict[str, Any]] | None = None,
     ) -> None:
         conn = self._connect()
@@ -716,7 +725,7 @@ class SqliteCanonicalStore:
             SELECT decision_id, decision, reviewer, reason, payload_digest,
                    decided_at
             FROM decisions WHERE proposal_id = ?
-            ORDER BY decided_at, decision_id
+            ORDER BY rowid
             """,
             (proposal_id,),
         ).fetchall()
