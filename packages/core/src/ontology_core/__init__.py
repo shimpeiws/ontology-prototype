@@ -5,6 +5,13 @@ transport independent: it never imports app code (CLI, API, Web) and needs
 only PyYAML at runtime.
 """
 
+from .canonical import (
+    ApplyResult,
+    CanonicalEvent,
+    CanonicalStore,
+    SqliteCanonicalStore,
+    event_fact_key,
+)
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
 from .ingest import (
@@ -38,6 +45,12 @@ from .model import (
     TaskSpec,
     Workspace,
 )
+from .projections import (
+    ProjectionCandidate,
+    ProjectionResult,
+    get_projection_run,
+    run_projection,
+)
 from .trace import JsonlTraceSink, NullTraceSink, TraceSink
 from .workspace import (
     SUPPORTED_SCHEMA_VERSION,
@@ -51,6 +64,9 @@ __version__ = "0.0.1"
 __all__ = [
     "ActionSpec",
     "AgentDefinition",
+    "ApplyResult",
+    "CanonicalEvent",
+    "CanonicalStore",
     "Condition",
     "Diagnostic",
     "Diagnostics",
@@ -73,6 +89,8 @@ __all__ = [
     "MappingDefinition",
     "NullTraceSink",
     "Observation",
+    "ProjectionCandidate",
+    "ProjectionResult",
     "ProjectionSpec",
     "PropertySpec",
     "RUNTIME_DIR",
@@ -80,6 +98,7 @@ __all__ = [
     "ResolvedEvent",
     "SUPPORTED_SCHEMA_VERSION",
     "SourceSpec",
+    "SqliteCanonicalStore",
     "SubjectRef",
     "TargetSpec",
     "TaskSpec",
@@ -87,6 +106,9 @@ __all__ = [
     "WORKSPACE_FILES",
     "Workspace",
     "__version__",
+    "event_fact_key",
+    "get_projection_run",
     "ingest_snapshot",
     "load_workspace",
+    "run_projection",
 ]
