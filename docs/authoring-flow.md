@@ -60,7 +60,7 @@ Every view renders one state at a time; states are shared patterns (#15), not pe
 
 ## Field-level feedback and navigation
 
-- Diagnostics are addressable: file + dotted path lets the UI place a marker on the exact field (e.g., `mapping.yaml` → `entities[0].properties.assignee`) and cross-file references navigate to the referenced definition (e.g., an `assignee` `ref` to `Person` opens the domain editor on `Person`; an evaluation `start_event` opens the domain event).
+- Diagnostics are addressable: file + dotted path lets the UI place a marker on the exact field (e.g., `mapping.yaml` → `mapping.entities[0].properties.assignee`) and cross-file references navigate to the referenced definition (e.g., an `assignee` `ref` to `Person` opens the domain editor on `Person`; an evaluation `start_event` opens the domain event).
 - Renaming or removing a referenced concept shows its blast radius across the draft bundle before the save boundary (#16, #19).
 - The Web layer may add convenience validation (required-field presence, type hints) for feedback, but only core diagnostics decide whether a draft is saveable.
 
