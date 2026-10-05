@@ -7,20 +7,31 @@ effect through a narrow adapter boundary:
   idempotency state, rechecks the approval gate (``check_approval``)
   against the exact stored payload immediately before writing, and only
   then invokes the adapter.
-- Every adapter-reaching attempt is appended to the ``executions`` table
-  with an execution id, idempotency key, attempt number, status, and the
-  adapter receipt or a sanitized error.
+- Every adapter-reaching attempt appends *two* rows to ``executions``:
+  an ``attempting`` intent row *before* the adapter is invoked and an
+  outcome row after. If the intent row cannot be persisted the adapter
+  is never called — an unrecorded adapter invocation would be invisible
+  to the replay and uncertainty gates on the next run.
 - Outcomes are honest about delivery: ``succeeded`` means the adapter
   returned a receipt; ``failed`` means the adapter attested no side
   effect occurred (safe to retry); ``uncertain`` means the adapter
-  outcome is unknown (interruption or unexpected exception) — a retry is
-  refused rather than risking a duplicate write. The system never claims
-  exactly-once delivery.
+  outcome is unknown (interruption, unexpected exception, or a stranded
+  ``attempting`` row whose outcome never got recorded). The system never
+  claims exactly-once delivery.
 - A successful execution is idempotent: repeating ``execute`` returns
   the persisted receipt without touching the adapter, so repeated
   successful execution cannot duplicate output.
+- After ``uncertain`` (or a stranded ``attempting`` row), automatic
+  retry is refused for adapters that do not declare themselves
+  ``idempotent`` — the previous write may have landed and a retry could
+  duplicate it. An idempotent adapter (one that dedupes on the
+  idempotency key) may retry safely: a re-delivered key reports the
+  existing effect instead of creating a second one. For non-idempotent
+  adapters the refusal is permanent for that payload; the recovery is a
+  new diagnosis run producing a new proposal.
 
-Refusals — the approval gate failing, or a prior ``uncertain`` attempt —
+Refusals — the approval gate failing, an adapter mismatch, or a prior
+``uncertain``/``attempting`` attempt against a non-idempotent adapter —
 never reach the adapter and leave no ``executions`` row; they are still
 auditable through ``execution.refused`` trace events, matching the
 ``decision.failed`` convention.
@@ -41,13 +52,13 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .canonical import CanonicalStore, SqliteCanonicalStore
-from .decisions import check_approval
+from .decisions import backfill_proposals, check_approval
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
 from .model import Workspace
 from .trace import JsonlTraceSink, TraceSink
 
-EXECUTION_STATUSES = ("succeeded", "failed", "uncertain")
+EXECUTION_STATUSES = ("attempting", "succeeded", "failed", "uncertain")
 
 _DIGEST_VERSION = "v1"
 
@@ -98,6 +109,13 @@ class ExecutionAdapter(Protocol):
     @property
     def name(self) -> str: ...
 
+    @property
+    def idempotent(self) -> bool:
+        """Whether re-delivering the same idempotency key cannot create
+        a duplicate effect. When true, retrying after an ``uncertain``
+        outcome is safe — the adapter reports the existing effect."""
+        ...
+
     def deliver(self, request: AdapterRequest) -> dict[str, Any]:
         """Perform the write-back for one approved attempt.
 
@@ -129,9 +147,15 @@ class CsvReminderAdapter:
     references. The adapter dedupes on the idempotency key and returns a
     receipt with the written row's identity; it refuses anything it
     cannot honor honestly with ``AdapterFailed``.
+
+    Values land in a CSV that operators open in a spreadsheet, so cell
+    values that would be interpreted as formulas (leading ``=``, ``+``,
+    ``-``, ``@``, or whitespace/control characters) are written with a
+    leading ``'`` to neutralize them.
     """
 
     name = "csv-reminders"
+    idempotent = True
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -198,9 +222,9 @@ class CsvReminderAdapter:
                     request.execution_id,
                     request.idempotency_key,
                     request.action,
-                    target,
-                    related,
-                    reason,
+                    _csv_safe(target),
+                    _csv_safe(related),
+                    _csv_safe(reason),
                     created_at,
                 ]
             )
@@ -234,9 +258,31 @@ class CsvReminderAdapter:
         return None
 
 
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _csv_safe(value: str) -> str:
+    """Neutralize a value that a spreadsheet would treat as a formula.
+
+    Model-authored params reach the CSV verbatim; a cell starting with
+    ``= + - @`` or a control character executes when opened in Excel or
+    Sheets. Prefixing with ``'`` keeps the value inspectable but inert.
+    """
+    if value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
+
+
 @dataclass
 class ExecutionResult:
-    """Outcome of ``execute``: diagnostics plus the execution state."""
+    """Outcome of ``execute``: diagnostics plus the execution state.
+
+    ``attempt`` is the attempt number this call ran or replayed (0 when
+    refused before any attempt). ``attempts`` is the highest attempt
+    number recorded under the execution's idempotency key — on a refusal
+    or replay it reports prior recorded attempts, on a new attempt it
+    equals ``attempt``.
+    """
 
     diagnostics: list[Diagnostic] = field(default_factory=list)
     proposal_id: str | None = None
@@ -305,6 +351,9 @@ def execute(
         return result
 
     try:
+        # Repair the proposals index for runs that predate the table —
+        # same as decide/proposal_view — before loading the proposal.
+        backfill_proposals(workspace, store)
         proposal = store.proposal(proposal_id)
     except Exception as exc:
         diag.error(
@@ -331,14 +380,29 @@ def execute(
     except Exception as exc:
         diag.error(
             "EXECUTION.STORE_ERROR",
-            f"cannot read canonical store: {exc}",
+            f"cannot read execution history: {exc}",
         )
         result.status = "refused"
         return _finish("execution.refused")
-    result.attempts = len(prior)
+    result.attempts = max((r["attempt"] for r in prior), default=0)
     latest = prior[-1] if prior else None
+    adapter_name = result.adapter or ""
 
     if latest is not None and latest["status"] == "succeeded":
+        if latest["adapter"] != adapter_name:
+            # The recorded effect belongs to a different destination —
+            # replaying its receipt under this adapter's name would be a
+            # lie, and re-delivering could duplicate it.
+            diag.error(
+                "EXECUTION.ADAPTER_MISMATCH",
+                f"execution {result.execution_id} already succeeded via "
+                f"{latest['adapter']!r}, not {adapter_name!r}",
+                hint="execute with the original adapter to replay its "
+                "receipt; a different destination is a different effect",
+            )
+            result.status = "refused"
+            result.attempt = latest["attempt"]
+            return _finish("execution.refused")
         # The approved effect already exists: replay the persisted
         # receipt instead of writing a duplicate.
         result.status = "succeeded"
@@ -347,21 +411,31 @@ def execute(
         result.replayed = True
         return _finish("execution.replayed")
 
-    if latest is not None and latest["status"] == "uncertain":
-        # The previous attempt may have reached the adapter. Retrying
-        # blindly could duplicate the reminder, so the operator must
-        # reconcile first (inspect the adapter output, then decide).
-        diag.error(
-            "EXECUTION.UNCERTAIN",
-            f"execution {result.execution_id} has an uncertain prior "
-            "attempt: the adapter may have written already",
-            hint="inspect the adapter output (e.g. reminders.csv) and "
-            "reconcile manually; automatic retry is refused to avoid "
-            "duplicating the effect",
+    if latest is not None and latest["status"] in (
+        "uncertain",
+        "attempting",
+    ):
+        # The previous attempt may have reached the adapter — or its
+        # outcome was never recorded. Blindly retrying could duplicate
+        # the write, so this is only safe when the same adapter declares
+        # itself idempotent (dedupes on the idempotency key).
+        retryable = (
+            latest["adapter"] == adapter_name
+            and getattr(adapter, "idempotent", False)
         )
-        result.status = "refused"
-        result.attempt = latest["attempt"]
-        return _finish("execution.refused")
+        if not retryable:
+            diag.error(
+                "EXECUTION.UNCERTAIN",
+                f"execution {result.execution_id} has an uncertain prior "
+                "attempt: the adapter may have written already",
+                hint="inspect the adapter output (e.g. reminders.csv) "
+                "and reconcile manually; this adapter does not declare "
+                "idempotent delivery, so automatic retry is refused — "
+                "the recovery is a new diagnosis run and proposal",
+            )
+            result.status = "refused"
+            result.attempt = latest["attempt"]
+            return _finish("execution.refused")
 
     # Gate: the persisted approval and payload digest are rechecked here,
     # immediately before the adapter can write. A proposal approved then
@@ -394,6 +468,16 @@ def execute(
         reason=proposal.get("reason"),
     )
 
+    # Intent first: persist that the adapter is about to be invoked. If
+    # this row cannot be written the adapter is never called — otherwise
+    # an unrecorded adapter write would bypass every gate on the next
+    # run. A crash or a failed outcome write leaves this row as the
+    # latest state, which the gate above treats like ``uncertain``.
+    if not _record_row(store, request, result, "attempting", None, None, diag):
+        result.status = "refused"
+        return _finish("execution.refused")
+    result.attempts = attempt
+
     receipt: dict[str, Any] | None = None
     error: str | None = None
     try:
@@ -415,16 +499,19 @@ def execute(
         # interruption propagate.
         result.status = "uncertain"
         error = f"interrupted: {type(exc).__name__}"
-        _record_attempt(store, request, result, receipt, error, diag)
+        _record_row(
+            store, request, result, result.status, receipt, error, diag
+        )
         result.diagnostics = diag.items
         _emit_trace(trace, "execution.uncertain", result, diag)
         raise
     else:
         result.status = "succeeded"
 
-    _record_attempt(store, request, result, receipt, error, diag)
+    _record_row(
+        store, request, result, result.status, receipt, error, diag
+    )
     result.receipt = receipt
-    result.attempts = attempt
     kind = {
         "succeeded": "execution.succeeded",
         "failed": "execution.failed",
@@ -433,14 +520,17 @@ def execute(
     return _finish(kind)
 
 
-def _record_attempt(
+def _record_row(
     store: CanonicalStore,
     request: AdapterRequest,
     result: ExecutionResult,
+    status: str,
     receipt: dict[str, Any] | None,
     error: str | None,
     diag: Diagnostics,
-) -> None:
+) -> bool:
+    """Append one executions row; returns False with a diagnostic on
+    store failure."""
     try:
         store.record_execution(
             {
@@ -450,21 +540,22 @@ def _record_attempt(
                 "action": request.action,
                 "adapter": result.adapter or "",
                 "attempt": request.attempt,
-                "status": result.status,
+                "status": status,
                 "receipt": receipt,
                 "error": error,
                 "created_at": datetime.now(timezone.utc),
             }
         )
         result.recorded = True
+        return True
     except Exception as exc:
-        # The adapter outcome stands, but its evidence could not be
-        # persisted — that is itself an error the operator must see.
+        # Evidence of this attempt could not be persisted — that is
+        # itself an error the operator must see.
         diag.error(
             "EXECUTION.STORE_ERROR",
-            f"adapter outcome {result.status!r} could not be "
-            f"recorded: {exc}",
+            f"execution attempt {status!r} could not be recorded: {exc}",
         )
+        return False
 
 
 def _emit_trace(

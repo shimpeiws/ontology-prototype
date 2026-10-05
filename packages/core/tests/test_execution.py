@@ -154,14 +154,15 @@ def test_approved_proposal_executes_with_receipt(tmp_path: Path) -> None:
     assert receipt["path"] == str(reminders_path(workspace))
     assert not receipt["deduplicated"]
 
-    # The attempt is persisted with the receipt.
+    # The attempt is persisted: an attempting intent row then the
+    # outcome row carrying the receipt.
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     attempts = store.executions_for_key(result.idempotency_key)
-    assert len(attempts) == 1
-    assert attempts[0]["status"] == "succeeded"
-    assert attempts[0]["receipt"] == receipt
-    assert attempts[0]["adapter"] == "csv-reminders"
-    assert attempts[0]["proposal_id"] == proposal["proposal_id"]
+    assert [a["status"] for a in attempts] == ["attempting", "succeeded"]
+    assert [a["attempt"] for a in attempts] == [1, 1]
+    assert attempts[-1]["receipt"] == receipt
+    assert attempts[-1]["adapter"] == "csv-reminders"
+    assert attempts[-1]["proposal_id"] == proposal["proposal_id"]
 
 
 def test_execute_refused_for_unapproved_rejected_unknown(
@@ -255,7 +256,7 @@ def test_repeated_execute_does_not_duplicate(tmp_path: Path) -> None:
     # A second execute replays the persisted receipt and never touches
     # the adapter again.
     class Bomb:
-        name = "bomb"
+        name = "csv-reminders"
 
         def deliver(self, request):
             raise AssertionError("adapter must not be called")
@@ -266,10 +267,14 @@ def test_repeated_execute_does_not_duplicate(tmp_path: Path) -> None:
     assert second.replayed
     assert second.receipt == first.receipt
     assert second.attempt == 1
+    assert second.attempts == 1
 
     assert len(read_reminders(workspace)) == 1
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
-    assert len(store.executions_for_key(first.idempotency_key)) == 1
+    assert [
+        a["status"]
+        for a in store.executions_for_key(first.idempotency_key)
+    ] == ["attempting", "succeeded"]
 
 
 class FailThenSucceed:
@@ -312,10 +317,15 @@ def test_failed_attempt_can_retry(tmp_path: Path) -> None:
 
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     attempts = store.executions_for_key(first.idempotency_key)
-    assert [a["status"] for a in attempts] == ["failed", "succeeded"]
-    assert [a["attempt"] for a in attempts] == [1, 2]
+    assert [a["status"] for a in attempts] == [
+        "attempting",
+        "failed",
+        "attempting",
+        "succeeded",
+    ]
+    assert [a["attempt"] for a in attempts] == [1, 1, 2, 2]
     assert {a["execution_id"] for a in attempts} == {first.execution_id}
-    assert attempts[0]["error"] == "destination unavailable before write"
+    assert attempts[1]["error"] == "destination unavailable before write"
 
 
 class WriteThenCrash:
@@ -359,9 +369,8 @@ def test_uncertain_attempt_blocks_blind_retry(tmp_path: Path) -> None:
 
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     attempts = store.executions_for_key(first.idempotency_key)
-    assert len(attempts) == 1
-    assert attempts[0]["status"] == "uncertain"
-    assert attempts[0]["error"] == "unexpected RuntimeError"
+    assert [a["status"] for a in attempts] == ["attempting", "uncertain"]
+    assert attempts[-1]["error"] == "unexpected RuntimeError"
 
 
 def test_adapter_refuses_unsupported_action(tmp_path: Path) -> None:
@@ -564,15 +573,322 @@ def test_execute_store_errors_become_diagnostics(tmp_path: Path) -> None:
         def record_execution(self, record):
             raise RuntimeError("locked")
 
+    # The intent row cannot be written, so the adapter is never invoked:
+    # an unrecorded adapter call would be invisible to the next run's
+    # replay/uncertainty gates.
     result = execute(
         workspace,
         proposal["proposal_id"],
         csv_adapter(workspace),
         store=BrokenWriteStore(Path(workspace.path) / RUNTIME_DIR),
     )
-    # The adapter did write, but the receipt could not be persisted —
-    # surfaced as an error, not silently claimed.
     assert not result.ok
+    assert result.status == "refused"
     assert "EXECUTION.STORE_ERROR" in {
         d.code for d in result.diagnostics
     }
+    assert read_reminders(workspace) == []
+
+
+def test_execute_refuses_when_execution_history_unreadable(
+    tmp_path: Path,
+) -> None:
+    """A store that cannot read prior executions fails closed: retrying
+    blind could duplicate a landed effect."""
+
+    class BrokenHistoryStore(SqliteCanonicalStore):
+        def executions_for_key(self, key):
+            raise RuntimeError("locked")
+
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    result = execute(
+        workspace,
+        proposal["proposal_id"],
+        csv_adapter(workspace),
+        store=BrokenHistoryStore(Path(workspace.path) / RUNTIME_DIR),
+    )
+    assert result.status == "refused"
+    assert "EXECUTION.STORE_ERROR" in {
+        d.code for d in result.diagnostics
+    }
+    assert read_reminders(workspace) == []
+
+
+class NonIdempotentCsv:
+    """A CSV destination adapter with no idempotent declaration."""
+
+    name = "csv-reminders"
+
+    def __init__(self, inner: CsvReminderAdapter) -> None:
+        self.inner = inner
+        self.calls = 0
+
+    def deliver(self, request: AdapterRequest) -> dict:
+        self.calls += 1
+        return self.inner.deliver(request)
+
+
+def test_unrecorded_outcome_blocks_blind_retry(tmp_path: Path) -> None:
+    """The adapter write lands but the outcome row cannot be persisted:
+    the stranded 'attempting' intent row must block a blind retry."""
+
+    class OutcomeWriteFails(SqliteCanonicalStore):
+        def __init__(self, root):
+            super().__init__(root)
+            self.writes = 0
+
+        def record_execution(self, record):
+            self.writes += 1
+            # The intent row lands; the outcome row fails.
+            if self.writes > 1:
+                raise RuntimeError("disk full")
+            super().record_execution(record)
+
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    pid = proposal["proposal_id"]
+    store = OutcomeWriteFails(Path(workspace.path) / RUNTIME_DIR)
+    adapter = NonIdempotentCsv(csv_adapter(workspace))
+
+    first = execute(workspace, pid, adapter, store=store)
+    assert first.status == "succeeded"
+    assert not first.ok  # the unpersisted outcome is an error
+    assert "EXECUTION.STORE_ERROR" in {
+        d.code for d in first.diagnostics
+    }
+    assert len(read_reminders(workspace)) == 1
+
+    # Next run sees the stranded intent row: no second adapter call —
+    # the earlier write may have landed (and here it did).
+    second = execute(workspace, pid, adapter, store=store)
+    assert second.status == "refused"
+    assert "EXECUTION.UNCERTAIN" in {
+        d.code for d in second.diagnostics
+    }
+    assert adapter.calls == 1
+    assert len(read_reminders(workspace)) == 1
+
+
+def test_uncertain_retry_allowed_for_idempotent_adapter(
+    tmp_path: Path,
+) -> None:
+    """An adapter that dedupes on the idempotency key may retry after
+    uncertain: a re-delivered key reports the existing row."""
+
+    class CrashOnceThenCsv:
+        name = "csv-reminders"
+        idempotent = True
+
+        def __init__(self, inner: CsvReminderAdapter) -> None:
+            self.inner = inner
+            self.calls = 0
+
+        def deliver(self, request: AdapterRequest) -> dict:
+            self.calls += 1
+            receipt = self.inner.deliver(request)
+            if self.calls == 1:
+                raise RuntimeError("simulated crash after write")
+            # Second call: same key already wrote — dedupe receipt.
+            return receipt
+
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    pid = proposal["proposal_id"]
+    adapter = CrashOnceThenCsv(csv_adapter(workspace))
+
+    first = execute(workspace, pid, adapter)
+    assert first.status == "uncertain"
+    assert len(read_reminders(workspace)) == 1
+
+    second = execute(workspace, pid, adapter)
+    assert second.ok, [d.format() for d in second.diagnostics]
+    assert second.status == "succeeded"
+    assert second.attempt == 2
+    assert second.attempts == 2
+    assert second.receipt["deduplicated"] is True
+    assert adapter.calls == 2
+    assert len(read_reminders(workspace)) == 1
+
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    attempts = store.executions_for_key(first.idempotency_key)
+    assert [a["status"] for a in attempts] == [
+        "attempting",
+        "uncertain",
+        "attempting",
+        "succeeded",
+    ]
+    assert [a["attempt"] for a in attempts] == [1, 1, 2, 2]
+
+
+def test_execute_records_uncertain_before_propagating_interrupt(
+    tmp_path: Path,
+) -> None:
+    """Interruption mid-deliver still leaves an honest trail: the intent
+    row, an uncertain outcome row, and a trace event."""
+
+    class Interrupting:
+        name = "interrupting"
+
+        def deliver(self, request):
+            raise KeyboardInterrupt()
+
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    trace_path = tmp_path / "trace.jsonl"
+    sink = JsonlTraceSink(trace_path)
+
+    with pytest.raises(KeyboardInterrupt):
+        execute(
+            workspace,
+            proposal["proposal_id"],
+            Interrupting(),
+            trace=sink,
+        )
+
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    _, key = execution_identity(
+        proposal["proposal_id"], proposal["payload_digest"]
+    )
+    attempts = store.executions_for_key(key)
+    assert [a["status"] for a in attempts] == ["attempting", "uncertain"]
+    assert attempts[-1]["error"] == "interrupted: KeyboardInterrupt"
+    events = [
+        json.loads(line)
+        for line in trace_path.read_text().splitlines()
+    ]
+    assert [e["kind"] for e in events] == ["execution.uncertain"]
+    assert events[0]["data"]["status"] == "uncertain"
+
+
+def test_replay_refuses_different_adapter(tmp_path: Path) -> None:
+    """A succeeded execution belongs to its adapter's destination —
+    another adapter must not replay its receipt as its own."""
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    pid = proposal["proposal_id"]
+
+    first = execute(workspace, pid, csv_adapter(workspace))
+    assert first.ok
+
+    class OtherDestination:
+        name = "webhook-reminders"
+
+        def deliver(self, request):
+            raise AssertionError("adapter must not be called")
+
+    second = execute(workspace, pid, OtherDestination())
+    assert second.status == "refused"
+    assert "EXECUTION.ADAPTER_MISMATCH" in {
+        d.code for d in second.diagnostics
+    }
+    assert len(read_reminders(workspace)) == 1
+
+
+def test_csv_adapter_neutralizes_spreadsheet_formulas(
+    tmp_path: Path,
+) -> None:
+    """Model-authored values that a spreadsheet would evaluate are
+    written inert — the CSV is meant to be opened in Excel/Sheets."""
+    adapter = CsvReminderAdapter(tmp_path / "reminders.csv")
+    adapter.deliver(
+        AdapterRequest(
+            execution_id="exe-x",
+            idempotency_key="idem-x",
+            attempt=1,
+            proposal_id="p",
+            action="SendReminder",
+            params={
+                "target": "=cmd|'/c calc'!A0",
+                "related_entity": "-2+3",
+                "reason": "@SUM(1+1)*cmd|' /c calc'!A0",
+            },
+            payload_digest="sha256:x",
+            subject_entity="Job",
+            subject_id="A01",
+            related_entities=[],
+            reason="x",
+        )
+    )
+    with adapter.path.open("r", newline="", encoding="utf-8") as f:
+        row = list(csv.DictReader(f))[0]
+    assert row["target"] == "'=cmd|'/c calc'!A0"
+    assert row["related_entity"] == "'-2+3"
+    assert row["reason"].startswith("'")
+
+
+def test_execute_refused_when_contract_changed(tmp_path: Path) -> None:
+    """Approving then dropping the action from the contract fails the
+    gate — a stale approval cannot carry a now-invalid action."""
+    import dataclasses
+
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+
+    edited = dataclasses.replace(workspace.agent, permitted_actions={})
+    changed_ws = dataclasses.replace(workspace, agent=edited)
+    result = execute(
+        changed_ws, proposal["proposal_id"], csv_adapter(workspace)
+    )
+    assert result.status == "refused"
+    assert "DECISION.CONTRACT_CHANGED" in {
+        d.code for d in result.diagnostics
+    }
+    assert read_reminders(workspace) == []
+
+
+def test_execute_backfills_legacy_proposal(tmp_path: Path) -> None:
+    """A proposal from a run recorded before the proposals table is
+    recovered by backfill, not reported as unknown."""
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    conn = store._connect()
+    conn.execute(
+        "INSERT INTO diagnosis_runs (run_id, provider, model,"
+        " prompt_version, prompt, status, input_digest, provider_called,"
+        " deliverables, proposals, rejected, diagnostics, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-legacy",
+            "legacy-provider",
+            "m",
+            "diagnosis.v1",
+            "prompt",
+            "ok",
+            "sha256:legacy",
+            1,
+            "{}",
+            json.dumps(
+                [
+                    {
+                        "action": "SendReminder",
+                        "params": {
+                            "target": "taro",
+                            "related_entity": "A01",
+                            "reason": "x",
+                        },
+                        "reason": "legacy proposal",
+                    }
+                ]
+            ),
+            "[]",
+            "[]",
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.commit()
+
+    # Not UNKNOWN_PROPOSAL — the proposal is recovered and gated.
+    result = execute(workspace, "dgx-legacy-p0", csv_adapter(workspace))
+    assert result.status == "refused"
+    assert "DECISION.NOT_APPROVED" in {
+        d.code for d in result.diagnostics
+    }
+
+    decide(workspace, "dgx-legacy-p0", "approved", reviewer="fde-sato")
+    result = execute(workspace, "dgx-legacy-p0", csv_adapter(workspace))
+    assert result.ok, [d.format() for d in result.diagnostics]
+    assert len(read_reminders(workspace)) == 1

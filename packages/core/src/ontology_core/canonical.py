@@ -28,12 +28,13 @@ persists them under ``<workspace>/.ontology/canon.db``:
   current lifecycle state is derived from its latest decision; history
   is never rewritten.
 - ``executions`` — append-only write-back attempts (see execution.py).
-  Each adapter-reaching attempt is one row carrying the execution id,
-  idempotency key, attempt number, outcome status
-  (``succeeded``/``failed``/``uncertain``), and the adapter receipt or
-  sanitized error. An execution's current state derives from its latest
-  recorded attempt (insertion order, not wall clock — same rule as
-  decisions).
+  Each adapter-reaching attempt writes an ``attempting`` intent row
+  before the adapter call and an outcome row after, carrying the
+  execution id, idempotency key, attempt number, status
+  (``attempting``/``succeeded``/``failed``/``uncertain``), and the
+  adapter receipt or sanitized error. An execution's current state
+  derives from its latest recorded row (insertion order, not wall
+  clock — same rule as decisions).
 
 One ingest run applies in a single transaction: entity upserts, event
 inserts, and observation links commit together or not at all. v0.1 assumes a

@@ -17,7 +17,8 @@ top:
 The model never reaches these APIs: decisions only enter through
 ``decide``, which requires a non-empty reviewer — model output has no
 path to masquerade as a human decision. Approval never executes
-anything; write-back is a later stage.
+anything; write-back is a separate stage implemented by ``execute``
+(see execution.py).
 """
 
 from __future__ import annotations
