@@ -106,12 +106,16 @@ Backfilled rows reconstruct history conservatively:
 - `subject_entity` comes from the frozen projection run (not the current
   contract), so a workspace edited since diagnosis cannot relabel what
   was proposed.
+- Rows already indexed for a run keep their ids: a proposal matching an
+  existing row's payload digest reuses that identity — decisions
+  recorded against it are never split across a renumbered duplicate.
 - For records that carry the model-output `index`, the `-pN` suffix is
   the raw output position. Older records without it try to recover the
   position by matching each proposal back to the recorded model output
   (single unambiguous action+params match required); when no match is
-  possible, the suffix is the validated-array position — in that case it
-  identifies the row, not a raw-output offset.
+  possible the suffix is the validated-array position, and collisions
+  inside a run are resolved by scanning upward — in both cases the
+  suffix identifies the row, not a guaranteed raw-output offset.
 - Backfill is idempotent and best-effort: a failure leaves the table
   unchanged rather than breaking inspection.
 

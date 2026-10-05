@@ -163,27 +163,52 @@ def backfill_proposals(
     - ``subject_entity`` comes from the frozen projection run when one is
       recorded, so a workspace edited since diagnosis cannot relabel what
       was actually proposed.
+    - Rows already indexed for a run keep their ids — a proposal matching
+      an existing row's payload digest reuses that identity (and its
+      decisions) rather than being duplicated under a new suffix.
     - Rows from records that carry the model-output ``index`` keep it;
       pre-``index`` records try to recover the raw output position by
       matching each proposal back to the recorded model output, and fall
       back to the validated-array position only when no unambiguous match
-      exists.
+      exists. Indexes are assigned per run with collisions resolved
+      upward, so ids stay unique.
     """
     try:
         current_subject = workspace.domain.projections[
             workspace.agent.projection
         ].subject
+        all_rows = store.proposals()
         rows = []
         for run in store.diagnosis_runs():
+            run_id = run["run_id"]
+            # Rows already indexed for this run own their ids: a proposal
+            # that matches one by payload keeps that identity (and its
+            # decisions) instead of being duplicated under a new suffix.
+            by_digest: dict[str, list[int]] = {}
+            used: set[int] = set()
+            for existing in all_rows:
+                if existing["diagnosis_run_id"] != run_id:
+                    continue
+                by_digest.setdefault(
+                    existing["payload_digest"], []
+                ).append(existing["proposal_index"])
+                used.add(existing["proposal_index"])
             subject_entity = _frozen_subject(store, run, current_subject)
             raw_items = _raw_output_items(run)
             for position, prop in enumerate(run.get("proposals") or []):
+                digest = payload_digest(
+                    prop.get("action"), prop.get("params") or {}
+                )
+                pending = by_digest.get(digest)
+                if pending:
+                    pending.pop(0)
+                    continue
                 index = prop.get("index")
                 if not isinstance(index, int):
                     index = _match_output_index(prop, raw_items, position)
-                proposal_id = f"{run['run_id']}-p{index}"
-                if store.proposal(proposal_id) is not None:
-                    continue
+                while index in used:
+                    index += 1
+                used.add(index)
                 spec = workspace.agent.permitted_actions.get(
                     prop.get("action")
                 )
@@ -195,8 +220,8 @@ def backfill_proposals(
                     )
                 rows.append(
                     {
-                        "proposal_id": proposal_id,
-                        "diagnosis_run_id": run["run_id"],
+                        "proposal_id": f"{run_id}-p{index}",
+                        "diagnosis_run_id": run_id,
                         "proposal_index": index,
                         "action": prop.get("action"),
                         "params": prop.get("params") or {},
@@ -205,9 +230,7 @@ def backfill_proposals(
                         "subject_id": subject_id,
                         "related_entities": related,
                         "evidence": {},
-                        "payload_digest": payload_digest(
-                            prop.get("action"), prop.get("params") or {}
-                        ),
+                        "payload_digest": digest,
                         "created_at": run["created_at"],
                     }
                 )

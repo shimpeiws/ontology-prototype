@@ -1019,3 +1019,149 @@ def test_backfill_recovers_raw_output_index(tmp_path: Path) -> None:
     view = proposal_view(workspace)[0]
     assert view["proposal_index"] == 1
     assert view["proposal_id"] == "dgx-legacy-p1"
+
+
+def test_backfill_preserves_indexed_identities(tmp_path: Path) -> None:
+    """A run backfilled under the old position scheme and then decided
+    must not gain a duplicate identity when raw-index recovery would
+    renumber it."""
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    params = {"target": "taro", "related_entity": "A01", "reason": "x"}
+    conn = store._connect()
+    # Simulate a run already indexed under the legacy position scheme:
+    # accepted item at validated position 0 → dgx-old-p0, with an
+    # approval already recorded against it. The raw output places the
+    # accepted item at index 1 (a rejected item came first).
+    conn.execute(
+        "INSERT INTO diagnosis_runs (run_id, provider, model,"
+        " prompt_version, prompt, status, input_digest, provider_called,"
+        " output, deliverables, proposals, rejected, diagnostics,"
+        " created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-old",
+            "legacy-provider",
+            "m",
+            "diagnosis.v1",
+            "prompt",
+            "ok",
+            "sha256:x",
+            1,
+            json.dumps(
+                {
+                    "action_proposals": [
+                        {"action": "DeleteJob", "params": {}},
+                        {"action": "SendReminder", "params": params,
+                         "reason": "x"},
+                    ]
+                }
+            ),
+            "{}",
+            json.dumps([
+                {"action": "SendReminder", "params": params, "reason": "x"}
+            ]),
+            "[]",
+            "[]",
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO proposals (proposal_id, diagnosis_run_id,"
+        " proposal_index, action, params, reason, subject_entity,"
+        " subject_id, related_entities, evidence, payload_digest,"
+        " created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-old-p0",
+            "dgx-old",
+            0,
+            "SendReminder",
+            json.dumps(params),
+            "x",
+            "Job",
+            "A01",
+            "[]",
+            "{}",
+            payload_digest("SendReminder", params),
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.commit()
+    dec = decide(workspace, "dgx-old-p0", "approved", reviewer="fde")
+    assert dec.ok, dec.diagnostics
+
+    # Re-running inspection must not duplicate the proposal under -p1.
+    views = proposal_view(workspace)
+    assert len(views) == 1
+    assert views[0]["proposal_id"] == "dgx-old-p0"
+    assert views[0]["status"] == "approved"
+
+
+def test_backfill_resolves_index_collisions(tmp_path: Path) -> None:
+    """Mixed unique and ambiguous raw matches must not collide on the
+    same `-pN` id and roll back the whole repair."""
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    a_params = {"target": "taro", "related_entity": "A01", "reason": "a"}
+    b_params = {"target": "taro", "related_entity": "A01", "reason": "b"}
+    # raw: [rejected@0, A@1, B@2, B@3 identical] — A uniquely matches
+    # raw 1; the two identical Bs are ambiguous and fall back to their
+    # validated positions 1 and 2 → without collision handling both
+    # would claim -p1/-p2 already taken and the insert would roll back.
+    conn = store._connect()
+    conn.execute(
+        "INSERT INTO diagnosis_runs (run_id, provider, model,"
+        " prompt_version, prompt, status, input_digest, provider_called,"
+        " output, deliverables, proposals, rejected, diagnostics,"
+        " created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-mixed",
+            "legacy-provider",
+            "m",
+            "diagnosis.v1",
+            "prompt",
+            "ok",
+            "sha256:x",
+            1,
+            json.dumps(
+                {
+                    "action_proposals": [
+                        {"action": "DeleteJob", "params": {}},
+                        {"action": "SendReminder", "params": a_params,
+                         "reason": "a"},
+                        {"action": "SendReminder", "params": b_params,
+                         "reason": "b"},
+                        {"action": "SendReminder", "params": b_params,
+                         "reason": "b"},
+                    ]
+                }
+            ),
+            "{}",
+            json.dumps(
+                [
+                    {"action": "SendReminder", "params": a_params,
+                     "reason": "a"},
+                    {"action": "SendReminder", "params": b_params,
+                     "reason": "b"},
+                    {"action": "SendReminder", "params": b_params,
+                     "reason": "b"},
+                ]
+            ),
+            "[]",
+            "[]",
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.commit()
+
+    views = proposal_view(workspace)
+    ids = sorted(v["proposal_id"] for v in views)
+    assert ids == ["dgx-mixed-p1", "dgx-mixed-p2", "dgx-mixed-p3"]
