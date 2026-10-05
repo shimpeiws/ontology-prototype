@@ -10,7 +10,7 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 | `examples/` | Portable workspace definitions and synthetic source data |
 | `docs/` | Product plan, release criteria, and architecture decisions |
 
-`apps/api/` and `apps/web/` are documented v0.2 destinations (see [docs/monorepo.md](docs/monorepo.md)); they are intentionally not implemented in v0.1.
+`apps/api/` and `apps/web/` are documented v0.2 destinations (see [docs/monorepo.md](docs/monorepo.md)); they are intentionally not implemented in v0.1. The framework-neutral authoring-flow and UI-state contract they implement is specified in [docs/authoring-flow.md](docs/authoring-flow.md).
 
 ## Install
 
