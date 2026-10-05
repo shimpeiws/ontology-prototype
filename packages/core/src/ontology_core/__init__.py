@@ -45,6 +45,12 @@ from .model import (
     TaskSpec,
     Workspace,
 )
+from .projections import (
+    ProjectionCandidate,
+    ProjectionResult,
+    get_projection_run,
+    run_projection,
+)
 from .trace import JsonlTraceSink, NullTraceSink, TraceSink
 from .workspace import (
     SUPPORTED_SCHEMA_VERSION,
@@ -83,6 +89,8 @@ __all__ = [
     "MappingDefinition",
     "NullTraceSink",
     "Observation",
+    "ProjectionCandidate",
+    "ProjectionResult",
     "ProjectionSpec",
     "PropertySpec",
     "RUNTIME_DIR",
@@ -99,6 +107,8 @@ __all__ = [
     "Workspace",
     "__version__",
     "event_fact_key",
+    "get_projection_run",
     "ingest_snapshot",
     "load_workspace",
+    "run_projection",
 ]

@@ -10,10 +10,16 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from ontology_core import __version__ as core_version
-from ontology_core import ingest_snapshot, load_workspace
+from ontology_core import (
+    get_projection_run,
+    ingest_snapshot,
+    load_workspace,
+    run_projection,
+)
 
 from . import __version__
 
@@ -26,9 +32,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="ontology",
         description=(
             "FDE operational loop CLI. Implemented: 'check' (workspace "
-            "validation) and 'ingest' (CSV/JSON snapshots into observation "
-            "evidence). Projections, agent runs, approvals, and evaluation "
-            "are planned capabilities, not yet commands."
+            "validation), 'ingest' (CSV/JSON snapshots into observation "
+            "evidence and canonical state), and 'project' (deterministic "
+            "projection over canonical events). Agent runs, approvals, and "
+            "evaluation are planned capabilities, not yet commands."
         ),
     )
     parser.add_argument(
@@ -72,6 +79,36 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the ingest result as JSON",
     )
+
+    project = commands.add_parser(
+        "project",
+        help="compute a projection over canonical events and freeze the run",
+    )
+    project.add_argument(
+        "workspace",
+        type=Path,
+        help="directory containing domain.yaml, mapping.yaml, evaluation.yaml, agent.yaml",
+    )
+    project.add_argument(
+        "projection",
+        nargs="?",
+        help="projection name; defaults to the workspace agent's projection",
+    )
+    project.add_argument(
+        "--as-of",
+        metavar="DATETIME",
+        help="ISO 8601 datetime with an explicit offset; required unless --run",
+    )
+    project.add_argument(
+        "--run",
+        metavar="RUN_ID",
+        help="inspect a previously frozen projection run instead of computing",
+    )
+    project.add_argument(
+        "--json",
+        action="store_true",
+        help="print the projection result as JSON",
+    )
     return parser
 
 
@@ -81,6 +118,14 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_check(args.workspace, as_json=args.json)
     if args.command == "ingest":
         return _cmd_ingest(args.workspace, args.snapshot, as_json=args.json)
+    if args.command == "project":
+        return _cmd_project(
+            args.workspace,
+            args.projection,
+            as_of=args.as_of,
+            run_id=args.run,
+            as_json=args.json,
+        )
     return EXIT_INVALID  # pragma: no cover - argparse enforces the subcommand
 
 
@@ -150,6 +195,15 @@ def _cmd_ingest(workspace: Path, snapshot: Path, *, as_json: bool) -> int:
             ),
             "accepted": len(result.accepted),
             "rejected": len(result.rejected),
+            "canonical": (
+                {
+                    "entities_upserted": result.canonical.entities_upserted,
+                    "events_appended": result.canonical.events_appended,
+                    "events_reobserved": result.canonical.events_reobserved,
+                }
+                if result.canonical is not None
+                else None
+            ),
             "evidence": {
                 "snapshot": str(result.snapshot_path)
                 if result.snapshot_path
@@ -173,6 +227,112 @@ def _cmd_ingest(workspace: Path, snapshot: Path, *, as_json: bool) -> int:
             )
             if result.observations_path is not None:
                 print(f"evidence: {result.observations_path}")
+            if result.canonical is not None:
+                print(
+                    f"canonical: {result.canonical.entities_upserted} entities, "
+                    f"{result.canonical.events_appended} events appended, "
+                    f"{result.canonical.events_reobserved} re-observed"
+                )
+
+    return EXIT_OK if result.ok else EXIT_INVALID
+
+
+def _parse_as_of(text: str) -> datetime | None:
+    """Parse ``--as-of``: an ISO 8601 datetime with an explicit offset.
+
+    A naive value is rejected rather than interpreted — an as-of time with
+    no stated zone is ambiguous and must never be guessed.
+    """
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        return None
+    return parsed
+
+
+def _cmd_project(
+    workspace: Path,
+    projection: str | None,
+    *,
+    as_of: str | None,
+    run_id: str | None,
+    as_json: bool,
+) -> int:
+    loaded = load_workspace(workspace)
+    if not loaded.ok:
+        for diagnostic in loaded.diagnostics:
+            print(diagnostic.format())
+        print(f"workspace invalid: {workspace} ({len(loaded.errors)} errors)")
+        return EXIT_INVALID
+    assert loaded.workspace is not None
+
+    if run_id is not None:
+        record = get_projection_run(loaded.workspace, run_id)
+        if record is None:
+            print(f"ERROR PROJECTION.UNKNOWN_RUN - no frozen run {run_id!r}")
+            return EXIT_INVALID
+        if as_json:
+            print(json.dumps(record, indent=2))
+        else:
+            print(
+                f"run {record['run_id']}: {record['projection']} "
+                f"as-of {record['as_of']} — {len(record['candidates'])} candidates"
+            )
+            for candidate in record["candidates"]:
+                print(
+                    f"  {candidate['subject']['entity']}/"
+                    f"{candidate['subject']['id']} "
+                    f"elapsed {candidate['elapsed_days']} days "
+                    f"(evidence: {candidate['evidence']['fact_key']})"
+                )
+        return EXIT_OK
+
+    if as_of is None:
+        print("ERROR --as-of is required to compute a projection")
+        return EXIT_INVALID
+    as_of_dt = _parse_as_of(as_of)
+    if as_of_dt is None:
+        print(
+            f"ERROR invalid --as-of {as_of!r}: expected an ISO 8601 datetime "
+            "with an explicit offset (e.g. '2026-10-05T00:00:00Z')"
+        )
+        return EXIT_INVALID
+
+    name = projection or loaded.workspace.agent.projection
+    result = run_projection(loaded.workspace, name, as_of=as_of_dt)
+
+    if as_json:
+        payload = {
+            "workspace": str(workspace),
+            "ok": result.ok,
+            "run_id": result.run_id,
+            "projection": result.projection,
+            "as_of": result.as_of.isoformat() if result.as_of else None,
+            "definition_digest": result.definition_digest,
+            "recorded": result.recorded,
+            "candidates": [c.to_dict() for c in result.candidates],
+            "inputs": result.inputs,
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        for diagnostic in result.diagnostics:
+            print(diagnostic.format())
+        if result.run_id is not None:
+            print(
+                f"run {result.run_id}: {result.projection} — "
+                f"{len(result.candidates)} candidates"
+            )
+            for candidate in result.candidates:
+                assignee = candidate.properties.get("assignee")
+                suffix = f", assignee {assignee}" if assignee else ""
+                print(
+                    f"  {candidate.subject_entity}/{candidate.subject_id} "
+                    f"completed {candidate.occurred_at.isoformat()}, "
+                    f"elapsed {candidate.elapsed_seconds / 86400:.2f} days{suffix}"
+                )
 
     return EXIT_OK if result.ok else EXIT_INVALID
 
