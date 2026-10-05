@@ -1008,6 +1008,7 @@ def _cmd_execute(
                     "attempts": result.attempts,
                     "replayed": result.replayed,
                     "receipt": result.receipt,
+                    "error": result.error,
                     "recorded": result.recorded,
                     "diagnostics": [d.to_dict() for d in result.diagnostics],
                 },
@@ -1035,6 +1036,8 @@ def _cmd_execute(
                 f"{result.status}: {result.proposal_id} "
                 f"(execution {result.execution_id})"
             )
+            if result.error:
+                print(f"  error: {result.error}")
     return EXIT_OK if result.ok else EXIT_INVALID
 
 

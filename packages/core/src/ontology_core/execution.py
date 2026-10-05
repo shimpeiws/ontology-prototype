@@ -30,11 +30,16 @@ effect through a narrow adapter boundary:
   adapters the refusal is permanent for that payload; the recovery is a
   new diagnosis run producing a new proposal.
 
-Refusals — the approval gate failing, an adapter mismatch, or a prior
+Refusals — the approval gate failing or a prior
 ``uncertain``/``attempting`` attempt against a non-idempotent adapter —
 never reach the adapter and leave no ``executions`` row; they are still
 auditable through ``execution.refused`` trace events, matching the
 ``decision.failed`` convention.
+
+Execution identity binds the destination: an adapter may expose a
+``destination`` (e.g. a CSV file path), folded into the execution id and
+idempotency key, so a different destination is a different execution
+with its own attempt history rather than a replay of a foreign receipt.
 
 The executor never mutates canonical entities, events, or source data
 and never fabricates business outcomes: the only writes are the
@@ -70,6 +75,9 @@ class AdapterFailed(Exception):
     action, invalid params, an output that cannot be opened. The
     executor records the attempt as ``failed`` and permits a retry. Any
     other exception from ``deliver`` is recorded as ``uncertain`` instead.
+
+    The message is persisted verbatim and shown to the operator, so it
+    must name *what* failed — never embed param values or secrets.
     """
 
 
@@ -116,6 +124,14 @@ class ExecutionAdapter(Protocol):
         outcome is safe — the adapter reports the existing effect."""
         ...
 
+    @property
+    def destination(self) -> str | None:
+        """Optional stable identifier for the destination this adapter
+        writes to (e.g. a file path). When present it is folded into the
+        execution identity, so a different destination gets its own
+        execution rather than replaying another destination's receipt."""
+        ...
+
     def deliver(self, request: AdapterRequest) -> dict[str, Any]:
         """Perform the write-back for one approved attempt.
 
@@ -160,6 +176,10 @@ class CsvReminderAdapter:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
 
+    @property
+    def destination(self) -> str:
+        return str(self.path)
+
     def deliver(self, request: AdapterRequest) -> dict[str, Any]:
         if request.action != "SendReminder":
             raise AdapterFailed(
@@ -170,18 +190,22 @@ class CsvReminderAdapter:
         target = params.get("target")
         related = params.get("related_entity")
         reason = params.get("reason")
+        # target and related_entity are the references a reminder is
+        # meaningless without; reason follows the contract — optional
+        # params may be absent, so only its type is validated.
         invalid = [
             name
             for name, value in (
                 ("target", target),
                 ("related_entity", related),
-                ("reason", reason),
             )
             if not isinstance(value, str) or not value
         ]
+        if reason is not None and not isinstance(reason, str):
+            invalid.append("reason")
         if invalid:
             raise AdapterFailed(
-                f"SendReminder params missing or not strings: {invalid}"
+                f"SendReminder params missing or invalid: {invalid}"
             )
 
         reminder_id = "rem-" + request.idempotency_key.removeprefix("idem-")[:12]
@@ -217,15 +241,18 @@ class CsvReminderAdapter:
                 writer.writerow(REMINDER_COLUMNS)
             writer.writerow(
                 [
-                    reminder_id,
-                    request.proposal_id,
-                    request.execution_id,
-                    request.idempotency_key,
-                    request.action,
-                    _csv_safe(target),
-                    _csv_safe(related),
-                    _csv_safe(reason),
-                    created_at,
+                    _csv_safe(v)
+                    for v in (
+                        reminder_id,
+                        request.proposal_id,
+                        request.execution_id,
+                        request.idempotency_key,
+                        request.action,
+                        target,
+                        related,
+                        reason or "",
+                        created_at,
+                    )
                 ]
             )
             handle.flush()
@@ -245,15 +272,45 @@ class CsvReminderAdapter:
     def _find_row(self, idempotency_key: str) -> dict[str, str] | None:
         if not self.path.exists():
             return None
+        if self.path.stat().st_size:
+            with self.path.open("rb") as fb:
+                fb.seek(-1, os.SEEK_END)
+                if fb.read(1) != b"\n":
+                    # A torn final line has no terminator; appending
+                    # would merge the new row into it.
+                    raise AdapterFailed(
+                        f"existing {self.path} ends without a newline: "
+                        "a partial row may exist — reconcile manually"
+                    )
         try:
             with self.path.open("r", newline="", encoding="utf-8") as f:
                 for row in csv.DictReader(f):
-                    if row.get("idempotency_key") != idempotency_key:
+                    # A ragged row (fewer cells than the header or extra
+                    # cells) is a torn write — a partial reminder may be
+                    # there, so neither dedupe nor a blind append is
+                    # honest.
+                    if None in row or any(
+                        v is None for v in row.values()
+                    ):
+                        raise AdapterFailed(
+                            f"existing {self.path} has a truncated row: "
+                            "a partial reminder may exist — reconcile "
+                            "manually"
+                        )
+                    if row["idempotency_key"] != idempotency_key:
                         continue
-                    # A row matching the key but missing required cells
-                    # is a torn write — a reminder may be half-there, so
-                    # neither dedupe nor a blind append is honest.
-                    if not all(row.get(c) for c in REMINDER_COLUMNS):
+                    # Structural cells are never empty in a real write;
+                    # a match missing one is a torn row, not a receipt.
+                    if not all(
+                        row.get(c)
+                        for c in (
+                            "reminder_id",
+                            "proposal_id",
+                            "execution_id",
+                            "idempotency_key",
+                            "created_at",
+                        )
+                    ):
                         raise AdapterFailed(
                             f"existing {self.path} has an incomplete "
                             f"row for idempotency key "
@@ -304,6 +361,7 @@ class ExecutionResult:
     attempt: int = 0
     attempts: int = 0
     receipt: dict[str, Any] | None = None
+    error: str | None = None
     replayed: bool = False
     recorded: bool = False
 
@@ -314,16 +372,25 @@ class ExecutionResult:
         )
 
 
-def execution_identity(proposal_id: str, payload_digest: str) -> tuple[str, str]:
+def execution_identity(
+    proposal_id: str, payload_digest: str, adapter_key: str = ""
+) -> tuple[str, str]:
     """Deterministic ``(execution_id, idempotency_key)`` for one proposal.
 
-    Derived from the proposal id and the approved payload digest — not
-    from wall-clock time — so every ``execute`` call for the same
-    approved payload converges on the same execution, which is what makes
-    idempotent replay possible.
+    Derived from the proposal id, the approved payload digest, and the
+    adapter identity — not from wall-clock time — so every ``execute``
+    call for the same approved payload and destination converges on the
+    same execution. A different destination is a different execution:
+    replaying one destination's receipt under another would be a lie.
     """
     raw = (
-        _DIGEST_VERSION + "\n" + proposal_id + "\n" + payload_digest
+        _DIGEST_VERSION
+        + "\n"
+        + proposal_id
+        + "\n"
+        + payload_digest
+        + "\n"
+        + adapter_key
     ).encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     return f"exe-{digest[:16]}", f"idem-{digest[:32]}"
@@ -383,8 +450,18 @@ def execute(
         result.status = "refused"
         return _finish("execution.refused")
 
+    # The execution identity binds the destination: a different adapter
+    # or output file is a different execution with its own attempt
+    # history — never a replay of a foreign receipt.
+    adapter_name = result.adapter or ""
+    destination = getattr(adapter, "destination", None)
+    adapter_key = (
+        adapter_name
+        if not destination
+        else f"{adapter_name}|{destination}"
+    )
     result.execution_id, result.idempotency_key = execution_identity(
-        proposal_id, proposal["payload_digest"]
+        proposal_id, proposal["payload_digest"], adapter_key
     )
     try:
         prior = store.executions_for_key(result.idempotency_key)
@@ -397,25 +474,10 @@ def execute(
         return _finish("execution.refused")
     result.attempts = max((r["attempt"] for r in prior), default=0)
     latest = prior[-1] if prior else None
-    adapter_name = result.adapter or ""
 
     if latest is not None and latest["status"] == "succeeded":
-        if latest["adapter"] != adapter_name:
-            # The recorded effect belongs to a different destination —
-            # replaying its receipt under this adapter's name would be a
-            # lie, and re-delivering could duplicate it.
-            diag.error(
-                "EXECUTION.ADAPTER_MISMATCH",
-                f"execution {result.execution_id} already succeeded via "
-                f"{latest['adapter']!r}, not {adapter_name!r}",
-                hint="execute with the original adapter to replay its "
-                "receipt; a different destination is a different effect",
-            )
-            result.status = "refused"
-            result.attempt = latest["attempt"]
-            return _finish("execution.refused")
-        # The approved effect already exists: replay the persisted
-        # receipt instead of writing a duplicate.
+        # The approved effect already exists at this destination: replay
+        # the persisted receipt instead of writing a duplicate.
         result.status = "succeeded"
         result.receipt = latest["receipt"]
         result.attempt = latest["attempt"]
@@ -428,13 +490,9 @@ def execute(
     ):
         # The previous attempt may have reached the adapter — or its
         # outcome was never recorded. Blindly retrying could duplicate
-        # the write, so this is only safe when the same adapter declares
+        # the write, so this is only safe when the adapter declares
         # itself idempotent (dedupes on the idempotency key).
-        retryable = (
-            latest["adapter"] == adapter_name
-            and getattr(adapter, "idempotent", False)
-        )
-        if not retryable:
+        if not getattr(adapter, "idempotent", False):
             diag.error(
                 "EXECUTION.UNCERTAIN",
                 f"execution {result.execution_id} has an uncertain prior "
@@ -495,9 +553,11 @@ def execute(
         receipt = adapter.deliver(request)
     except AdapterFailed as exc:
         # The adapter attests nothing was written — safe to record as
-        # failed and to retry later.
+        # failed and to retry later. The message is adapter-controlled
+        # and operator-facing, but capped so a careless adapter cannot
+        # dump an unbounded payload into the record.
         result.status = "failed"
-        error = str(exc)
+        error = str(exc)[:512]
     except Exception as exc:
         # The adapter cannot say whether the effect landed. Record the
         # exception class only: an arbitrary adapter's message could
@@ -528,6 +588,7 @@ def execute(
         # would hide an effect with no receipt on record.
         result.status = "uncertain"
     result.receipt = receipt
+    result.error = error
     kind = {
         "succeeded": "execution.succeeded",
         "failed": "execution.failed",

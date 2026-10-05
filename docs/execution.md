@@ -31,18 +31,20 @@ persisted proposal. Per call it:
 1. Backfills the proposals index (same as `decide`), then loads the
    persisted proposal (`EXECUTION.UNKNOWN_PROPOSAL` if absent).
 2. Resolves the deterministic execution identity — `execution_id` and
-   `idempotency_key` derive from `proposal_id` + `payload_digest`, so
-   every call for the same approved payload converges on one execution.
+   `idempotency_key` derive from `proposal_id` + `payload_digest` +
+   adapter key (the adapter's `name`, plus its `destination` when it
+   exposes one — for the CSV adapter, the output path). Every call for
+   the same approved payload and destination converges on one
+   execution; a different destination is a *different* execution with
+   its own attempt history, so a receipt is never replayed for a file
+   it did not write.
 3. Checks the execution's latest recorded row:
-   - `succeeded` → if the recorded adapter differs from the requested
-     one, refuses (`EXECUTION.ADAPTER_MISMATCH`): replaying another
-     destination's receipt would be a lie. Otherwise replays the
-     persisted receipt (`execution.replayed` trace event); the adapter
-     is never invoked, so repeated successful execution cannot
-     duplicate output.
+   - `succeeded` → replays the persisted receipt
+     (`execution.replayed` trace event); the adapter is never invoked,
+     so repeated successful execution cannot duplicate output.
    - `uncertain` or `attempting` → the adapter may have written
      already, or the outcome never got recorded. Retry is allowed only
-     when the *same* adapter declares `idempotent` (dedupes on the
+     when the adapter declares `idempotent` (dedupes on the
      idempotency key, so a second landing is impossible); otherwise the
      call refuses (`EXECUTION.UNCERTAIN`). For non-idempotent adapters
      the refusal is permanent for that payload — the recovery is a new
@@ -87,18 +89,26 @@ An execution's current state derives from its latest *recorded* row
 
 `ExecutionResult` mirrors this: `attempt` is the attempt the call ran or
 replayed, `attempts` the highest attempt number recorded under the
-idempotency key (equal to `attempt` after a new attempt).
+idempotency key (equal to `attempt` after a new attempt), and `error`
+carries the recorded error text for `failed`/`uncertain` outcomes so the
+operator sees *why*, not just the status — the CLI prints it and `--json`
+includes it.
 
 ## The adapter contract
 
 `ExecutionAdapter` exposes a stable `name`, an `idempotent` declaration,
+an optional `destination` (folded into the execution identity as above),
 and `deliver(request)`. `deliver` returns a receipt dict on success and
 raises:
 
 - `AdapterFailed` — definite no-effect failure (unsupported action,
   invalid params, destination unavailable *before* the write). Recorded
-  as `failed`; safe to retry.
-- anything else — recorded as `uncertain`.
+  as `failed`; safe to retry. Its message is persisted (capped at 512
+  characters) and shown to the operator, so it must name *what* failed —
+  never embed param values or secrets.
+- anything else — recorded as `uncertain`; only the exception class is
+  stored, since an arbitrary adapter message could embed request
+  details.
 
 `CsvReminderAdapter` also dedupes on the idempotency key: asked to
 deliver a key it already wrote, it returns a `deduplicated: true`
@@ -108,9 +118,16 @@ is what makes it `idempotent = True` and eligible for retry after an
 non-`SendReminder` action or missing params) is a definite failure —
 never a fabricated receipt.
 
-Because reminders land in a CSV operators open in a spreadsheet, values
-that would evaluate as formulas (leading `=`, `+`, `-`, `@`, or control
-characters) are written with a leading `'` to keep them inert.
+The same honesty applies to a damaged output file: a `reminders.csv`
+with a ragged row, a key-matching row missing structural cells, or a
+final line without a newline terminator may contain a torn reminder —
+the adapter raises `AdapterFailed` rather than dedupe it or append over
+it.
+
+Because reminders land in a CSV operators open in a spreadsheet, every
+cell — generated identifiers included — is written with a leading `'`
+when it starts with `=`, `+`, `-`, `@`, whitespace, or a control
+character, to keep it inert.
 
 ## What write-back never does
 

@@ -27,6 +27,7 @@ from ontology_core import (
     run_projection,
 )
 from ontology_core.evidence import RUNTIME_DIR
+from ontology_core.execution import REMINDER_COLUMNS
 from ontology_core.trace import JsonlTraceSink
 
 FIXED_NOW = datetime(2026, 10, 5, 12, 0, 0, tzinfo=timezone.utc)
@@ -119,6 +120,11 @@ def csv_adapter(workspace) -> CsvReminderAdapter:
     return CsvReminderAdapter(reminders_path(workspace))
 
 
+def csv_key(workspace) -> str:
+    """The adapter key a CSV adapter on the default path binds to."""
+    return f"csv-reminders|{reminders_path(workspace)}"
+
+
 def test_approved_proposal_executes_with_receipt(tmp_path: Path) -> None:
     workspace, proposal = make_proposal(tmp_path)
     approve(workspace, proposal)
@@ -133,7 +139,9 @@ def test_approved_proposal_executes_with_receipt(tmp_path: Path) -> None:
     assert not result.replayed
     assert (result.execution_id, result.idempotency_key) == (
         execution_identity(
-            proposal["proposal_id"], proposal["payload_digest"]
+            proposal["proposal_id"],
+            proposal["payload_digest"],
+            csv_key(workspace),
         )
     )
 
@@ -257,6 +265,7 @@ def test_repeated_execute_does_not_duplicate(tmp_path: Path) -> None:
     # the adapter again.
     class Bomb:
         name = "csv-reminders"
+        destination = str(reminders_path(workspace))
 
         def deliver(self, request):
             raise AssertionError("adapter must not be called")
@@ -624,6 +633,10 @@ class NonIdempotentCsv:
         self.inner = inner
         self.calls = 0
 
+    @property
+    def destination(self) -> str:
+        return self.inner.destination
+
     def deliver(self, request: AdapterRequest) -> dict:
         self.calls += 1
         return self.inner.deliver(request)
@@ -685,6 +698,10 @@ def test_uncertain_retry_allowed_for_idempotent_adapter(
         def __init__(self, inner: CsvReminderAdapter) -> None:
             self.inner = inner
             self.calls = 0
+
+        @property
+        def destination(self) -> str:
+            return self.inner.destination
 
         def deliver(self, request: AdapterRequest) -> dict:
             self.calls += 1
@@ -750,7 +767,7 @@ def test_execute_records_uncertain_before_propagating_interrupt(
 
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     _, key = execution_identity(
-        proposal["proposal_id"], proposal["payload_digest"]
+        proposal["proposal_id"], proposal["payload_digest"], "interrupting"
     )
     attempts = store.executions_for_key(key)
     assert [a["status"] for a in attempts] == ["attempting", "uncertain"]
@@ -763,9 +780,9 @@ def test_execute_records_uncertain_before_propagating_interrupt(
     assert events[0]["data"]["status"] == "uncertain"
 
 
-def test_replay_refuses_different_adapter(tmp_path: Path) -> None:
-    """A succeeded execution belongs to its adapter's destination —
-    another adapter must not replay its receipt as its own."""
+def test_different_destination_gets_own_execution(tmp_path: Path) -> None:
+    """A different destination is a different execution: it must never
+    replay another file's receipt — it delivers honestly, once."""
     workspace, proposal = make_proposal(tmp_path)
     approve(workspace, proposal)
     pid = proposal["proposal_id"]
@@ -773,18 +790,22 @@ def test_replay_refuses_different_adapter(tmp_path: Path) -> None:
     first = execute(workspace, pid, csv_adapter(workspace))
     assert first.ok
 
-    class OtherDestination:
-        name = "webhook-reminders"
+    other_path = tmp_path / "other" / "reminders.csv"
+    second = execute(workspace, pid, CsvReminderAdapter(other_path))
+    assert second.ok, [d.format() for d in second.diagnostics]
+    assert not second.replayed
+    assert second.execution_id != first.execution_id
+    assert second.receipt["path"] == str(other_path)
 
-        def deliver(self, request):
-            raise AssertionError("adapter must not be called")
-
-    second = execute(workspace, pid, OtherDestination())
-    assert second.status == "refused"
-    assert "EXECUTION.ADAPTER_MISMATCH" in {
-        d.code for d in second.diagnostics
-    }
+    # Each destination holds exactly one reminder for the proposal.
     assert len(read_reminders(workspace)) == 1
+    with other_path.open("r", newline="", encoding="utf-8") as f:
+        assert len(list(csv.DictReader(f))) == 1
+
+    # And replay still holds per destination.
+    third = execute(workspace, pid, CsvReminderAdapter(other_path))
+    assert third.replayed
+    assert third.receipt == second.receipt
 
 
 def test_csv_adapter_neutralizes_spreadsheet_formulas(
@@ -968,7 +989,9 @@ def test_execution_latest_row_ignores_created_at_clock_rewind(
     workspace, proposal = make_proposal(tmp_path)
     approve(workspace, proposal)
     pid = proposal["proposal_id"]
-    exe_id, key = execution_identity(pid, proposal["payload_digest"])
+    exe_id, key = execution_identity(
+        pid, proposal["payload_digest"], csv_key(workspace)
+    )
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     base = {
         "execution_id": exe_id,
@@ -1055,3 +1078,109 @@ def test_executions_table_created_on_existing_db(tmp_path: Path) -> None:
 
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     assert store.executions_for_key("idem-none") == []
+
+
+def test_csv_adapter_refuses_file_without_trailing_newline(
+    tmp_path: Path,
+) -> None:
+    """A file ending mid-row (no newline terminator) is a torn write —
+    appending would merge into the partial row, so it must refuse."""
+    path = tmp_path / "reminders.csv"
+    path.write_text(
+        ",".join(REMINDER_COLUMNS) + "\n"
+        "rem-x,prop-x,exe-x,idem-x,SendRemind",  # torn final row
+        encoding="utf-8",
+    )
+    adapter = CsvReminderAdapter(path)
+    request = AdapterRequest(
+        execution_id="exe-y",
+        idempotency_key="idem-y",
+        attempt=1,
+        proposal_id="p",
+        action="SendReminder",
+        params={"target": "taro", "related_entity": "A01"},
+        payload_digest="sha256:x",
+        subject_entity="Job",
+        subject_id="A01",
+        related_entities=[],
+        reason="x",
+    )
+    with pytest.raises(AdapterFailed):
+        adapter.deliver(request)
+    # Nothing appended.
+    assert len(path.read_text().splitlines()) == 2
+
+
+def test_send_reminder_without_optional_reason(tmp_path: Path) -> None:
+    """reason is contract-optional: a proposal without it still
+    delivers, with an empty reason column."""
+    path = tmp_path / "reminders.csv"
+    adapter = CsvReminderAdapter(path)
+    request = AdapterRequest(
+        execution_id="exe-x",
+        idempotency_key="idem-x",
+        attempt=1,
+        proposal_id="p",
+        action="SendReminder",
+        params={"target": "taro", "related_entity": "A01"},
+        payload_digest="sha256:x",
+        subject_entity="Job",
+        subject_id="A01",
+        related_entities=[],
+        reason="",
+    )
+    receipt = adapter.deliver(request)
+    assert receipt["reminder_id"].startswith("rem-")
+    with path.open("r", newline="", encoding="utf-8") as f:
+        row = next(iter(csv.DictReader(f)))
+    assert row["reason"] == ""
+
+
+def test_execute_surfaces_adapter_error_in_result(tmp_path: Path) -> None:
+    """A definite adapter failure is visible on the result, not only in
+    the executions row."""
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+
+    blocked = tmp_path / "blocked.csv"
+    blocked.mkdir()  # a directory cannot be opened for append
+    result = execute(
+        workspace, proposal["proposal_id"], CsvReminderAdapter(blocked)
+    )
+    assert result.status in ("failed", "uncertain")
+    assert result.error
+
+    class CleanFail:
+        name = "clean-fail"
+
+        def deliver(self, request):
+            raise AdapterFailed("destination unavailable")
+
+    result = execute(
+        workspace, proposal["proposal_id"], CleanFail()
+    )
+    assert result.status == "failed"
+    assert result.error == "destination unavailable"
+
+
+def test_execute_truncates_adapter_failure_message(tmp_path: Path) -> None:
+    """An adapter-controlled failure message is capped before it is
+    persisted or shown."""
+
+    class Verbose:
+        name = "verbose"
+
+        def deliver(self, request):
+            raise AdapterFailed("x" * 2000)
+
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    result = execute(
+        workspace, proposal["proposal_id"], Verbose()
+    )
+    assert result.status == "failed"
+    assert len(result.error) <= 512
+
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    rows = store.executions_for_key(result.idempotency_key)
+    assert len(rows[-1]["error"]) <= 512

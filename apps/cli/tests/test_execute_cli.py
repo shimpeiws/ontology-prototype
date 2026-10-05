@@ -110,6 +110,7 @@ def test_execute_repeated_does_not_duplicate(tmp_path, capsys) -> None:
     assert payload["status"] == "succeeded"
     assert payload["replayed"] is True
     assert payload["receipt"]["deduplicated"] is False
+    assert payload["error"] is None
 
     with reminders_file(workspace).open(
         "r", newline="", encoding="utf-8"
@@ -128,6 +129,7 @@ def test_execute_refuses_unapproved_and_unknown(tmp_path, capsys) -> None:
     assert code == 1
     assert not payload["ok"]
     assert payload["status"] == "refused"
+    assert payload["error"] is None
     assert {
         d["code"] for d in payload["diagnostics"]
     } == {"DECISION.NOT_APPROVED"}
