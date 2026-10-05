@@ -60,4 +60,5 @@ Multiple apps do not imply multiple production services, independent databases, 
 
 - [Product proposal](proposal.md)
 - [v0.1 acceptance criteria](v0.1.md)
+- [FDE authoring flows and UI states](authoring-flow.md)
 - [Foundation implementation issue](https://github.com/shimpeiws/ontology-prototype/issues/1)
