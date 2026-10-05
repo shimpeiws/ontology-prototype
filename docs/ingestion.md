@@ -1,6 +1,6 @@
 # Snapshot ingestion and observation evidence
 
-`ontology ingest <workspace> <snapshot>` reads a CSV or JSON snapshot, normalizes every record through one boundary, and records each record as an observation with immutable evidence. Canonical entity/event persistence is a later stage; this document covers ingestion only.
+`ontology ingest <workspace> <snapshot>` reads a CSV or JSON snapshot, normalizes every record through one boundary, records each record as an observation with immutable evidence, and persists accepted entities/events into the canonical store (see [canonical.md](canonical.md)).
 
 ```bash
 ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs.csv
@@ -34,7 +34,8 @@ Evidence lands under `<workspace>/.ontology/`:
 | --- | --- |
 | `snapshots/sha256-<digest>.<format>` | Raw source bytes, stored once under their content digest. The source file can change or be deleted afterwards; the stored snapshot is unaffected. |
 | `observations/<ingest_id>.jsonl` | One JSON object per record, written atomically. `ingest_id` is `ing-<utc-timestamp>-<digest8>-<run8>`; the run suffix keeps every run's file distinct and observation files are never overwritten. |
-| `trace.jsonl` | Append-only trace events: `observation.accepted`, `observation.rejected`, `ingest.completed`, `ingest.failed`. |
+| `canon.db` | SQLite canonical store: current entity state, append-only events, observation links, and frozen projection runs ([canonical.md](canonical.md)). |
+| `trace.jsonl` | Append-only trace events: `observation.accepted`, `observation.rejected`, `ingest.completed`, `ingest.failed`, `canonical.event_recorded`, `canonical.applied`, `canonical.failed`, `projection.completed`. |
 
 `.ontology/` is git-ignored: runtime snapshots, databases, and traces are never committed.
 
@@ -55,3 +56,4 @@ Ingestion diagnostics reuse the workspace diagnostic shape: `file` is the snapsh
 - `INGEST.INVALID_TIMESTAMP` — a malformed or timezone-less timestamp.
 - `INGEST.STORE_ERROR` — evidence could not be persisted.
 - `INGEST.EMPTY` — warning: the snapshot parsed but contained no records.
+- `CANON.STORE_ERROR` — canonical entity/event persistence failed ([canonical.md](canonical.md)).

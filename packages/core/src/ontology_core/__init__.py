@@ -5,6 +5,13 @@ transport independent: it never imports app code (CLI, API, Web) and needs
 only PyYAML at runtime.
 """
 
+from .canonical import (
+    ApplyResult,
+    CanonicalEvent,
+    CanonicalStore,
+    SqliteCanonicalStore,
+    event_fact_key,
+)
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
 from .ingest import (
@@ -51,6 +58,9 @@ __version__ = "0.0.1"
 __all__ = [
     "ActionSpec",
     "AgentDefinition",
+    "ApplyResult",
+    "CanonicalEvent",
+    "CanonicalStore",
     "Condition",
     "Diagnostic",
     "Diagnostics",
@@ -80,6 +90,7 @@ __all__ = [
     "ResolvedEvent",
     "SUPPORTED_SCHEMA_VERSION",
     "SourceSpec",
+    "SqliteCanonicalStore",
     "SubjectRef",
     "TargetSpec",
     "TaskSpec",
@@ -87,6 +98,7 @@ __all__ = [
     "WORKSPACE_FILES",
     "Workspace",
     "__version__",
+    "event_fact_key",
     "ingest_snapshot",
     "load_workspace",
 ]

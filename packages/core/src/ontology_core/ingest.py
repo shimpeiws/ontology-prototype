@@ -15,7 +15,8 @@ entity/event bindings, and records each record as an observation carrying:
 A record that produces any error diagnostic is rejected as a whole — no
 partially mapped facts are emitted — but the rejected observation is still
 recorded with its diagnostics, and every accepted/rejected record emits a
-trace event. Canonical entity/event persistence lands with a later issue.
+trace event. Accepted observations then persist canonical entities and
+append-only events through ``canonical.py`` in a single transaction.
 """
 
 from __future__ import annotations
@@ -25,12 +26,14 @@ import dataclasses
 import hashlib
 import io
 import json
+import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .canonical import ApplyResult, CanonicalStore, SqliteCanonicalStore
 from .conditions import evaluate_condition
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
@@ -134,6 +137,7 @@ class IngestResult:
     observed_at: datetime | None = None
     snapshot_path: Path | None = None
     observations_path: Path | None = None
+    canonical: ApplyResult | None = None
 
     @property
     def ok(self) -> bool:
@@ -155,6 +159,7 @@ def ingest_snapshot(
     observed_at: datetime | None = None,
     store: EvidenceStore | None = None,
     trace: TraceSink | None = None,
+    canonical: CanonicalStore | None = None,
 ) -> IngestResult:
     """Ingest one CSV/JSON snapshot into immutable observation evidence.
 
@@ -255,6 +260,10 @@ def ingest_snapshot(
             file=label,
         )
 
+    result.canonical = _apply_canonical(
+        workspace, result, canonical, trace, diag, label
+    )
+
     trace.emit(
         "ingest",
         "ingest.completed",
@@ -274,12 +283,85 @@ def ingest_snapshot(
             "observations": (
                 str(result.observations_path) if result.observations_path else None
             ),
+            "canonical": (
+                {
+                    "entities_upserted": result.canonical.entities_upserted,
+                    "events_appended": result.canonical.events_appended,
+                    "events_reobserved": result.canonical.events_reobserved,
+                }
+                if result.canonical is not None
+                else None
+            ),
         },
     )
     # Assign last so a trace failure on the completion event is still
     # reflected in the returned diagnostics.
     result.diagnostics = diag.items
     return result
+
+
+def _apply_canonical(
+    workspace: Workspace,
+    result: IngestResult,
+    canonical: CanonicalStore | None,
+    trace: TraceSink,
+    diag: Diagnostics,
+    label: str,
+) -> ApplyResult | None:
+    """Persist one run's accepted observations into the canonical store.
+
+    Only accepted observations write facts — a rejected record resolves no
+    entities or events. The apply is one transaction: entity upserts, event
+    inserts, and observation links commit together or roll back together,
+    and a store failure is a diagnostic, not a mid-run crash.
+    """
+    if not result.accepted:
+        return None
+    if canonical is None:
+        canonical = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    try:
+        applied = canonical.apply(result.ingest_id or "", result.accepted)
+    except (sqlite3.Error, OSError) as exc:
+        message = exc.strerror if isinstance(exc, OSError) else str(exc)
+        diag.error(
+            "CANON.STORE_ERROR",
+            f"cannot persist canonical state: {message or exc}",
+            file=label,
+        )
+        trace.emit(
+            "canonical",
+            "canonical.failed",
+            {"ingest_id": result.ingest_id, "error": str(exc)},
+        )
+        return None
+    for event in applied.appended:
+        trace.emit(
+            "canonical",
+            "canonical.event_recorded",
+            {
+                "ingest_id": result.ingest_id,
+                "fact_key": event.fact_key,
+                "event": event.event,
+                "subject": {
+                    "entity": event.subject_entity,
+                    "id": event.subject_id,
+                },
+                "occurred_at": _iso_z(event.occurred_at),
+                "observation_id": event.first_observation_id,
+            },
+        )
+    trace.emit(
+        "canonical",
+        "canonical.applied",
+        {
+            "ingest_id": result.ingest_id,
+            "observations": len(result.accepted),
+            "entities_upserted": applied.entities_upserted,
+            "events_appended": applied.events_appended,
+            "events_reobserved": applied.events_reobserved,
+        },
+    )
+    return applied
 
 
 def _process_record(
