@@ -203,8 +203,12 @@ def _stub_proposal(
                     params[pname] = subject["id"]
                     has_subject_ref = True
                     continue
-                # A ref to another entity: fill it from a candidate
-                # property declared with that ref type, if one exists.
+                if not required:
+                    # An optional non-subject ref can't be verified, so
+                    # including a guessed value only risks rejection.
+                    continue
+                # A required ref to another entity: fill it from a
+                # candidate property declared with that ref type.
                 source = next(
                     (
                         prop
@@ -213,12 +217,23 @@ def _stub_proposal(
                     ),
                     None,
                 )
+                if source is None and not property_types:
+                    # Legacy frozen candidates carry no property_types;
+                    # best-effort a string property (the core still
+                    # validates whatever the stub emits).
+                    source = next(
+                        (
+                            prop
+                            for prop, val in properties.items()
+                            if isinstance(val, str) and val != subject["id"]
+                        ),
+                        None,
+                    )
                 if source is not None:
                     params[pname] = properties[source]
-                elif required:
+                else:
                     satisfiable = False
                     break
-                # optional non-subject ref: omit it
             else:
                 params[pname] = _PLACEHOLDERS.get(ptype, "stub")
         if satisfiable and has_subject_ref:

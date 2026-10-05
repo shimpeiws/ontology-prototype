@@ -211,6 +211,34 @@ def test_stub_follows_permitted_actions(tmp_path, capsys) -> None:
     assert proposal["params"]["target"] == "taro"
 
 
+def test_stub_proposal_edge_cases() -> None:
+    """Legacy candidates without property_types fall back to string
+    properties; optional non-subject refs are omitted, not guessed."""
+    actions = {
+        "SendReminder": {
+            "params": {
+                "target": "ref:Person (required)",
+                "related_entity": "ref:Job (required)",
+                "reason": "string (required)",
+                "cc": "ref:Person (optional)",
+            }
+        }
+    }
+    legacy = {
+        "subject": {"entity": "Job", "id": "101"},
+        "properties": {"amount": 1, "assignee": "taro", "status": "ok"},
+    }
+    proposal = providers._stub_proposal(legacy, actions)
+    assert proposal["params"]["target"] == "taro"
+    assert proposal["params"]["related_entity"] == "101"
+    assert "cc" not in proposal["params"]
+
+    # With property_types present, a missing ref match is definitive —
+    # the action is unsatisfiable rather than guessed.
+    typed = dict(legacy, property_types={"status": "string"})
+    assert providers._stub_proposal(typed, actions) is None
+
+
 def test_openrouter_without_key_is_a_diagnostic(
     tmp_path, capsys, monkeypatch
 ) -> None:
