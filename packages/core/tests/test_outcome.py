@@ -371,6 +371,62 @@ def test_guardrail_evidence_observed_after_as_of_is_excluded(
     assert guardrail["evidence"]["after"]["postdating_as_of"] == 2
 
 
+def test_identical_reingest_preserves_guardrail_evidence(
+    tmp_path: Path,
+) -> None:
+    # Devin review: updated_at advances on every newer observation, even
+    # an identical re-ingest. The guardrail bounds evidence by the last
+    # *property change* instead, so a repeat snapshot of unchanged
+    # invoices after as_of cannot erase a certifiable rate — while a
+    # real correction after as_of still can.
+    workspace = make_evaluated_ws(tmp_path)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    add_invoices(
+        store,
+        [
+            ("inv-b1", "B1", False),
+            ("inv-a1", "A1", False),
+            ("inv-a2", "A2", False),
+        ],
+    )
+    add_invoices(
+        store,
+        [
+            ("inv-b1", "B1", False),
+            ("inv-a1", "A1", False),
+            ("inv-a2", "A2", False),
+        ],
+        observed_at=datetime(2026, 10, 20, tzinfo=timezone.utc),
+        id_prefix="re",
+    )
+
+    result = run_evaluation(
+        workspace, as_of=AS_OF, boundary=BOUNDARY, store=store
+    )
+
+    assert result.ok
+    guardrail = result.report["guardrails"][0]
+    assert guardrail["status"] == "passed"
+    assert guardrail["evidence"]["after"]["rate"] == 0.0
+    assert guardrail["evidence"]["after"]["postdating_as_of"] == 0
+
+    # A genuine correction observed after as_of is excluded — the stored
+    # flag cannot prove what it was at the instant.
+    add_invoices(
+        store,
+        [("inv-a1", "A1", True)],
+        observed_at=datetime(2026, 10, 21, tzinfo=timezone.utc),
+        id_prefix="fix",
+    )
+    result2 = run_evaluation(
+        workspace, as_of=AS_OF, boundary=BOUNDARY, store=store
+    )
+    assert result2.ok
+    after = result2.report["guardrails"][0]["evidence"]["after"]
+    assert after["rate"] == 0.0  # inv-a1 excluded; inv-a2 remains
+    assert after["postdating_as_of"] == 1
+
+
 def test_guardrail_not_applicable_to_non_job_subjects(
     tmp_path: Path,
 ) -> None:

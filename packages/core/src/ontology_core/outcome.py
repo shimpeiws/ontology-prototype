@@ -85,7 +85,7 @@ from .workspace import SUPPORTED_SCHEMA_VERSION
 
 # Version of the cohort/pairing semantics. Bump when the selection rules
 # change so previously frozen reports carry a different contract digest.
-_SEMANTIC_VERSION = 1
+_SEMANTIC_VERSION = 2
 
 # Seconds in one declared contract unit; durations are reported in the
 # contract's unit rather than raw seconds.
@@ -783,12 +783,14 @@ def _invoice_error_rate(
             unmatched += 1
             continue
         bucket = buckets[cohort]
-        updated_at = _parse_iso(entity.get("updated_at"))
-        if updated_at is None or updated_at > as_of:
-            # The stored properties are (or may be) newer than the
-            # evaluation instant — a later correction must not rewrite
-            # what the guardrail saw at as_of. Excluded from the
-            # denominator and counted explicitly.
+        changed_at = _parse_iso(entity.get("properties_changed_at"))
+        if changed_at is None or changed_at > as_of:
+            # The stored properties last *changed* after the evaluation
+            # instant — a later correction must not rewrite what the
+            # guardrail saw at as_of. Re-observing identical properties
+            # does not move this timestamp, so repeat ingestion cannot
+            # erase certifiable evidence. Excluded from the denominator
+            # and counted explicitly.
             bucket["postdating_as_of"] += 1
             continue
         bucket["entity_ids"].append(entity["entity_id"])
@@ -883,6 +885,8 @@ def _contract_digest(workspace: Workspace) -> str:
                     "entity": _INVOICE_ENTITY,
                     "job_ref": _INVOICE_JOB_REF,
                     "error_flag": _INVOICE_ERROR_FLAG,
+                    "subject_entity": _INVOICE_SUBJECT,
+                    "evidence_time_bound": "properties_changed_at <= as_of",
                 }
             },
         },

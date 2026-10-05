@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS entities (
     last_observation_id TEXT NOT NULL,
     last_ingest_id TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    properties_changed_at TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (entity_type, entity_id)
 );
 CREATE TABLE IF NOT EXISTS entity_observations (
@@ -521,6 +522,17 @@ class SqliteCanonicalStore:
                 "ALTER TABLE entities ADD COLUMN last_ingest_id "
                 "TEXT NOT NULL DEFAULT ''"
             )
+        if "properties_changed_at" not in columns:
+            conn.execute(
+                "ALTER TABLE entities ADD COLUMN properties_changed_at "
+                "TEXT NOT NULL DEFAULT ''"
+            )
+            # Existing rows predate change tracking; the last winning
+            # observation time is the best available bound.
+            conn.execute(
+                "UPDATE entities SET properties_changed_at = updated_at "
+                "WHERE properties_changed_at = ''"
+            )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -550,13 +562,22 @@ class SqliteCanonicalStore:
                         INSERT INTO entities (
                             entity_type, entity_id, properties,
                             first_observation_id, last_observation_id,
-                            last_ingest_id, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                            last_ingest_id, updated_at,
+                            properties_changed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (entity_type, entity_id) DO UPDATE SET
                             properties = excluded.properties,
                             last_observation_id = excluded.last_observation_id,
                             last_ingest_id = excluded.last_ingest_id,
-                            updated_at = excluded.updated_at
+                            updated_at = excluded.updated_at,
+                            -- A re-observation of identical properties is
+                            -- not a change: the stored set already
+                            -- described the entity at that instant.
+                            properties_changed_at = CASE
+                                WHEN entities.properties != excluded.properties
+                                THEN excluded.properties_changed_at
+                                ELSE entities.properties_changed_at
+                            END
                         WHERE excluded.updated_at > entities.updated_at
                             OR (
                                 excluded.updated_at = entities.updated_at
@@ -573,6 +594,7 @@ class SqliteCanonicalStore:
                             observation.observation_id,
                             observation.observation_id,
                             ingest_id,
+                            _iso_z(observation.observed_at),
                             _iso_z(observation.observed_at),
                         ),
                     )
@@ -686,7 +708,7 @@ class SqliteCanonicalStore:
         rows = self._connect().execute(
             """
             SELECT entity_id, properties, first_observation_id,
-                   last_observation_id, updated_at
+                   last_observation_id, updated_at, properties_changed_at
             FROM entities WHERE entity_type = ? ORDER BY entity_id
             """,
             (entity_type,),
@@ -698,6 +720,7 @@ class SqliteCanonicalStore:
                 "first_observation_id": row[2],
                 "last_observation_id": row[3],
                 "updated_at": row[4],
+                "properties_changed_at": row[5],
             }
             for row in rows
         ]

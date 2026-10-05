@@ -6,7 +6,7 @@
 
 | Table | Content |
 | --- | --- |
-| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids and the last observation time. An upsert applies only when the new observation is more recent than the stored one — `updated_at` moves forward in observation time, so out-of-order evidence can never regress current state. Equal observation times resolve by ingest id (the larger id wins), which keeps replays order-independent; two rows for one entity in a single run resolve to the first row. |
+| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids, the last observation time, and `properties_changed_at` — the observation time of the last upsert that actually changed the stored property set. An upsert applies only when the new observation is more recent than the stored one — `updated_at` moves forward in observation time, so out-of-order evidence can never regress current state — while `properties_changed_at` stays put when a re-observation carries identical properties. Equal observation times resolve by ingest id (the larger id wins), which keeps replays order-independent; two rows for one entity in a single run resolve to the first row. |
 | `events` | Append-only business facts keyed by a stable `fact_key`. |
 | `entity_observations` | Every accepted observation that resolved an entity, linked to that entity. |
 | `event_observations` | Every accepted observation that asserted an event fact, including repeats of an already-known fact. |

@@ -35,7 +35,7 @@ Guardrails evaluate per cohort from explicit counts and denominators. The regist
 
 `overall` is `success` only when the target is attained and every guardrail passed; a missed target or failed guardrail is `not_met`; anything else is `unverified`. The exit code reports operational success only — `ontology evaluate` exits nonzero when the evaluation could not be computed or frozen, not on the business verdict; a `not_met` report still exits 0 and is inspected via stdout or `--json`.
 
-Guardrail evidence is bounded by the invoice's last state-changing observation time: invoices observed after `as_of` are excluded from the rate and counted in `postdating_as_of`. Entity property history is not versioned, so an invoice corrected after `as_of` is reported as an evidence gap rather than evaluated on state that did not yet exist at the instant.
+Guardrail evidence is bounded by `properties_changed_at` — the last observation that actually changed the invoice's stored properties. An invoice whose properties last changed after `as_of` is excluded from the rate and counted in `postdating_as_of`, since current state cannot prove what its flag was at the instant; re-observing identical properties does not move the timestamp, so repeat ingestion cannot erase certifiable evidence.
 
 ## Frozen runs
 
