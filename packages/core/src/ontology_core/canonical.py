@@ -16,6 +16,11 @@ persists them under ``<workspace>/.ontology/canon.db``:
   including repeat observations of an already-known fact.
 - ``projection_runs`` — frozen projection results (see projections.py), also
   append-only.
+- ``diagnosis_runs`` — recorded model diagnosis runs (see diagnosis.py),
+  append-only. A record carries the provider/model identity, prompt
+  version, the candidate input digest, the raw model output, and the
+  validated/rejected proposal split. It never carries an approval or
+  execution state — human decisions and write-back are separate stages.
 
 One ingest run applies in a single transaction: entity upserts, event
 inserts, and observation links commit together or not at all. v0.1 assumes a
@@ -79,6 +84,23 @@ CREATE TABLE IF NOT EXISTS projection_runs (
     inputs TEXT NOT NULL,
     candidates TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS diagnosis_runs (
+    run_id TEXT PRIMARY KEY,
+    projection_run_id TEXT,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL,
+    input_digest TEXT NOT NULL,
+    provider_called INTEGER NOT NULL,
+    output TEXT,
+    deliverables TEXT NOT NULL,
+    proposals TEXT NOT NULL,
+    rejected TEXT NOT NULL,
+    diagnostics TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TRIGGER IF NOT EXISTS events_no_update
 BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'canonical events are append-only'); END;
@@ -91,6 +113,12 @@ BEGIN SELECT RAISE(ABORT, 'projection runs are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS projection_runs_no_delete
 BEFORE DELETE ON projection_runs
 BEGIN SELECT RAISE(ABORT, 'projection runs are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS diagnosis_runs_no_update
+BEFORE UPDATE ON diagnosis_runs
+BEGIN SELECT RAISE(ABORT, 'diagnosis runs are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS diagnosis_runs_no_delete
+BEFORE DELETE ON diagnosis_runs
+BEGIN SELECT RAISE(ABORT, 'diagnosis runs are append-only'); END;
 """
 
 
@@ -187,6 +215,14 @@ class CanonicalStore(Protocol):
 
     def projection_run(self, run_id: str) -> dict[str, Any] | None:
         """A frozen run record with parsed inputs/candidates, or None."""
+        ...
+
+    def record_diagnosis_run(self, record: dict[str, Any]) -> None:
+        """Append one diagnosis run record; runs are append-only."""
+        ...
+
+    def diagnosis_run(self, run_id: str) -> dict[str, Any] | None:
+        """A recorded diagnosis run with parsed JSON columns, or None."""
         ...
 
 
@@ -469,6 +505,69 @@ class SqliteCanonicalStore:
             "definition_digest": row[4],
             "inputs": json.loads(row[5]),
             "candidates": json.loads(row[6]),
+        }
+
+    def record_diagnosis_run(self, record: dict[str, Any]) -> None:
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO diagnosis_runs (
+                    run_id, projection_run_id, provider, model,
+                    prompt_version, prompt, status, input_digest,
+                    provider_called, output,
+                    deliverables, proposals, rejected, diagnostics, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record["run_id"],
+                    record.get("projection_run_id"),
+                    record["provider"],
+                    record["model"],
+                    record["prompt_version"],
+                    record["prompt"],
+                    record["status"],
+                    record["input_digest"],
+                    int(bool(record.get("provider_called", True))),
+                    record.get("output"),
+                    json.dumps(record.get("deliverables", {}), sort_keys=True),
+                    json.dumps(record.get("proposals", []), sort_keys=True),
+                    json.dumps(record.get("rejected", []), sort_keys=True),
+                    json.dumps(record.get("diagnostics", [])),
+                    _iso_z(record["created_at"]),
+                ),
+            )
+
+    def diagnosis_run(self, run_id: str) -> dict[str, Any] | None:
+        if not self._has_db():
+            return None
+        row = self._connect().execute(
+            """
+            SELECT projection_run_id, provider, model, prompt_version, prompt,
+                   status, input_digest, provider_called, output,
+                   deliverables, proposals, rejected, diagnostics, created_at
+            FROM diagnosis_runs WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": run_id,
+            "projection_run_id": row[0],
+            "provider": row[1],
+            "model": row[2],
+            "prompt_version": row[3],
+            "prompt": row[4],
+            "status": row[5],
+            "input_digest": row[6],
+            "provider_called": bool(row[7]),
+            "output": row[8],
+            "deliverables": json.loads(row[9]),
+            "proposals": json.loads(row[10]),
+            "rejected": json.loads(row[11]),
+            "diagnostics": json.loads(row[12]),
+            "created_at": row[13],
         }
 
 

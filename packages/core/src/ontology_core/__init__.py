@@ -13,6 +13,16 @@ from .canonical import (
     event_fact_key,
 )
 from .diagnostics import Diagnostic, Diagnostics
+from .diagnosis import (
+    PROMPT_VERSION,
+    ActionProposal,
+    DiagnosisProvider,
+    DiagnosisResult,
+    ProviderError,
+    ProviderRequest,
+    get_diagnosis_run,
+    run_diagnosis,
+)
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
 from .ingest import (
     IngestResult,
@@ -62,6 +72,7 @@ from .workspace import (
 __version__ = "0.0.1"
 
 __all__ = [
+    "ActionProposal",
     "ActionSpec",
     "AgentDefinition",
     "ApplyResult",
@@ -70,6 +81,8 @@ __all__ = [
     "Condition",
     "Diagnostic",
     "Diagnostics",
+    "DiagnosisProvider",
+    "DiagnosisResult",
     "DomainDefinition",
     "DomainPolicies",
     "EntityBinding",
@@ -89,10 +102,13 @@ __all__ = [
     "MappingDefinition",
     "NullTraceSink",
     "Observation",
+    "PROMPT_VERSION",
     "ProjectionCandidate",
     "ProjectionResult",
     "ProjectionSpec",
     "PropertySpec",
+    "ProviderError",
+    "ProviderRequest",
     "RUNTIME_DIR",
     "ResolvedEntity",
     "ResolvedEvent",
@@ -107,8 +123,10 @@ __all__ = [
     "Workspace",
     "__version__",
     "event_fact_key",
+    "get_diagnosis_run",
     "get_projection_run",
     "ingest_snapshot",
     "load_workspace",
+    "run_diagnosis",
     "run_projection",
 ]
