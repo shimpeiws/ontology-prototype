@@ -3,8 +3,8 @@
 Validated action proposals are persisted when a diagnosis run is recorded.
 A human reviews the exact proposal through the CLI and records an explicit
 approve/reject decision bound to the payload. Approval never executes
-anything — write-back is a separate later stage gated by the approval
-check.
+anything — write-back is a separate stage gated by the approval check,
+implemented by `ontology execute` (see [execution.md](execution.md)).
 
 ## Lifecycle
 

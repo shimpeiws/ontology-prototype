@@ -585,6 +585,9 @@ def proposal_view(
                 "status": latest["decision"] if latest else "proposed",
                 "latest_decision": latest,
                 "decisions": decisions,
+                "executions": store.executions_for_proposal(
+                    row["proposal_id"]
+                ),
             }
         )
     return views

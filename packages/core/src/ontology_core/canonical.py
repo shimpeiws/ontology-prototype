@@ -27,6 +27,13 @@ persists them under ``<workspace>/.ontology/canon.db``:
 - ``decisions`` — append-only human approvals/rejections. A proposal's
   current lifecycle state is derived from its latest decision; history
   is never rewritten.
+- ``executions`` — append-only write-back attempts (see execution.py).
+  Each adapter-reaching attempt is one row carrying the execution id,
+  idempotency key, attempt number, outcome status
+  (``succeeded``/``failed``/``uncertain``), and the adapter receipt or
+  sanitized error. An execution's current state derives from its latest
+  recorded attempt (insertion order, not wall clock — same rule as
+  decisions).
 
 One ingest run applies in a single transaction: entity upserts, event
 inserts, and observation links commit together or not at all. v0.1 assumes a
@@ -154,12 +161,34 @@ BEGIN SELECT RAISE(ABORT, 'proposals are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS proposals_no_delete
 BEFORE DELETE ON proposals
 BEGIN SELECT RAISE(ABORT, 'proposals are append-only'); END;
+CREATE TABLE IF NOT EXISTS executions (
+    execution_id TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    proposal_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    adapter TEXT NOT NULL,
+    attempt INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    receipt TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS executions_idempotency
+ON executions (idempotency_key);
+CREATE INDEX IF NOT EXISTS executions_proposal
+ON executions (proposal_id);
 CREATE TRIGGER IF NOT EXISTS decisions_no_update
 BEFORE UPDATE ON decisions
 BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS decisions_no_delete
 BEFORE DELETE ON decisions
 BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS executions_no_update
+BEFORE UPDATE ON executions
+BEGIN SELECT RAISE(ABORT, 'executions are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS executions_no_delete
+BEFORE DELETE ON executions
+BEGIN SELECT RAISE(ABORT, 'executions are append-only'); END;
 """
 
 
@@ -304,6 +333,23 @@ class CanonicalStore(Protocol):
         """All decisions on one proposal, in insertion order — the
         current state derives from the latest *recorded* decision, never
         wall-clock ``decided_at``."""
+        ...
+
+    def record_execution(self, record: dict[str, Any]) -> None:
+        """Append one write-back attempt; executions are append-only."""
+        ...
+
+    def executions_for_key(
+        self, idempotency_key: str
+    ) -> list[dict[str, Any]]:
+        """All attempts under one idempotency key, in insertion order —
+        the latest row is the execution's current state."""
+        ...
+
+    def executions_for_proposal(
+        self, proposal_id: str
+    ) -> list[dict[str, Any]]:
+        """All attempts recorded for one proposal, in insertion order."""
         ...
 
 
@@ -732,6 +778,92 @@ class SqliteCanonicalStore:
                 "reason": row[3],
                 "payload_digest": row[4],
                 "decided_at": row[5],
+            }
+            for row in rows
+        ]
+
+    def record_execution(self, record: dict[str, Any]) -> None:
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO executions (
+                    execution_id, idempotency_key, proposal_id, action,
+                    adapter, attempt, status, receipt, error, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record["execution_id"],
+                    record["idempotency_key"],
+                    record["proposal_id"],
+                    record["action"],
+                    record["adapter"],
+                    record["attempt"],
+                    record["status"],
+                    json.dumps(record["receipt"], sort_keys=True)
+                    if record.get("receipt") is not None
+                    else None,
+                    record.get("error"),
+                    _iso_z(record["created_at"]),
+                ),
+            )
+
+    def executions_for_key(
+        self, idempotency_key: str
+    ) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT execution_id, proposal_id, action, adapter, attempt,
+                   status, receipt, error, created_at
+            FROM executions WHERE idempotency_key = ?
+            ORDER BY rowid
+            """,
+            (idempotency_key,),
+        ).fetchall()
+        return [
+            {
+                "execution_id": row[0],
+                "idempotency_key": idempotency_key,
+                "proposal_id": row[1],
+                "action": row[2],
+                "adapter": row[3],
+                "attempt": row[4],
+                "status": row[5],
+                "receipt": json.loads(row[6]) if row[6] is not None else None,
+                "error": row[7],
+                "created_at": row[8],
+            }
+            for row in rows
+        ]
+
+    def executions_for_proposal(
+        self, proposal_id: str
+    ) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT execution_id, idempotency_key, action, adapter,
+                   attempt, status, receipt, error, created_at
+            FROM executions WHERE proposal_id = ?
+            ORDER BY rowid
+            """,
+            (proposal_id,),
+        ).fetchall()
+        return [
+            {
+                "execution_id": row[0],
+                "idempotency_key": row[1],
+                "proposal_id": proposal_id,
+                "action": row[2],
+                "adapter": row[3],
+                "attempt": row[4],
+                "status": row[5],
+                "receipt": json.loads(row[6]) if row[6] is not None else None,
+                "error": row[7],
+                "created_at": row[8],
             }
             for row in rows
         ]
