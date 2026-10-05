@@ -1100,27 +1100,6 @@ def _cmd_evaluate(
     run_id: str | None,
     as_json: bool,
 ) -> int:
-    loaded = load_workspace(workspace)
-    if not loaded.ok:
-        if as_json:
-            print(
-                json.dumps(
-                    {
-                        "workspace": str(workspace),
-                        "valid": False,
-                        "ok": False,
-                        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
-                    },
-                    indent=2,
-                )
-            )
-        else:
-            for diagnostic in loaded.diagnostics:
-                print(diagnostic.format())
-            print(f"workspace invalid: {workspace} ({len(loaded.errors)} errors)")
-        return EXIT_INVALID
-    assert loaded.workspace is not None
-
     if run_id is not None and (as_of is not None or boundary is not None):
         _emit_error(
             workspace,
@@ -1132,8 +1111,11 @@ def _cmd_evaluate(
         return EXIT_INVALID
 
     if run_id is not None:
+        # Inspection is read-only and needs only the canonical store's
+        # location — not the current definitions. A frozen report stays
+        # inspectable even when a later edit makes the workspace invalid.
         try:
-            record = get_evaluation_run(loaded.workspace, run_id)
+            record = get_evaluation_run(workspace, run_id)
         except Exception as exc:
             _emit_error(
                 workspace,
@@ -1162,6 +1144,27 @@ def _cmd_evaluate(
         else:
             _print_evaluation_report(record["report"], run_id=record["run_id"])
         return EXIT_OK
+
+    loaded = load_workspace(workspace)
+    if not loaded.ok:
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "valid": False,
+                        "ok": False,
+                        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in loaded.diagnostics:
+                print(diagnostic.format())
+            print(f"workspace invalid: {workspace} ({len(loaded.errors)} errors)")
+        return EXIT_INVALID
+    assert loaded.workspace is not None
 
     missing = []
     if boundary is None:
@@ -1236,7 +1239,8 @@ def _print_evaluation_report(report: dict, *, run_id: str | None) -> None:
         f"{label}{report['evaluation']} — "
         f"as-of {report['as_of']}, boundary {report['cohort_boundary']}"
     )
-    unit = report["unit"]
+    # `count` aggregates are interval counts, not durations.
+    unit = "intervals" if report["aggregation"] == "count" else report["unit"]
     for name in ("baseline", "after"):
         cohort = report["cohorts"][name]
         counts = cohort["counts"]

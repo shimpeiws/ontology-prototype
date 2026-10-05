@@ -59,17 +59,27 @@ def make_evaluated_ws(tmp_path: Path, csv_text: str = CSV_SAMPLE):
     return workspace
 
 
-def add_invoices(store, invoices: list[tuple[str, str, bool]]) -> None:
+# Invoices are observed before AS_OF so their stored state certifies
+# the instant — the guardrail excludes evidence observed after as_of.
+INVOICE_OBSERVED = datetime(2026, 10, 14, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def add_invoices(
+    store,
+    invoices: list[tuple[str, str, bool]],
+    observed_at: datetime = INVOICE_OBSERVED,
+    id_prefix: str = "",
+) -> None:
     """Record Invoice entities directly, as ingest would after a snapshot
     carrying invoice error evidence."""
     observations = [
         Observation(
-            observation_id=f"obs-inv-{index}",
-            ingest_id="ing-inv",
+            observation_id=f"obs-inv-{id_prefix}{index}",
+            ingest_id=f"ing-inv-{id_prefix}",
             source="invoices",
             row=index,
             status=ACCEPTED,
-            observed_at=FIXED_NOW,
+            observed_at=observed_at,
             content_digest="sha256:test",
             mapping_digest="sha256:test",
             record={},
@@ -85,7 +95,7 @@ def add_invoices(store, invoices: list[tuple[str, str, bool]]) -> None:
         )
         for index, (invoice_id, job, error) in enumerate(invoices)
     ]
-    store.apply("ing-inv", observations)
+    store.apply(f"ing-inv-{id_prefix}", observations)
 
 
 def test_reference_outcome(tmp_path: Path) -> None:
@@ -272,6 +282,7 @@ def test_guardrail_unavailable_passed_and_failed(tmp_path: Path) -> None:
         "errors": 0,
         "rate": 0.0,
         "invoices_missing_error": 0,
+        "postdating_as_of": 0,
         "entity_ids": ["inv-a1", "inv-a2", "inv-a3"],
     }
     assert result2.report["overall"]["status"] == "success"
@@ -320,6 +331,81 @@ def test_guardrail_unsupported_metric(tmp_path: Path) -> None:
     assert "EVALUATION.UNSUPPORTED_GUARDRAIL" in [
         d.code for d in result.diagnostics
     ]
+
+
+def test_guardrail_evidence_observed_after_as_of_is_excluded(
+    tmp_path: Path,
+) -> None:
+    # Devin review: stored entity state is latest-observed. An invoice
+    # whose last state-changing observation postdates as_of cannot
+    # certify its error flag at the instant — a later correction must
+    # not turn a past guardrail into a pass. Such invoices are excluded
+    # from the denominator and reported as postdating gaps.
+    workspace = make_evaluated_ws(tmp_path)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    add_invoices(
+        store,
+        [("inv-a1", "A1", False), ("inv-a2", "A2", False)],
+        observed_at=datetime(2026, 10, 20, tzinfo=timezone.utc),
+    )
+    add_invoices(
+        store,
+        [
+            ("inv-b1", "B1", False),
+            ("inv-b2", "B2", True),
+            ("inv-b3", "B3", False),
+        ],
+        observed_at=INVOICE_OBSERVED,
+        id_prefix="b",
+    )
+
+    result = run_evaluation(
+        workspace, as_of=AS_OF, boundary=BOUNDARY, store=store
+    )
+
+    assert result.ok
+    guardrail = result.report["guardrails"][0]
+    assert guardrail["status"] == "unavailable"
+    assert guardrail["evidence"]["baseline"]["rate"] == 1 / 3
+    assert guardrail["evidence"]["after"]["rate"] is None
+    assert guardrail["evidence"]["after"]["postdating_as_of"] == 2
+
+
+def test_guardrail_not_applicable_to_non_job_subjects(
+    tmp_path: Path,
+) -> None:
+    # Devin review: Invoice.job is a typed Job reference. For a non-Job
+    # interval subject, a bare-id collision — Person "B1" matching an
+    # invoice pointing at Job "B1" — would contaminate the rate. The
+    # metric reports itself not applicable and the guardrail is
+    # unavailable rather than a fabricated pass.
+    docs = support.base_docs()
+    for name in ("JobCompleted", "InvoiceIssued"):
+        docs["domain"]["domain"]["events"][name]["subject"] = "Person"
+    for event in docs["mapping"]["mapping"]["events"]:
+        event["subject"]["entity"] = "Person"
+    ws_dir = support.make_workspace(tmp_path / "ws", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok, [d.format() for d in loaded.diagnostics]
+    assert loaded.workspace is not None
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+    assert ingest_snapshot(
+        loaded.workspace, snapshot, observed_at=FIXED_NOW
+    ).ok
+    store = SqliteCanonicalStore(Path(loaded.workspace.path) / RUNTIME_DIR)
+    add_invoices(
+        store, [("inv-b1", "B1", False), ("inv-a1", "A1", True)]
+    )
+
+    result = run_evaluation(
+        loaded.workspace, as_of=AS_OF, boundary=BOUNDARY, store=store
+    )
+
+    assert result.ok
+    guardrail = result.report["guardrails"][0]
+    assert guardrail["status"] == "unavailable"
+    assert guardrail["evidence"]["applicable"] is False
+    assert "Person" in guardrail["reason"]
 
 
 def test_count_aggregation_never_fabricates_an_aggregate(

@@ -6,7 +6,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from clisupport import copy_example
+from clisupport import copy_example, rewrite
 
 from ontology_cli.main import EXIT_INVALID, EXIT_OK, main
 from ontology_core import SqliteCanonicalStore
@@ -135,6 +135,54 @@ def test_evaluate_run_is_read_only_on_fresh_workspace(
     )
     capsys.readouterr()
     assert not (workspace / ".ontology" / "canon.db").exists()
+
+
+def test_evaluate_run_inspection_survives_invalid_workspace(
+    tmp_path: Path, capsys
+) -> None:
+    # Devin review: a frozen report stays inspectable even when a later
+    # edit breaks the workspace — inspection needs only the store path,
+    # not the current definitions.
+    workspace = ingested_workspace(tmp_path)
+    capsys.readouterr()
+    assert main(evaluate_args(workspace) + ["--json"]) == EXIT_OK
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    rewrite(
+        workspace,
+        "evaluation",
+        lambda doc: doc["evaluation"].update(
+            target={"comparator": "bogus", "value": 4}
+        ),
+    )
+
+    assert main(["evaluate", str(workspace), "--run", run_id]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert run_id in out
+    assert "baseline: median 9 days" in out
+
+
+def test_evaluate_count_aggregation_prints_intervals(
+    tmp_path: Path, capsys
+) -> None:
+    # Devin review: counts are interval counts, not durations — the
+    # report must not print "3 days" for a count aggregate.
+    workspace = copy_example(tmp_path)
+    rewrite(
+        workspace,
+        "evaluation",
+        lambda doc: doc["evaluation"].update(aggregation="count"),
+    )
+    snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
+    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    capsys.readouterr()
+
+    assert main(evaluate_args(workspace)) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "baseline: count 3 intervals" in out
+    assert "after: count 3 intervals" in out
+    assert "change: 0 intervals" in out
+    assert "days" not in out
 
 
 def test_evaluate_run_conflicts_with_compute_args(

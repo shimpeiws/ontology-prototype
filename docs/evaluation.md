@@ -31,11 +31,11 @@ With `aggregation: count` the aggregate is the number of paired intervals rather
 
 The target compares the after aggregate with the contract comparator — `lt` is strict, so a median exactly on the target is a **miss**.
 
-Guardrails evaluate per cohort from explicit counts and denominators. The registered `invoice_error_rate` semantics reads `Invoice` entities linked to a cohort subject through the `job` ref, counting those whose boolean `error` flag is `true` over those carrying a boolean flag; invoices without the flag and invoices linked to no cohort subject are reported as evidence gaps, never folded into the rate. `not_increase` requires rates for both cohorts; a missing denominator makes the guardrail **unavailable** — never `passed`. A contract naming a metric with no registered semantics also reports `unavailable`.
+Guardrails evaluate per cohort from explicit counts and denominators. The registered `invoice_error_rate` semantics reads `Invoice` entities linked to a cohort subject through the `job` ref (a typed Job reference — the semantics is not applicable to intervals on other subject types and reports unavailable), counting those whose boolean `error` flag is `true` over those carrying a boolean flag; invoices without the flag, invoices linked to no cohort subject, and invoices whose last state-changing observation postdates `as_of` are reported as evidence gaps, never folded into the rate. `not_increase` requires rates for both cohorts; a missing denominator makes the guardrail **unavailable** — never `passed`. A contract naming a metric with no registered semantics also reports `unavailable`.
 
 `overall` is `success` only when the target is attained and every guardrail passed; a missed target or failed guardrail is `not_met`; anything else is `unverified`. The exit code reports operational success only — `ontology evaluate` exits nonzero when the evaluation could not be computed or frozen, not on the business verdict; a `not_met` report still exits 0 and is inspected via stdout or `--json`.
 
-Guardrail evidence reads the latest *observed* entity state, not the state as of `as_of` — the same caveat as projection candidates. Invoice properties may postdate the evaluation instant; the paired intervals themselves are strictly `occurred_at <= as_of`.
+Guardrail evidence is bounded by the invoice's last state-changing observation time: invoices observed after `as_of` are excluded from the rate and counted in `postdating_as_of`. Entity property history is not versioned, so an invoice corrected after `as_of` is reported as an evidence gap rather than evaluated on state that did not yet exist at the instant.
 
 ## Frozen runs
 
@@ -46,7 +46,7 @@ Every successful run persists into `evaluation_runs` (append-only, like `events`
 - the per-subject inputs examined — visible and future fact keys, disposition, and exclusion reason;
 - the full report: cohort pairings with fact keys, counts, aggregates, change, target and guardrail verdicts.
 
-A historical run is therefore inspectable with `evaluate --run <id>` and unchanged by later ingestion or configuration edits; a contract or definition edit changes the digest even when the report stays the same.
+A historical run is therefore inspectable with `evaluate --run <id>` and unchanged by later ingestion or configuration edits; a contract or definition edit changes the digest even when the report stays the same. Inspection does not load or validate the workspace definitions, so a frozen report remains readable after a configuration edit makes the workspace invalid.
 
 Only successful runs are frozen: a run that fails (naive times, `BOUNDARY_AFTER_AS_OF`, a store error) is not recorded, so a stored run always means "evaluated to this report" and never "evaluation failed". `evaluate --run` is read-only — it does not create `.ontology/` or `canon.db` on a workspace that has not ingested — and cannot be combined with `--as-of` or `--boundary`.
 
@@ -63,7 +63,7 @@ The report records an observed difference between time-based cohorts. The bounda
 - `EVALUATION.MULTIPLE_ENDS` — warning: several ends could close the interval; the earliest pairs it.
 - `EVALUATION.END_WITHOUT_START` — warning: an end event has no start event at or before `as_of`.
 - `EVALUATION.FUTURE_EVENT` — warning: a start event occurred after `as_of`.
-- `EVALUATION.GUARDRAIL_UNAVAILABLE` — warning: a guardrail lacks the evidence to decide.
+- `EVALUATION.GUARDRAIL_UNAVAILABLE` — warning: a guardrail lacks the evidence to decide, or its semantics do not apply to the interval's subject type.
 - `EVALUATION.UNSUPPORTED_GUARDRAIL` — warning: a guardrail metric has no registered semantics.
 - `EVALUATION.STORE_ERROR` — canonical state could not be read, or the frozen run could not be persisted. A store write failure still prints the computed report, but without a `run <id>` label and with a `report not frozen` note — an unrecorded run id is never presented as inspectable.
 - `EVALUATION.UNKNOWN_EVENT` — the contract's interval event is not declared in the domain (unreachable through `load_workspace`, which validates it; only a directly constructed `Workspace` can produce it).

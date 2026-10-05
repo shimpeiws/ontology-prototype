@@ -93,12 +93,14 @@ _UNIT_SECONDS = {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400}
 
 # Evidence convention of the registered ``invoice_error_rate`` guardrail
 # semantics: Invoice entities linked to a cohort subject through the
-# ``job`` ref, with the boolean ``error`` flag as the error signal. These
-# names are the v0.1 convention — a workspace whose domain uses different
-# names simply has no evidence and reports the guardrail unavailable.
+# ``job`` ref — a typed Job reference — with the boolean ``error`` flag
+# as the error signal. These names are the v0.1 convention — a workspace
+# whose domain uses different names, or whose interval subject is not
+# Job, simply has no evidence and reports the guardrail unavailable.
 _INVOICE_ENTITY = "Invoice"
 _INVOICE_JOB_REF = "job"
 _INVOICE_ERROR_FLAG = "error"
+_INVOICE_SUBJECT = "Job"
 
 _COMPARATORS: dict[str, Callable[[float, float], bool]] = {
     "lt": lambda a, b: a < b,
@@ -250,11 +252,21 @@ def run_evaluation(
 
 
 def get_evaluation_run(
-    workspace: Workspace, run_id: str, *, store: CanonicalStore | None = None
+    workspace: Workspace | str | Path,
+    run_id: str,
+    *,
+    store: CanonicalStore | None = None,
 ) -> dict[str, Any] | None:
-    """Read back a frozen evaluation report by run id."""
+    """Read back a frozen evaluation report by run id.
+
+    Accepts a workspace path as well as a ``Workspace``: inspecting a
+    frozen report needs only the canonical store's location, not the
+    current definitions — a report stays inspectable even when a later
+    config edit makes the workspace invalid.
+    """
     if store is None:
-        store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+        root = workspace.path if isinstance(workspace, Workspace) else workspace
+        store = SqliteCanonicalStore(Path(root) / RUNTIME_DIR)
     return store.evaluation_run(run_id)
 
 
@@ -538,7 +550,9 @@ def _build_report(
         }
 
     guardrail_reports = [
-        _evaluate_guardrail(workspace, store, spec, cohort_subjects, diag)
+        _evaluate_guardrail(
+            workspace, store, spec, cohort_subjects, subject_entity, as_of, diag
+        )
         for spec in evaluation.guardrails
     ]
 
@@ -628,6 +642,8 @@ def _evaluate_guardrail(
     store: CanonicalStore,
     spec: GuardrailSpec,
     cohort_subjects: dict[str, set[str]],
+    subject_entity: str,
+    as_of: datetime,
     diag: Diagnostics,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
@@ -648,12 +664,15 @@ def _evaluate_guardrail(
         )
         return report
 
-    evidence = metric(workspace, store, cohort_subjects)
+    evidence = metric(workspace, store, cohort_subjects, subject_entity, as_of)
     report["evidence"] = evidence
     baseline_rate = evidence["baseline"]["rate"]
     after_rate = evidence["after"]["rate"]
 
-    if spec.comparator == "not_increase":
+    if evidence.get("applicable") is False:
+        report["status"] = "unavailable"
+        report["reason"] = evidence["reason"]
+    elif spec.comparator == "not_increase":
         if baseline_rate is None or after_rate is None:
             missing = [
                 name
@@ -698,6 +717,8 @@ def _invoice_error_rate(
     workspace: Workspace,
     store: CanonicalStore,
     cohort_subjects: dict[str, set[str]],
+    subject_entity: str,
+    as_of: datetime,
 ) -> dict[str, Any]:
     """Explicit error counts and denominators for the registered
     ``invoice_error_rate`` guardrail.
@@ -705,12 +726,45 @@ def _invoice_error_rate(
     The denominator of a cohort is the number of Invoice entities linked
     (through the ``job`` ref) to a subject of that cohort and carrying a
     boolean ``error`` value; the numerator is those flagged ``true``.
-    Invoices without a boolean flag, and invoices whose job is in no
-    cohort, are reported as evidence gaps — never silently folded into
-    the rate.
+    Invoices without a boolean flag, invoices whose job is in no cohort,
+    and invoices whose last state-changing observation postdates
+    ``as_of`` — stored entity state cannot prove what its properties
+    were at the instant — are reported as evidence gaps, never silently
+    folded into the rate.
+
+    The ``job`` ref is a typed Job reference, so the semantics applies
+    only to Job-subject intervals; for any other subject entity the
+    convention is not applicable and the guardrail reports unavailable.
     """
+    convention = {
+        "entity": _INVOICE_ENTITY,
+        "job_ref": _INVOICE_JOB_REF,
+        "error_flag": _INVOICE_ERROR_FLAG,
+        "subject_entity": _INVOICE_SUBJECT,
+    }
+    if subject_entity != _INVOICE_SUBJECT:
+        # Without the typed gate, an unrelated Invoice's job ref could
+        # collide with a same-id non-Job cohort subject.
+        return {
+            "convention": convention,
+            "applicable": False,
+            "reason": (
+                f"{_INVOICE_ENTITY}.{_INVOICE_JOB_REF} is a "
+                f"{_INVOICE_SUBJECT} reference; the interval subject is "
+                f"{subject_entity}, so this guardrail does not apply"
+            ),
+            "baseline": _empty_evidence_bucket(),
+            "after": _empty_evidence_bucket(),
+        }
+
     buckets: dict[str, dict[str, Any]] = {
-        name: {"errors": 0, "invoices": 0, "missing_error": 0, "entity_ids": []}
+        name: {
+            "errors": 0,
+            "invoices": 0,
+            "missing_error": 0,
+            "postdating_as_of": 0,
+            "entity_ids": [],
+        }
         for name in ("baseline", "after")
     }
     unmatched = 0
@@ -729,6 +783,14 @@ def _invoice_error_rate(
             unmatched += 1
             continue
         bucket = buckets[cohort]
+        updated_at = _parse_iso(entity.get("updated_at"))
+        if updated_at is None or updated_at > as_of:
+            # The stored properties are (or may be) newer than the
+            # evaluation instant — a later correction must not rewrite
+            # what the guardrail saw at as_of. Excluded from the
+            # denominator and counted explicitly.
+            bucket["postdating_as_of"] += 1
+            continue
         bucket["entity_ids"].append(entity["entity_id"])
         error = properties.get(_INVOICE_ERROR_FLAG)
         if isinstance(error, bool):
@@ -739,35 +801,52 @@ def _invoice_error_rate(
             bucket["missing_error"] += 1
 
     evidence: dict[str, Any] = {
-        "convention": {
-            "entity": _INVOICE_ENTITY,
-            "job_ref": _INVOICE_JOB_REF,
-            "error_flag": _INVOICE_ERROR_FLAG,
-        },
+        "convention": convention,
         "unmatched_invoices": unmatched,
     }
     for name in ("baseline", "after"):
-        bucket = buckets[name]
-        evidence[name] = {
-            "invoices": bucket["invoices"],
-            "errors": bucket["errors"],
-            "rate": (
-                bucket["errors"] / bucket["invoices"]
-                if bucket["invoices"]
-                else None
-            ),
-            "invoices_missing_error": bucket["missing_error"],
-            "entity_ids": sorted(bucket["entity_ids"]),
-        }
+        evidence[name] = _evidence_bucket(buckets[name])
     return evidence
+
+
+def _empty_evidence_bucket() -> dict[str, Any]:
+    return _evidence_bucket(
+        {
+            "errors": 0,
+            "invoices": 0,
+            "missing_error": 0,
+            "postdating_as_of": 0,
+            "entity_ids": [],
+        }
+    )
+
+
+def _evidence_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "invoices": bucket["invoices"],
+        "errors": bucket["errors"],
+        "rate": (
+            bucket["errors"] / bucket["invoices"]
+            if bucket["invoices"]
+            else None
+        ),
+        "invoices_missing_error": bucket["missing_error"],
+        "postdating_as_of": bucket["postdating_as_of"],
+        "entity_ids": sorted(bucket["entity_ids"]),
+    }
 
 
 # Registered guardrail metric semantics, keyed by the contract's metric
 # name — the same pattern as projection _SEMANTICS. A contract that names
-# an unregistered metric evaluates its guardrail as unavailable.
+# an unregistered metric evaluates its guardrail as unavailable. Each
+# metric receives the interval's subject entity and the run's as_of so
+# its evidence can be typed and time-bounded.
 _GUARDRAIL_METRICS: dict[
     str,
-    Callable[[Workspace, CanonicalStore, dict[str, set[str]]], dict[str, Any]],
+    Callable[
+        [Workspace, CanonicalStore, dict[str, set[str]], str, datetime],
+        dict[str, Any],
+    ],
 ] = {
     "invoice_error_rate": _invoice_error_rate,
 }
@@ -814,6 +893,19 @@ def _contract_digest(workspace: Workspace) -> str:
 
 def _iso_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    """Best-effort parse of a stored timestamp into an aware datetime."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 __all__ = [
