@@ -259,9 +259,22 @@ def ingest_snapshot(
             file=label,
         )
 
-    result.canonical = _apply_canonical(
-        workspace, result, canonical, trace, diag, label
-    )
+    # Canonical facts must remain traceable to persisted evidence. If either
+    # the snapshot bytes or the observations file failed to store, skip the
+    # apply rather than commit facts whose observation ids cannot be
+    # inspected — the INGEST.STORE_ERROR above already fails the run.
+    if result.accepted and (
+        result.snapshot_path is None or result.observations_path is None
+    ):
+        diag.warning(
+            "CANON.SKIPPED",
+            "canonical apply skipped because evidence persistence failed",
+            file=label,
+        )
+    else:
+        result.canonical = _apply_canonical(
+            workspace, result, canonical, trace, diag, label
+        )
 
     trace.emit(
         "ingest",

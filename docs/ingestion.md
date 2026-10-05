@@ -57,3 +57,4 @@ Ingestion diagnostics reuse the workspace diagnostic shape: `file` is the snapsh
 - `INGEST.STORE_ERROR` — evidence could not be persisted.
 - `INGEST.EMPTY` — warning: the snapshot parsed but contained no records.
 - `CANON.STORE_ERROR` — canonical entity/event persistence failed ([canonical.md](canonical.md)).
+- `CANON.SKIPPED` — warning: canonical apply skipped because evidence persistence failed.

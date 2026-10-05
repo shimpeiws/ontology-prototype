@@ -1,12 +1,12 @@
 # Canonical entities and append-only events
 
-`ontology ingest` resolves each accepted observation through the workspace mapping and persists it into a SQLite canonical store at `<workspace>/.ontology/canon.db` (git-ignored with the rest of the runtime directory). The apply is one transaction: entity upserts, event inserts, and observation links commit together or roll back together. A store failure surfaces as a `CANON.STORE_ERROR` diagnostic and a nonzero exit, never a partial write.
+`ontology ingest` resolves each accepted observation through the workspace mapping and persists it into a SQLite canonical store at `<workspace>/.ontology/canon.db` (git-ignored with the rest of the runtime directory). The apply is one transaction: entity upserts, event inserts, and observation links commit together or roll back together. A store failure surfaces as a `CANON.STORE_ERROR` diagnostic and a nonzero exit, never a partial write. The apply runs only when both evidence artifacts — the snapshot bytes and the observations file — were persisted, so every canonical fact stays traceable to inspectable evidence; otherwise the run reports `CANON.SKIPPED` on top of the store error.
 
 ## Tables
 
 | Table | Content |
 | --- | --- |
-| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids and the last observation time. An upsert applies only when the new observation is at least as recent as the stored one — `updated_at` moves forward in observation time, so out-of-order evidence can never regress current state. |
+| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids and the last observation time. An upsert applies only when the new observation is more recent than the stored one — `updated_at` moves forward in observation time, so out-of-order evidence can never regress current state. Equal observation times resolve by ingest id (the larger id wins), which keeps replays order-independent; two rows for one entity in a single run resolve to the first row. |
 | `events` | Append-only business facts keyed by a stable `fact_key`. |
 | `entity_observations` | Every accepted observation that resolved an entity, linked to that entity. |
 | `event_observations` | Every accepted observation that asserted an event fact, including repeats of an already-known fact. |
@@ -30,3 +30,4 @@ A fact key is `sha256` over the event type, subject entity/id, and `occurred_at`
 ## Diagnostics
 
 - `CANON.STORE_ERROR` — the canonical store could not be written. The store is a pluggable boundary, so any failure it raises — sqlite errors, IO errors, or a custom implementation's own exception — becomes this diagnostic, never a mid-run traceback.
+- `CANON.SKIPPED` — warning: evidence persistence failed, so the canonical apply was skipped to avoid facts without inspectable provenance.

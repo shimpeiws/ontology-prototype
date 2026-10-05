@@ -187,6 +187,23 @@ def test_project_run_json_is_enveloped(tmp_path: Path, capsys) -> None:
     assert payload["run"]["candidates"]
 
 
+def test_project_run_reports_store_error(tmp_path: Path, capsys) -> None:
+    workspace = copy_example(tmp_path)
+    runtime = workspace / ".ontology"
+    runtime.mkdir()
+    (runtime / "canon.db").write_bytes(b"not a database")
+
+    # A broken canon.db must surface as a diagnostic, not a traceback — and
+    # stay JSON-parseable under --json.
+    assert (
+        main(["project", str(workspace), "--run", "prj-x", "--json"])
+        == EXIT_INVALID
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["diagnostics"][0]["code"] == "PROJECTION.STORE_ERROR"
+
+
 def test_project_run_is_read_only_on_fresh_workspace(
     tmp_path: Path, capsys
 ) -> None:

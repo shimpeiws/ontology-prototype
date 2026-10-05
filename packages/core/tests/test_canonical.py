@@ -10,6 +10,7 @@ import pytest
 import support
 
 from ontology_core import (
+    FileEvidenceStore,
     Observation,
     ResolvedEntity,
     ResolvedEvent,
@@ -286,6 +287,77 @@ def test_ingest_emits_canonical_trace_events(tmp_path: Path) -> None:
     kinds = [kind for _, kind, _ in trace.events]
     assert "canonical.event_recorded" in kinds
     assert "canonical.applied" in kinds
+
+
+def test_equal_time_replay_is_order_independent(tmp_path: Path) -> None:
+    """Equal observed_at replays resolve by ingest id, not apply order.
+
+    Two runs observed at the same instant with different content must leave
+    the same final entity state regardless of which is applied first — the
+    larger ingest id wins.
+    """
+    completed = _observation(
+        "obs-a",
+        entities=[
+            ResolvedEntity(entity="Job", id="1", properties={"status": "completed"})
+        ],
+        events=[],
+    )
+    reopened = _observation(
+        "obs-b",
+        entities=[
+            ResolvedEntity(entity="Job", id="1", properties={"status": "in_progress"})
+        ],
+        events=[],
+    )
+
+    def apply_order(order: list[tuple[str, Observation]], name: str) -> dict:
+        store = SqliteCanonicalStore(tmp_path / name)
+        for ingest_id, obs in order:
+            store.apply(ingest_id, [obs])
+        state = store.entity_state("Job", "1")
+        assert state is not None
+        return state
+
+    # ing-b > ing-a lexicographically, so "reopened" wins in both orders.
+    forward = apply_order([("ing-a", completed), ("ing-b", reopened)], "s1")
+    backward = apply_order([("ing-b", reopened), ("ing-a", completed)], "s2")
+    assert forward["properties"]["status"] == "in_progress"
+    assert backward["properties"]["status"] == "in_progress"
+    # Both observations stay linked even when their update loses the tie.
+    assert count_rows(tmp_path / "s2" / "canon.db", "entity_observations") == 2
+
+    # Within one run, the first row for an entity wins (ids are equal).
+    store = SqliteCanonicalStore(tmp_path / "s3")
+    store.apply("ing-x", [completed, reopened])
+    state = store.entity_state("Job", "1")
+    assert state["properties"]["status"] == "completed"
+
+
+def test_canonical_apply_skipped_when_evidence_write_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    class FailingObservationsStore(FileEvidenceStore):
+        def write_observations(self, name, lines):
+            raise OSError("disk full")
+
+    result = ingest_snapshot(
+        workspace,
+        snapshot,
+        observed_at=FIXED_NOW,
+        store=FailingObservationsStore(tmp_path / "rt"),
+    )
+
+    # Facts are never committed without their evidence: the run fails on
+    # INGEST.STORE_ERROR and the canonical apply is skipped with a warning.
+    assert not result.ok
+    codes = [d.code for d in result.diagnostics]
+    assert "INGEST.STORE_ERROR" in codes
+    assert "CANON.SKIPPED" in codes
+    assert result.canonical is None
 
 
 def test_property_round_trip(tmp_path: Path) -> None:

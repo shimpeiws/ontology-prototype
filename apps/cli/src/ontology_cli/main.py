@@ -313,7 +313,16 @@ def _cmd_project(
         return EXIT_INVALID
 
     if run_id is not None:
-        record = get_projection_run(loaded.workspace, run_id)
+        try:
+            record = get_projection_run(loaded.workspace, run_id)
+        except Exception as exc:
+            _emit_error(
+                workspace,
+                as_json,
+                "PROJECTION.STORE_ERROR",
+                f"cannot read canonical store: {exc}",
+            )
+            return EXIT_INVALID
         if record is None:
             _emit_error(
                 workspace,

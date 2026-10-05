@@ -50,6 +50,8 @@ class ProjectionCandidate:
     subject_id: str
     occurred_at: datetime
     elapsed_seconds: float
+    # The subject entity's latest *observed* property set, which may postdate
+    # as_of — see ``evidence["entity_updated_at"]`` for its stamp.
     properties: dict[str, Any]
     evidence: dict[str, Any]
 
@@ -217,7 +219,7 @@ def _completed_but_not_invoiced(
     diag: Diagnostics,
 ) -> tuple[list[ProjectionCandidate], list[dict[str, Any]]]:
     """Subjects whose interval start event is more than two days old and whose
-    interval end event has never been observed.
+    interval end event had not occurred by ``as_of``.
 
     The event pair comes from the workspace evaluation contract's
     ``interval`` — for the v0.1 job-invoicing loop that is JobCompleted →
@@ -250,13 +252,26 @@ def _completed_but_not_invoiced(
     ):
         facts = store.events_for_subject(subject_entity, subject_id)
         starts = [f for f in facts if f.event == interval.start_event]
-        ends = [f for f in facts if f.event == interval.end_event]
+        # Only end events that had occurred by as_of close the interval — an
+        # invoice issued later does not change what was true at as_of.
+        ends = [
+            f
+            for f in facts
+            if f.event == interval.end_event and f.occurred_at <= as_of
+        ]
+        future_ends = [
+            f
+            for f in facts
+            if f.event == interval.end_event and f.occurred_at > as_of
+        ]
         first = min(starts, key=lambda f: f.occurred_at)
         entry: dict[str, Any] = {
             "subject_id": subject_id,
             "start_fact_keys": [f.fact_key for f in starts],
             "end_fact_keys": [f.fact_key for f in ends],
         }
+        if future_ends:
+            entry["future_end_fact_keys"] = [f.fact_key for f in future_ends]
         inputs.append(entry)
         if ends:
             entry["excluded"] = "interval end event exists"
@@ -290,6 +305,10 @@ def _completed_but_not_invoiced(
                     "entity_observation_id": (
                         entity["last_observation_id"] if entity else None
                     ),
+                    # Entity properties are the latest *observed* state and
+                    # may postdate as_of — expose the stamp so consumers can
+                    # tell how current the candidate's properties are.
+                    "entity_updated_at": entity["updated_at"] if entity else None,
                 },
             )
         )

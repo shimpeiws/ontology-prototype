@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS entities (
     properties TEXT NOT NULL,
     first_observation_id TEXT NOT NULL,
     last_observation_id TEXT NOT NULL,
+    last_ingest_id TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (entity_type, entity_id)
 );
@@ -202,8 +203,26 @@ class SqliteCanonicalStore:
             self.root.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(self.db_path)
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
             self._conn = conn
         return self._conn
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Add columns introduced after the first canon.db schema.
+
+        ``CREATE TABLE IF NOT EXISTS`` does not retrofit columns onto a
+        database created by an earlier revision, so additive changes are
+        applied explicitly.
+        """
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(entities)")
+        }
+        if "last_ingest_id" not in columns:
+            conn.execute(
+                "ALTER TABLE entities ADD COLUMN last_ingest_id "
+                "TEXT NOT NULL DEFAULT ''"
+            )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -222,13 +241,19 @@ class SqliteCanonicalStore:
                         """
                         INSERT INTO entities (
                             entity_type, entity_id, properties,
-                            first_observation_id, last_observation_id, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            first_observation_id, last_observation_id,
+                            last_ingest_id, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (entity_type, entity_id) DO UPDATE SET
                             properties = excluded.properties,
                             last_observation_id = excluded.last_observation_id,
+                            last_ingest_id = excluded.last_ingest_id,
                             updated_at = excluded.updated_at
-                        WHERE excluded.updated_at >= entities.updated_at
+                        WHERE excluded.updated_at > entities.updated_at
+                            OR (
+                                excluded.updated_at = entities.updated_at
+                                AND excluded.last_ingest_id > entities.last_ingest_id
+                            )
                         """,
                         (
                             entity.entity,
@@ -239,6 +264,7 @@ class SqliteCanonicalStore:
                             ),
                             observation.observation_id,
                             observation.observation_id,
+                            ingest_id,
                             _iso_z(observation.observed_at),
                         ),
                     )

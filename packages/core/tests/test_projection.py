@@ -111,6 +111,47 @@ def test_frozen_run_is_stable_after_later_ingestion(tmp_path: Path) -> None:
     assert second.candidates == []
 
 
+def test_end_event_after_as_of_does_not_exclude(tmp_path: Path) -> None:
+    # An invoice issued *after* as_of does not change what was true at as_of:
+    # the job was still completed-but-uninvoiced then.
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        "id,status,assignee,amount,completed_at,invoiced_at\n"
+        "J01,completed,taro,1,2026-10-01,2026-10-10\n",
+    )
+    assert ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW).ok
+
+    result = run_projection(workspace, "CompletedButNotInvoiced", as_of=AS_OF)
+    assert result.ok
+    assert [c.subject_id for c in result.candidates] == ["J01"]
+    inputs = {i["subject_id"]: i for i in result.inputs}
+    assert inputs["J01"]["future_end_fact_keys"]
+
+    # Past as_of after the invoice date excludes the job again.
+    later = run_projection(
+        workspace,
+        "CompletedButNotInvoiced",
+        as_of=datetime(2026, 10, 12, tzinfo=timezone.utc),
+    )
+    assert later.ok
+    assert later.candidates == []
+    later_inputs = {i["subject_id"]: i for i in later.inputs}
+    assert later_inputs["J01"]["excluded"] == "interval end event exists"
+
+
+def test_candidate_marks_property_provenance(tmp_path: Path) -> None:
+    workspace = make_projected_ws(tmp_path)
+    result = run_projection(workspace, "CompletedButNotInvoiced", as_of=AS_OF)
+
+    assert result.ok
+    candidate = result.candidates[0]
+    # Properties are the latest observed state, stamped with its update time
+    # so consumers can tell it may postdate as_of.
+    assert candidate.evidence["entity_updated_at"] == "2026-10-05T12:00:00Z"
+
+
 def test_projection_requires_aware_as_of(tmp_path: Path) -> None:
     workspace = make_projected_ws(tmp_path)
 

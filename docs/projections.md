@@ -10,11 +10,11 @@ ontology project <workspace> --run prj-20261005T000000000000Z-abcd1234
 
 ## CompletedButNotInvoiced
 
-v0.1 registers one semantic under this projection name: a subject is a candidate when the evaluation contract's `interval.start_event` occurred but no `interval.end_event` exists for that subject, and `as_of − occurred_at` is strictly greater than two days. Exactly two days is not a candidate, and a future-dated start event is excluded with a `PROJECTION.FUTURE_EVENT` warning.
+v0.1 registers one semantic under this projection name: a subject is a candidate when the evaluation contract's `interval.start_event` occurred but no `interval.end_event` had occurred by `as_of` for that subject, and `as_of − occurred_at` is strictly greater than two days. Exactly two days is not a candidate, and a future-dated start event is excluded with a `PROJECTION.FUTURE_EVENT` warning.
 
-When several start events exist for one subject, the earliest `occurred_at` sets the clock — the first completion is when the delay began. Any end event excludes the subject regardless of ordering.
+When several start events exist for one subject, the earliest `occurred_at` sets the clock — the first completion is when the delay began. Any end event with `occurred_at <= as_of` excludes the subject regardless of ordering; end events that occurred *after* `as_of` do not (a later invoice does not change that the job was uninvoiced at `as_of`) and are listed in the run inputs as `future_end_fact_keys`.
 
-Each candidate carries the canonical subject, the subject entity's current properties (for job-invoicing that includes `assignee`), the completion time, the elapsed duration, and evidence references: the start fact key plus every observation id and ingest id that asserted it.
+Each candidate carries the canonical subject, the subject entity's latest observed properties (for job-invoicing that includes `assignee`), the completion time, the elapsed duration, and evidence references: the start fact key plus every observation id and ingest id that asserted it. Entity properties are the latest *observed* state, not the state as of `as_of` — they may postdate the evaluation instant, so candidates expose `evidence.entity_updated_at` to mark their provenance. As-of-correct property history is a later concern (reconciliation in #8).
 
 ## Frozen runs
 
