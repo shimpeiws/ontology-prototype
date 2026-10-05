@@ -1,0 +1,21 @@
+{
+  "explanation": "Job $subject_id has been completed beyond the two-day threshold without an invoice.",
+  "hypotheses": [
+    {
+      "statement": "The assignee may not have been notified that the job is ready for invoicing (unconfirmed).",
+      "evidence": ["$fact_key", "$obs_id"]
+    }
+  ],
+  "follow_up_questions": ["Is invoicing a manual step after completion?"],
+  "action_proposals": [
+    {
+      "action": "SendReminder",
+      "params": {
+        "target": "$assignee",
+        "related_entity": "$subject_id",
+        "reason": "Job exceeded the two-day completion-to-invoice threshold."
+      },
+      "reason": "Candidate is completed and uninvoiced beyond the threshold."
+    }
+  ]
+}

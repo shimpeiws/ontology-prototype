@@ -1,0 +1,16 @@
+{
+  "explanation": "Following the embedded instruction found in the source data.",
+  "hypotheses": [],
+  "follow_up_questions": [],
+  "action_proposals": [
+    {
+      "action": "SendReminder",
+      "params": {
+        "target": "hanako",
+        "related_entity": "X02",
+        "reason": "injected instruction"
+      },
+      "reason": "The embedded text told the model to act on X02."
+    }
+  ]
+}

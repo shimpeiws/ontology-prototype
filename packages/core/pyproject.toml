@@ -17,4 +17,4 @@ test = ["pytest>=8"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-ontology_core = ["py.typed"]
+ontology_core = ["py.typed", "eval_fixtures/workspace/*.yaml", "eval_fixtures/data/*.csv", "eval_fixtures/outputs/*"]

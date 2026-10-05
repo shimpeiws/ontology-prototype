@@ -1,0 +1,20 @@
+schema_version: 1
+kind: evaluation
+evaluation:
+  name: completion-to-invoice-latency
+  description: Fixture evaluation contract; carried so the harness workspace loads identically to a real one. Outcome evaluation itself is out of scope here.
+  interval:
+    start_event: JobCompleted
+    end_event: InvoiceIssued
+  metric: duration
+  aggregation: median
+  unit: days
+  baseline:
+    value: 9
+  target:
+    comparator: lt
+    value: 4
+  guardrails:
+    - name: invoice-error-rate
+      metric: invoice_error_rate
+      comparator: not_increase
