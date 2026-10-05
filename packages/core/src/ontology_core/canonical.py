@@ -277,8 +277,19 @@ class CanonicalStore(Protocol):
         """A recorded diagnosis run with parsed JSON columns, or None."""
         ...
 
+    def diagnosis_runs(self) -> list[dict[str, Any]]:
+        """All recorded diagnosis runs, ordered by creation time."""
+        ...
+
     def proposal(self, proposal_id: str) -> dict[str, Any] | None:
         """A persisted proposal with parsed JSON columns, or None."""
+        ...
+
+    def record_proposal_rows(
+        self, proposal_rows: list[dict[str, Any]]
+    ) -> None:
+        """Append proposal index rows — used to backfill rows for runs
+        recorded before the proposals table existed."""
         ...
 
     def proposals(self) -> list[dict[str, Any]]:
@@ -612,31 +623,14 @@ class SqliteCanonicalStore:
                     _iso_z(record["created_at"]),
                 ),
             )
-            for row in proposal_rows or []:
-                conn.execute(
-                    """
-                    INSERT INTO proposals (
-                        proposal_id, diagnosis_run_id, proposal_index,
-                        action, params, reason,
-                        subject_entity, subject_id, related_entities,
-                        evidence, payload_digest, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        row["proposal_id"],
-                        row["diagnosis_run_id"],
-                        row["proposal_index"],
-                        row["action"],
-                        json.dumps(row["params"], sort_keys=True),
-                        row.get("reason"),
-                        row.get("subject_entity"),
-                        row.get("subject_id"),
-                        json.dumps(row["related_entities"], sort_keys=True),
-                        json.dumps(row["evidence"], sort_keys=True),
-                        row["payload_digest"],
-                        _iso_z(row["created_at"]),
-                    ),
-                )
+            _insert_proposal_rows(conn, proposal_rows)
+
+    def record_proposal_rows(
+        self, proposal_rows: list[dict[str, Any]]
+    ) -> None:
+        conn = self._connect()
+        with conn:
+            _insert_proposal_rows(conn, proposal_rows)
 
     def proposal(self, proposal_id: str) -> dict[str, Any] | None:
         if not self._has_db():
@@ -774,9 +768,76 @@ class SqliteCanonicalStore:
             "created_at": row[13],
         }
 
+    def diagnosis_runs(self) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT run_id, projection_run_id, provider, model,
+                   prompt_version, prompt, status, input_digest,
+                   provider_called, output, deliverables, proposals,
+                   rejected, diagnostics, created_at
+            FROM diagnosis_runs ORDER BY created_at, run_id
+            """
+        ).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "projection_run_id": row[1],
+                "provider": row[2],
+                "model": row[3],
+                "prompt_version": row[4],
+                "prompt": row[5],
+                "status": row[6],
+                "input_digest": row[7],
+                "provider_called": bool(row[8]),
+                "output": row[9],
+                "deliverables": json.loads(row[10]),
+                "proposals": json.loads(row[11]),
+                "rejected": json.loads(row[12]),
+                "diagnostics": json.loads(row[13]),
+                "created_at": row[14],
+            }
+            for row in rows
+        ]
+
 
 def _iso_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _insert_proposal_rows(
+    conn: sqlite3.Connection,
+    proposal_rows: list[dict[str, Any]] | None,
+) -> None:
+    for row in proposal_rows or []:
+        created_at = row["created_at"]
+        if isinstance(created_at, datetime):
+            created_at = _iso_z(created_at)
+        conn.execute(
+            """
+            INSERT INTO proposals (
+                proposal_id, diagnosis_run_id, proposal_index,
+                action, params, reason,
+                subject_entity, subject_id, related_entities,
+                evidence, payload_digest, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["proposal_id"],
+                row["diagnosis_run_id"],
+                row["proposal_index"],
+                row["action"],
+                json.dumps(row["params"], sort_keys=True),
+                row.get("reason"),
+                row.get("subject_entity"),
+                row.get("subject_id"),
+                json.dumps(row["related_entities"], sort_keys=True),
+                json.dumps(row["evidence"], sort_keys=True),
+                row["payload_digest"],
+                created_at,
+            ),
+        )
 
 
 def _jsonable(value: Any) -> Any:

@@ -161,3 +161,17 @@ def test_proposals_empty_workspace(tmp_path, capsys) -> None:
     out = capsys.readouterr().out
     assert code == 0
     assert "no persisted proposals" in out
+
+
+def test_proposals_store_error_is_diagnosed(tmp_path, capsys) -> None:
+    """A broken canonical DB reports a diagnostic, never a traceback."""
+    workspace = clisupport.copy_example(tmp_path)
+    runtime = workspace / ".ontology"
+    runtime.mkdir()
+    (runtime / "canon.db").write_text("not a sqlite db", encoding="utf-8")
+
+    code = main(["proposals", str(workspace)])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "DECISION.STORE_ERROR" in out
+    assert "Traceback" not in out

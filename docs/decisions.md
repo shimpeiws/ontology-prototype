@@ -48,7 +48,10 @@ output item it was validated from. `--json` is supported on both commands.
 - `proposal_id`, `diagnosis_run_id`, `proposal_index`
 - `action`, `params`, `reason` — the exact validated payload
 - `subject_entity`/`subject_id` — the canonical target the proposal cites
-- `related_entities` — every other ref param as `{param, entity, id}`
+  (the first ref param to the projection subject)
+- `related_entities` — every other ref param as `{param, entity, id}`,
+  including additional refs to the subject entity, so a proposal
+  targeting two candidates keeps both visible
 - `evidence` — the diagnosed candidate's evidence links (fact key,
   observation ids, ingest ids)
 - `payload_digest` — sha256 over `"v1\n" + canonical JSON of
@@ -85,6 +88,22 @@ contract: an action removed from `permitted_actions`, a param schema
 change, or a ref target that no longer resolves all fail the check —
 an approval made under an old contract cannot silently ride into
 execution under a new one.
+
+## Repair and backfill
+
+`proposals` is a review index over the diagnosis run record — never the
+only copy. Two gaps self-heal the next time `proposals`/`decide` runs:
+
+- Runs recorded before the `proposals` table existed keep their
+  validated proposals only inside the run record; inspection backfills
+  index rows for them (with empty `evidence`, since run records keep no
+  candidates). Pre-`index` records use the array position, matching the
+  original `-pN` ids.
+- A run whose proposal indexing failed (`DIAGNOSIS.PROPOSAL_ROWS_ERROR`)
+  is repaired the same way.
+
+Backfill is idempotent and best-effort: a failure leaves the table
+unchanged rather than breaking inspection.
 
 ## What the agent cannot do
 

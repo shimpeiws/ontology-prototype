@@ -95,18 +95,9 @@ def build_proposal_rows(
     rows = []
     for proposal in proposals:
         spec = workspace.agent.permitted_actions[proposal.action]
-        subject_id: str | None = None
-        related: list[dict[str, str]] = []
-        for pname, pspec in spec.params.items():
-            value = proposal.params.get(pname)
-            if pspec.type != "ref" or not isinstance(value, str):
-                continue
-            if pspec.ref == subject_entity:
-                subject_id = value
-            else:
-                related.append(
-                    {"param": pname, "entity": pspec.ref, "id": value}
-                )
+        subject_id, related = _resolve_refs(
+            spec, subject_entity, proposal.params
+        )
         index = proposal.index
         rows.append(
             {
@@ -127,6 +118,95 @@ def build_proposal_rows(
             }
         )
     return rows
+
+
+def _resolve_refs(
+    spec: Any, subject_entity: str, params: dict[str, Any]
+) -> tuple[str | None, list[dict[str, str]]]:
+    """Split an action's ref params into the canonical subject target and
+    related entities.
+
+    The *first* ref to the projection subject becomes ``subject_id``;
+    additional refs to the same entity go to ``related_entities`` so a
+    proposal targeting two candidates keeps both visible — dropping the
+    second would hide part of what the reviewer approved.
+    """
+    subject_id: str | None = None
+    related: list[dict[str, str]] = []
+    for pname, pspec in spec.params.items():
+        value = params.get(pname)
+        if pspec.type != "ref" or not isinstance(value, str):
+            continue
+        if pspec.ref == subject_entity and subject_id is None:
+            subject_id = value
+        else:
+            related.append(
+                {"param": pname, "entity": pspec.ref, "id": value}
+            )
+    return subject_id, related
+
+
+def backfill_proposals(
+    workspace: Workspace, store: CanonicalStore
+) -> None:
+    """Index validated proposals missing from the ``proposals`` table.
+
+    Runs recorded before the table existed — or whose proposal indexing
+    failed (``DIAGNOSIS.PROPOSAL_ROWS_ERROR``) — hold their validated
+    proposals only inside the run record. This idempotent repair rebuilds
+    their index rows so they can be reviewed and decided; backfilled rows
+    carry empty ``evidence`` because the run record keeps no candidates.
+    Best-effort: any failure leaves the table unchanged.
+    """
+    try:
+        subject_entity = workspace.domain.projections[
+            workspace.agent.projection
+        ].subject
+        rows = []
+        for run in store.diagnosis_runs():
+            for position, prop in enumerate(run.get("proposals") or []):
+                # Newer runs carry the model-output index on each proposal;
+                # older ones predate it — their ``-pN`` ids used the array
+                # position, which is what the fallback reproduces.
+                index = prop.get("index")
+                if not isinstance(index, int):
+                    index = position
+                proposal_id = f"{run['run_id']}-p{index}"
+                if store.proposal(proposal_id) is not None:
+                    continue
+                spec = workspace.agent.permitted_actions.get(
+                    prop.get("action")
+                )
+                subject_id: str | None = None
+                related: list[dict[str, str]] = []
+                if spec is not None:
+                    subject_id, related = _resolve_refs(
+                        spec, subject_entity, prop.get("params") or {}
+                    )
+                rows.append(
+                    {
+                        "proposal_id": proposal_id,
+                        "diagnosis_run_id": run["run_id"],
+                        "proposal_index": index,
+                        "action": prop.get("action"),
+                        "params": prop.get("params") or {},
+                        "reason": prop.get("reason"),
+                        "subject_entity": subject_entity,
+                        "subject_id": subject_id,
+                        "related_entities": related,
+                        "evidence": {},
+                        "payload_digest": payload_digest(
+                            prop.get("action"), prop.get("params") or {}
+                        ),
+                        "created_at": run["created_at"],
+                    }
+                )
+        if rows:
+            store.record_proposal_rows(rows)
+    except Exception:
+        # Backfill is repair, not a write path: a failure leaves things as
+        # they were and must not break inspection or decide.
+        pass
 
 
 @dataclass
@@ -162,7 +242,9 @@ def decide(
     applies to exactly the payload that was reviewed.
     """
     diag = Diagnostics()
-    result = DecisionResult(proposal_id=proposal_id)
+    # The attempted decision is part of the result from the start so a
+    # failed attempt's trace event still shows what was tried.
+    result = DecisionResult(proposal_id=proposal_id, decision=decision)
 
     if store is None:
         store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
@@ -190,6 +272,7 @@ def decide(
     if diag.has_errors:
         return _finish()
 
+    backfill_proposals(workspace, store)
     try:
         proposal = store.proposal(proposal_id)
     except Exception as exc:
@@ -377,6 +460,7 @@ def proposal_view(
     """All proposals with derived lifecycle status and latest decision."""
     if store is None:
         store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    backfill_proposals(workspace, store)
     views = []
     for row in store.proposals():
         decisions = store.decisions_for(row["proposal_id"])

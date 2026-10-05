@@ -105,7 +105,14 @@ class ActionProposal:
     index: int = -1
 
     def to_dict(self) -> dict[str, Any]:
-        return {"action": self.action, "params": self.params, "reason": self.reason}
+        # ``index`` travels with the recorded proposal so a later repair
+        # can rebuild its ``-pN`` id without the raw output.
+        return {
+            "action": self.action,
+            "params": self.params,
+            "reason": self.reason,
+            "index": self.index,
+        }
 
 
 @dataclass

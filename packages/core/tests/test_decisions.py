@@ -408,16 +408,14 @@ def test_existing_db_gets_decision_tables(tmp_path: Path) -> None:
     conn.close()
 
     # The missing tables — and their append-only triggers — are
-    # recreated on next store open.
+    # recreated on next store open, and the dropped proposal row is
+    # backfilled from its diagnosis run record: the decision succeeds
+    # instead of losing reviewability forever.
     result = decide(
         workspace, view["proposal_id"], "approved", reviewer="r"
     )
-    # The proposal row is gone with the dropped table, so the decision
-    # fails cleanly — the point is no crash and tables exist again.
-    assert not result.ok
-    assert "DECISION.UNKNOWN_PROPOSAL" in {
-        d.code for d in result.diagnostics
-    }
+    assert result.ok, [d.format() for d in result.diagnostics]
+    assert result.recorded
 
     conn = sqlite3.connect(db)
     objects = {
@@ -486,11 +484,17 @@ def test_decide_failures_emit_trace_event(tmp_path: Path) -> None:
         reviewer="fde-sato", trace=sink,
     )
 
-    kinds = [
-        json.loads(line)["kind"]
+    events = [
+        json.loads(line)
         for line in trace_path.read_text().splitlines()
     ]
-    assert kinds == ["decision.failed"] * 3
+    assert [e["kind"] for e in events] == ["decision.failed"] * 3
+    # The attempted decision is visible even though nothing recorded.
+    assert [e["data"]["decision"] for e in events] == [
+        "approved",
+        "maybe",
+        "approved",
+    ]
 
 
 def test_decide_trace_error_is_diagnosed(tmp_path: Path) -> None:
@@ -738,3 +742,137 @@ def test_payload_digest_is_version_stable(tmp_path: Path) -> None:
         )
     ).encode("utf-8")
     assert digest == "sha256:" + hashlib.sha256(raw).hexdigest()
+
+
+def test_backfill_indexes_legacy_run_proposals(tmp_path: Path) -> None:
+    """A run recorded before the proposals table existed still yields a
+    reviewable, decidable proposal once inspected — the repair path."""
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    conn = store._connect()
+    conn.execute(
+        "INSERT INTO diagnosis_runs (run_id, provider, model,"
+        " prompt_version, prompt, status, input_digest, provider_called,"
+        " deliverables, proposals, rejected, diagnostics, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-legacy",
+            "legacy-provider",
+            "m",
+            "diagnosis.v1",
+            "prompt",
+            "ok",
+            "sha256:legacy",
+            1,
+            "{}",
+            json.dumps(
+                [
+                    {
+                        "action": "SendReminder",
+                        "params": {
+                            "target": "taro",
+                            "related_entity": "A01",
+                            "reason": "x",
+                        },
+                        "reason": "legacy proposal",
+                        # No "index" key — pre-#6 records lack it; the
+                        # array position is the fallback (old -pN scheme).
+                    }
+                ]
+            ),
+            "[]",
+            "[]",
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.commit()
+
+    views = proposal_view(workspace)
+    assert len(views) == 1
+    view = views[0]
+    assert view["proposal_id"] == "dgx-legacy-p0"
+    assert view["proposal_index"] == 0
+    assert view["evidence"] == {}
+    assert view["subject_entity"] == "Job"
+    assert view["subject_id"] == "A01"
+    assert view["related_entities"] == [
+        {"param": "target", "entity": "Person", "id": "taro"}
+    ]
+
+    # The backfilled proposal can be decided like any other.
+    result = decide(
+        workspace, "dgx-legacy-p0", "approved", reviewer="fde-sato"
+    )
+    assert result.ok, [d.format() for d in result.diagnostics]
+    assert check_approval(
+        workspace,
+        "dgx-legacy-p0",
+        action="SendReminder",
+        params={
+            "target": "taro",
+            "related_entity": "A01",
+            "reason": "x",
+        },
+    ).ok
+
+
+def test_multiple_subject_refs_all_visible(tmp_path: Path) -> None:
+    """An action with two refs to the projection subject keeps both
+    targets visible: the first becomes subject_id, the rest related."""
+    docs = support.base_docs()
+    docs["agent"]["agent"]["permitted_actions"]["SendReminder"][
+        "params"
+    ]["also_job"] = {"type": "ref", "ref": "Job", "required": False}
+    ws_dir = support.make_workspace(tmp_path / "ws", docs=docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok
+    workspace = loaded.workspace
+
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(
+        "id,status,assignee,amount,completed_at,invoiced_at\n"
+        "A01,completed,taro,1,2026-10-01,\n"
+        "B02,completed,taro,1,2026-10-01,\n",
+        encoding="utf-8",
+    )
+    assert ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW).ok
+    projection = run_projection(
+        workspace, "CompletedButNotInvoiced", as_of=AS_OF
+    )
+    assert projection.ok
+    output = json.dumps(
+        {
+            "explanation": "x",
+            "hypotheses": [],
+            "follow_up_questions": [],
+            "action_proposals": [
+                {
+                    "action": "SendReminder",
+                    "params": {
+                        "target": "taro",
+                        "related_entity": "A01",
+                        "also_job": "B02",
+                        "reason": "x",
+                    },
+                    "reason": "x",
+                }
+            ],
+        }
+    )
+    result = run_diagnosis(
+        workspace, FixedProvider(output), model="m",
+        run_id=projection.run_id,
+    )
+    assert result.ok, [d.format() for d in result.diagnostics]
+
+    view = proposal_view(workspace)[0]
+    assert view["subject_id"] == "A01"
+    assert {tuple(sorted(r.items())) for r in view["related_entities"]} == {
+        tuple(sorted({"param": "target", "entity": "Person",
+                      "id": "taro"}.items())),
+        tuple(sorted({"param": "also_job", "entity": "Job",
+                      "id": "B02"}.items())),
+    }

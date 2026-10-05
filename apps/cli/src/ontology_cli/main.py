@@ -754,7 +754,16 @@ def _cmd_proposals(
                 print(diagnostic.format())
         return EXIT_INVALID
 
-    views = proposal_view(loaded.workspace)
+    try:
+        views = proposal_view(loaded.workspace)
+    except Exception as exc:
+        _emit_error(
+            workspace,
+            as_json,
+            "DECISION.STORE_ERROR",
+            f"cannot read canonical store: {exc}",
+        )
+        return EXIT_INVALID
 
     if show_id is not None:
         view = next((v for v in views if v["proposal_id"] == show_id), None)
