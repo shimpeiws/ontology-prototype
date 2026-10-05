@@ -483,8 +483,14 @@ class SqliteCanonicalStore:
         result = ApplyResult()
         # Read once before the loop: the proposals index cannot change
         # inside this transaction, and a new fact links against whatever
-        # interventions were already recorded.
-        proposals = self.proposals()
+        # interventions were already recorded. The index is auxiliary to
+        # canonical state: an unreadable proposals row (corrupt JSON from
+        # an older or hand-edited database) disables intervention linking
+        # for this run rather than failing the whole apply.
+        try:
+            proposals = self.proposals()
+        except Exception:
+            proposals = []
         # ``with conn:`` commits on success and rolls back on any exception,
         # so a failed run never leaves half-written canonical state.
         with conn:

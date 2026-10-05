@@ -229,6 +229,44 @@ def test_conflicting_assertions_within_one_snapshot_warn(
     }
 
 
+def test_correction_warning_aggregated_per_fact(tmp_path: Path) -> None:
+    """One new fact conflicting with several earlier facts is one
+    ambiguity — one warning — while every pairwise link is recorded."""
+    workspace = make_ws(tmp_path)
+    for day in ("2026-10-03", "2026-10-04"):
+        ingest(
+            workspace,
+            tmp_path,
+            f"jobs-{day}.csv",
+            HEADER + f"0101,completed,taro,42.5,2026-10-01,{day}\n",
+            FIXED_NOW,
+        )
+
+    third = ingest(
+        workspace,
+        tmp_path,
+        "jobs-third.csv",
+        HEADER + "0101,completed,taro,42.5,2026-10-01,2026-10-05\n",
+        LATER,
+    )
+
+    assert third.ok
+    warnings = [
+        d for d in third.diagnostics if d.code == "CANON.POSSIBLE_CORRECTION"
+    ]
+    assert len(warnings) == 1
+    assert "2026-10-03" in warnings[0].message
+    assert "2026-10-04" in warnings[0].message
+    assert "2026-10-05" in warnings[0].message
+    new_fact = next(
+        f
+        for f in facts(workspace, "Job", "0101")
+        if f.occurred_at == datetime(2026, 10, 5, tzinfo=timezone.utc)
+    )
+    links = open_store(workspace).fact_links(new_fact.fact_key)
+    assert len([l for l in links if l["relation"] == "possibly_corrects"]) == 2
+
+
 def test_later_fact_links_to_intervention_as_correlation(
     tmp_path: Path,
 ) -> None:
@@ -467,18 +505,147 @@ def test_failed_apply_writes_no_fact_links(tmp_path: Path) -> None:
     )
     assert count_rows(store.db_path, "fact_links") == 0
 
+    # obs-b would append a conflicting InvoiceIssued and record a
+    # possibly_corrects link inside the transaction; obs-bad then fails
+    # on an unserializable entity property, so the whole run — fact and
+    # link alike — must roll back.
+    linking = support_observation(
+        "obs-b",
+        event_time=datetime(2026, 10, 5, tzinfo=timezone.utc),
+    )
     bad = support_observation(
         "obs-bad",
-        event_time=datetime(2026, 10, 5, tzinfo=timezone.utc),
+        event_time=datetime(2026, 10, 6, tzinfo=timezone.utc),
         unserializable=True,
     )
     with pytest.raises(TypeError):
-        store.apply("ing-b", [bad])
+        store.apply("ing-b", [linking, bad])
 
-    # The conflicting InvoiceIssued would have created a link; the
-    # rollback removed it together with the event.
     assert count_rows(store.db_path, "fact_links") == 0
     assert count_rows(store.db_path, "events") == 1
+
+    # Applying the same linking observation alone writes the link, so
+    # its absence above was the rollback — not a link never produced.
+    store.apply("ing-c", [linking])
+    assert count_rows(store.db_path, "fact_links") == 1
+
+
+def test_link_matches_via_related_entities_ref(tmp_path: Path) -> None:
+    """A proposal whose canonical subject is another entity — or NULL —
+    still links when a related_entities ref names the event's subject."""
+    workspace = make_ws(tmp_path)
+    ingest(workspace, tmp_path, "jobs.csv", INITIAL_CSV, FIXED_NOW)
+    open_store(workspace).record_proposal_rows(
+        [
+            {
+                "proposal_id": "run-rel-p0",
+                "diagnosis_run_id": "run-rel",
+                "proposal_index": 0,
+                "action": "SendReminder",
+                "params": {"target": "taro", "related_entity": "0101"},
+                "reason": "x",
+                "subject_entity": "Person",
+                "subject_id": "taro",
+                "related_entities": [
+                    {"param": "related_entity", "entity": "Job", "id": "0101"}
+                ],
+                "evidence": {},
+                "payload_digest": "sha256:rel",
+                "created_at": FIXED_NOW,
+            },
+            {
+                "proposal_id": "run-null-p0",
+                "diagnosis_run_id": "run-null",
+                "proposal_index": 0,
+                "action": "SendReminder",
+                "params": {"target": "taro", "related_entity": "0101"},
+                "reason": "y",
+                "subject_entity": None,
+                "subject_id": None,
+                "related_entities": [
+                    {"param": "related_entity", "entity": "Job", "id": "0101"}
+                ],
+                "evidence": {},
+                "payload_digest": "sha256:null",
+                "created_at": FIXED_NOW,
+            },
+        ]
+    )
+
+    later = ingest(workspace, tmp_path, "jobs-later.csv", LATER_CSV, LATER)
+
+    assert later.ok
+    invoice = next(
+        f for f in facts(workspace, "Job", "0101") if f.event == "InvoiceIssued"
+    )
+    links = open_store(workspace).fact_links(invoice.fact_key)
+    targets = {
+        l["target"]
+        for l in links
+        if l["relation"] == "correlated_intervention"
+    }
+    assert targets == {"run-rel-p0", "run-null-p0"}
+
+
+def test_apply_survives_unreadable_proposal_row(tmp_path: Path) -> None:
+    """A corrupt proposals row must not fail canonical apply — linking
+    is auxiliary, so it is skipped rather than breaking the run."""
+    store = SqliteCanonicalStore(tmp_path / "runtime")
+    store.apply(
+        "ing-a",
+        [
+            support_observation(
+                "obs-a",
+                event_time=datetime(2026, 10, 4, tzinfo=timezone.utc),
+            )
+        ],
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO proposals (
+                proposal_id, diagnosis_run_id, proposal_index,
+                action, params, reason,
+                subject_entity, subject_id, related_entities,
+                evidence, payload_digest, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "corrupt-p0",
+                "run-corrupt",
+                0,
+                "SendReminder",
+                "not-json{",
+                None,
+                "Job",
+                "0101",
+                "not-json{",
+                "{}",
+                "sha256:bad",
+                "2026-10-05T00:00:00Z",
+            ),
+        )
+
+    # A conflicting second fact both appends and would have linked to
+    # the proposal; the corrupt row disables intervention linking only.
+    store.apply(
+        "ing-b",
+        [
+            support_observation(
+                "obs-b",
+                event_time=datetime(2026, 10, 5, tzinfo=timezone.utc),
+            )
+        ],
+    )
+
+    assert count_rows(store.db_path, "events") == 2
+    relations = {
+        row[0]
+        for row in sqlite3.connect(store.db_path)
+        .execute("SELECT relation FROM fact_links")
+        .fetchall()
+    }
+    assert relations == {"possibly_corrects"}
 
 
 def count_rows(db_path: Path, table: str) -> int:

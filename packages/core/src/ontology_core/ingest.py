@@ -379,6 +379,7 @@ def _apply_canonical(
             },
         )
     appended_by_key = {e.fact_key: e for e in applied.appended}
+    corrections: dict[str, list[Any]] = {}
     for link in applied.links:
         trace.emit(
             "canonical",
@@ -393,23 +394,30 @@ def _apply_canonical(
             },
         )
         if link.relation == REL_POSSIBLY_CORRECTS:
-            event = appended_by_key.get(link.fact_key)
-            subject = (
-                f"{event.subject_entity}/{event.subject_id}"
-                if event is not None
-                else "unknown subject"
-            )
-            diag.warning(
-                "CANON.POSSIBLE_CORRECTION",
-                f"{link.context.get('event', 'event')} on {subject} now has "
-                f"conflicting occurrence times "
-                f"({link.context.get('prior_occurred_at')} vs "
-                f"{link.context.get('occurred_at')}) — possible source "
-                "correction or a distinct occurrence",
-                file=label,
-                hint="both facts are retained and linked; nothing is "
-                "overwritten — resolve the ambiguity against the source",
-            )
+            corrections.setdefault(link.fact_key, []).append(link)
+    # One warning per new fact, not per link: a fact conflicting with n
+    # earlier facts is one ambiguity for the operator, and n warnings
+    # would bury the signal on a repetitive event type.
+    for fact_key, fact_links in corrections.items():
+        event = appended_by_key.get(fact_key)
+        subject = (
+            f"{event.subject_entity}/{event.subject_id}"
+            if event is not None
+            else "unknown subject"
+        )
+        priors = ", ".join(
+            str(link.context.get("prior_occurred_at")) for link in fact_links
+        )
+        diag.warning(
+            "CANON.POSSIBLE_CORRECTION",
+            f"{fact_links[0].context.get('event', 'event')} on {subject} "
+            f"now has conflicting occurrence times "
+            f"({priors} vs {fact_links[0].context.get('occurred_at')}) — "
+            "possible source correction or a distinct occurrence",
+            file=label,
+            hint="all facts are retained and linked; nothing is "
+            "overwritten — resolve the ambiguity against the source",
+        )
     trace.emit(
         "canonical",
         "canonical.applied",
