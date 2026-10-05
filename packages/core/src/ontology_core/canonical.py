@@ -162,7 +162,7 @@ class CanonicalStore(Protocol):
     def events_for_subject(
         self, subject_entity: str, subject_id: str
     ) -> list[CanonicalEvent]:
-        """All recorded facts about one subject, in insertion order."""
+        """All recorded facts about one subject, ordered by occurred_at."""
         ...
 
     def event_links(self, fact_key: str) -> list[tuple[str, str]]:
@@ -228,6 +228,7 @@ class SqliteCanonicalStore:
                             properties = excluded.properties,
                             last_observation_id = excluded.last_observation_id,
                             updated_at = excluded.updated_at
+                        WHERE excluded.updated_at >= entities.updated_at
                         """,
                         (
                             entity.entity,
@@ -306,7 +307,18 @@ class SqliteCanonicalStore:
                         result.events_reobserved += 1
         return result
 
+    def _has_db(self) -> bool:
+        """True when a connection or an existing db file is available.
+
+        Read paths check this before connecting so that inspection (for
+        example ``project --run``) never creates ``.ontology/canon.db`` on a
+        workspace that has not ingested anything.
+        """
+        return self._conn is not None or self.db_path.exists()
+
     def entity_state(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
+        if not self._has_db():
+            return None
         row = self._connect().execute(
             """
             SELECT properties, first_observation_id, last_observation_id, updated_at
@@ -324,6 +336,8 @@ class SqliteCanonicalStore:
         }
 
     def subject_ids_with_event(self, event: str, subject_entity: str) -> list[str]:
+        if not self._has_db():
+            return []
         rows = self._connect().execute(
             """
             SELECT DISTINCT subject_id FROM events
@@ -336,6 +350,8 @@ class SqliteCanonicalStore:
     def events_for_subject(
         self, subject_entity: str, subject_id: str
     ) -> list[CanonicalEvent]:
+        if not self._has_db():
+            return []
         rows = self._connect().execute(
             """
             SELECT fact_key, event, occurred_at, observed_at,
@@ -361,6 +377,8 @@ class SqliteCanonicalStore:
         ]
 
     def event_links(self, fact_key: str) -> list[tuple[str, str]]:
+        if not self._has_db():
+            return []
         rows = self._connect().execute(
             """
             SELECT observation_id, ingest_id FROM event_observations
@@ -404,6 +422,8 @@ class SqliteCanonicalStore:
             )
 
     def projection_run(self, run_id: str) -> dict[str, Any] | None:
+        if not self._has_db():
+            return None
         row = self._connect().execute(
             """
             SELECT projection, subject, as_of, created_at,

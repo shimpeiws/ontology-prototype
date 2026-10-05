@@ -6,7 +6,7 @@
 
 | Table | Content |
 | --- | --- |
-| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids and the last observation time. A later observation upserts the row; the entity is a read model of "what we believe now", not history. |
+| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids and the last observation time. An upsert applies only when the new observation is at least as recent as the stored one — `updated_at` moves forward in observation time, so out-of-order evidence can never regress current state. |
 | `events` | Append-only business facts keyed by a stable `fact_key`. |
 | `entity_observations` | Every accepted observation that resolved an entity, linked to that entity. |
 | `event_observations` | Every accepted observation that asserted an event fact, including repeats of an already-known fact. |
@@ -23,9 +23,10 @@ A fact key is `sha256` over the event type, subject entity/id, and `occurred_at`
 ## Scope notes
 
 - Entity ids and `ref` values are opaque strings; `JobCompleted` and `InvoiceIssued` both carry the canonical `Job` subject, and no invoice ids are invented when the source has none.
+- `entities` is a current-state read model ordered by observation time, while `events` is append-only history ordered by occurrence — the two can legitimately disagree (a job re-opened after completion keeps its `JobCompleted` fact while `status` moves back). Reconciling the two views is a later stage's job (#8).
 - v0.1 assumes a single writer per workspace, matching the evidence store.
 - JSON property values are stored with datetimes as UTC ISO 8601 strings and dates as `YYYY-MM-DD`.
 
 ## Diagnostics
 
-- `CANON.STORE_ERROR` — the canonical store could not be written (opened inside the ingest diagnostic stream).
+- `CANON.STORE_ERROR` — the canonical store could not be written. The store is a pluggable boundary, so any failure it raises — sqlite errors, IO errors, or a custom implementation's own exception — becomes this diagnostic, never a mid-run traceback.

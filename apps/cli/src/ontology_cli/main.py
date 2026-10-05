@@ -15,6 +15,7 @@ from pathlib import Path
 
 from ontology_core import __version__ as core_version
 from ontology_core import (
+    Diagnostic,
     get_projection_run,
     ingest_snapshot,
     load_workspace,
@@ -252,6 +253,26 @@ def _parse_as_of(text: str) -> datetime | None:
     return parsed
 
 
+def _emit_error(
+    workspace: Path, as_json: bool, code: str, message: str, *, hint: str | None = None
+) -> None:
+    """Print one CLI-level error through the same channels as diagnostics."""
+    diagnostic = Diagnostic("error", code, message, hint=hint)
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "workspace": str(workspace),
+                    "ok": False,
+                    "diagnostics": [diagnostic.to_dict()],
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(diagnostic.format())
+
+
 def _cmd_project(
     workspace: Path,
     projection: str | None,
@@ -262,19 +283,53 @@ def _cmd_project(
 ) -> int:
     loaded = load_workspace(workspace)
     if not loaded.ok:
-        for diagnostic in loaded.diagnostics:
-            print(diagnostic.format())
-        print(f"workspace invalid: {workspace} ({len(loaded.errors)} errors)")
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "valid": False,
+                        "ok": False,
+                        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in loaded.diagnostics:
+                print(diagnostic.format())
+            print(f"workspace invalid: {workspace} ({len(loaded.errors)} errors)")
         return EXIT_INVALID
     assert loaded.workspace is not None
+
+    if run_id is not None and (as_of is not None or projection is not None):
+        _emit_error(
+            workspace,
+            as_json,
+            "PROJECTION.CONFLICTING_ARGS",
+            "--run inspects a frozen run and cannot be combined with "
+            "--as-of or a projection name",
+        )
+        return EXIT_INVALID
 
     if run_id is not None:
         record = get_projection_run(loaded.workspace, run_id)
         if record is None:
-            print(f"ERROR PROJECTION.UNKNOWN_RUN - no frozen run {run_id!r}")
+            _emit_error(
+                workspace,
+                as_json,
+                "PROJECTION.UNKNOWN_RUN",
+                f"no frozen run {run_id!r}",
+                hint="runs are recorded only when the projection evaluates without errors",
+            )
             return EXIT_INVALID
         if as_json:
-            print(json.dumps(record, indent=2))
+            print(
+                json.dumps(
+                    {"workspace": str(workspace), "ok": True, "run": record},
+                    indent=2,
+                )
+            )
         else:
             print(
                 f"run {record['run_id']}: {record['projection']} "
@@ -290,13 +345,22 @@ def _cmd_project(
         return EXIT_OK
 
     if as_of is None:
-        print("ERROR --as-of is required to compute a projection")
+        _emit_error(
+            workspace,
+            as_json,
+            "PROJECTION.AS_OF_REQUIRED",
+            "--as-of is required to compute a projection",
+            hint="or pass --run <run-id> to inspect a frozen run",
+        )
         return EXIT_INVALID
     as_of_dt = _parse_as_of(as_of)
     if as_of_dt is None:
-        print(
-            f"ERROR invalid --as-of {as_of!r}: expected an ISO 8601 datetime "
-            "with an explicit offset (e.g. '2026-10-05T00:00:00Z')"
+        _emit_error(
+            workspace,
+            as_json,
+            "PROJECTION.INVALID_AS_OF",
+            f"invalid --as-of {as_of!r}: expected an ISO 8601 datetime "
+            "with an explicit offset (e.g. '2026-10-05T00:00:00Z')",
         )
         return EXIT_INVALID
 

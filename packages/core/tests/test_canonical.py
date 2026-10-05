@@ -216,6 +216,78 @@ def test_store_error_becomes_diagnostic(tmp_path: Path) -> None:
     assert result.canonical is None
 
 
+def test_non_sqlite_apply_error_becomes_canonical_store_error(
+    tmp_path: Path,
+) -> None:
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    class BuggyStore:
+        def apply(self, ingest_id, observations):
+            raise TypeError("unserializable property")
+
+    result = ingest_snapshot(
+        workspace, snapshot, observed_at=FIXED_NOW, canonical=BuggyStore()
+    )
+
+    # INV-011: the store boundary converts any exception — not only sqlite or
+    # IO errors — into an ordered diagnostic.
+    assert not result.ok
+    assert "CANON.STORE_ERROR" in [d.code for d in result.diagnostics]
+    assert result.canonical is None
+
+
+def test_entity_state_is_monotonic_in_observation_time(tmp_path: Path) -> None:
+    workspace = make_ws(tmp_path)
+    header = "id,status,assignee,amount,completed_at,invoiced_at\n"
+    newer = write_snapshot(
+        tmp_path,
+        "jobs-new.csv",
+        header + "0101,completed,taro,42.5,2026-10-01,\n",
+    )
+    stale = write_snapshot(
+        tmp_path,
+        "jobs-stale.csv",
+        header + "0101,in_progress,hanako,42.5,,\n",
+    )
+
+    assert ingest_snapshot(workspace, newer, observed_at=LATER).ok
+    state = open_store(workspace).entity_state("Job", "0101")
+    assert state is not None
+    assert state["updated_at"] == "2026-10-06T12:00:00Z"
+
+    # Replaying an older observation afterwards must not regress the entity:
+    # current state moves forward in observation time only.
+    result = ingest_snapshot(workspace, stale, observed_at=FIXED_NOW)
+    assert result.ok
+    state = open_store(workspace).entity_state("Job", "0101")
+    assert state["properties"]["status"] == "completed"
+    assert state["properties"]["assignee"] == "taro"
+    assert state["updated_at"] == "2026-10-06T12:00:00Z"
+
+
+def test_ingest_emits_canonical_trace_events(tmp_path: Path) -> None:
+    workspace = make_ws(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+
+    class ListTrace:
+        def __init__(self) -> None:
+            self.events = []
+
+        def emit(self, stage, kind, data):
+            self.events.append((stage, kind, data))
+
+    trace = ListTrace()
+    result = ingest_snapshot(
+        workspace, snapshot, observed_at=FIXED_NOW, trace=trace
+    )
+
+    assert result.ok
+    kinds = [kind for _, kind, _ in trace.events]
+    assert "canonical.event_recorded" in kinds
+    assert "canonical.applied" in kinds
+
+
 def test_property_round_trip(tmp_path: Path) -> None:
     store = SqliteCanonicalStore(tmp_path / "runtime")
     moment = datetime(2026, 9, 30, 8, 30, tzinfo=timezone.utc)

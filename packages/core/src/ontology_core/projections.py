@@ -16,9 +16,9 @@ registered semantics.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
-import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -28,13 +28,18 @@ from typing import Any, Callable
 from .canonical import CanonicalStore, SqliteCanonicalStore
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
-from .model import Workspace
+from .model import ProjectionSpec, Workspace
 from .trace import JsonlTraceSink, TraceSink
 from .workspace import SUPPORTED_SCHEMA_VERSION
 
 # Fixed v0.1 threshold for CompletedButNotInvoiced (see issue #4): strictly
 # greater than two days — exactly two days is not a candidate.
 DELAY_THRESHOLD = timedelta(days=2)
+
+# Version of the registered ``start-without-end-delayed`` semantic. Bump when
+# the selection rules change so previously frozen runs carry a different
+# definition digest.
+_SEMANTIC_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -133,33 +138,46 @@ def run_projection(
     result.run_id = (
         f"prj-{created_at:%Y%m%dT%H%M%S%fZ}-{uuid.uuid4().hex[:8]}"
     )
-    result.definition_digest = _definition_digest(workspace, projection, spec.subject)
-    result.candidates, result.inputs = semantic(
-        workspace, store, spec.subject, result.as_of, diag
-    )
-
+    result.definition_digest = _definition_digest(workspace, projection, spec)
     try:
-        store.record_projection_run(
-            run_id=result.run_id,
-            projection=projection,
-            subject=spec.subject,
-            as_of=result.as_of,
-            created_at=created_at,
-            definition_digest=result.definition_digest,
-            inputs=result.inputs,
-            candidates=[c.to_dict() for c in result.candidates],
+        result.candidates, result.inputs = semantic(
+            workspace, store, spec.subject, result.as_of, diag
         )
-        result.recorded = True
-    except (sqlite3.Error, OSError) as exc:
+    except Exception as exc:
+        # Canonical reads go through the pluggable store boundary: a locked or
+        # corrupt database (or a custom store's own exception) becomes a
+        # diagnostic, never a traceback through the CLI.
         diag.error(
             "PROJECTION.STORE_ERROR",
-            f"cannot record projection run: {exc}",
+            f"cannot read canonical state: {exc}",
         )
+
+    # A run that produced errors is not frozen into projection_runs: a
+    # recorded run must always mean "evaluated successfully", so a failed
+    # evaluation can never masquerade as an empty candidate list.
+    if not diag.has_errors:
+        try:
+            store.record_projection_run(
+                run_id=result.run_id,
+                projection=projection,
+                subject=spec.subject,
+                as_of=result.as_of,
+                created_at=created_at,
+                definition_digest=result.definition_digest,
+                inputs=result.inputs,
+                candidates=[c.to_dict() for c in result.candidates],
+            )
+            result.recorded = True
+        except Exception as exc:
+            diag.error(
+                "PROJECTION.STORE_ERROR",
+                f"cannot record projection run: {exc}",
+            )
 
     try:
         trace.emit(
             "projection",
-            "projection.completed",
+            "projection.failed" if diag.has_errors else "projection.completed",
             {
                 "run_id": result.run_id,
                 "projection": projection,
@@ -168,6 +186,9 @@ def run_projection(
                 "candidates": len(result.candidates),
                 "inputs": len(result.inputs),
                 "recorded": result.recorded,
+                "errors": [
+                    d.code for d in diag.items if d.severity == "error"
+                ],
             },
         )
     except OSError as exc:
@@ -283,11 +304,15 @@ _SEMANTICS: dict[
 }
 
 
-def _definition_digest(workspace: Workspace, projection: str, subject: str) -> str:
+def _definition_digest(
+    workspace: Workspace, projection: str, spec: ProjectionSpec
+) -> str:
     """Digest of everything that defines what this run computes.
 
     Covers the schema version, the projection declaration, the semantic
-    identifier, the evaluation interval the semantic reads, and the fixed
+    identifier and version, the full evaluation contract the semantic reads
+    (interval, metric, aggregation, target, guardrails), the interval events'
+    domain declarations, the date-only timezone policy, and the fixed
     threshold — so a definition or contract edit changes the digest even
     when the candidate list happens to stay the same.
     """
@@ -295,12 +320,20 @@ def _definition_digest(workspace: Workspace, projection: str, subject: str) -> s
     raw = json.dumps(
         {
             "schema_version": SUPPORTED_SCHEMA_VERSION,
-            "projection": {"name": projection, "subject": subject},
-            "semantics": "start-without-end-delayed",
-            "interval": {
-                "start_event": interval.start_event,
-                "end_event": interval.end_event,
+            "projection": dataclasses.asdict(spec),
+            "semantics": {
+                "id": "start-without-end-delayed",
+                "version": _SEMANTIC_VERSION,
             },
+            "evaluation": dataclasses.asdict(workspace.evaluation),
+            "events": {
+                name: dataclasses.asdict(workspace.domain.events[name])
+                for name in (interval.start_event, interval.end_event)
+                if name in workspace.domain.events
+            },
+            "date_only_timezone": (
+                workspace.domain.policies.event_times.date_only_timezone
+            ),
             "threshold_seconds": DELAY_THRESHOLD.total_seconds(),
         },
         sort_keys=True,

@@ -35,7 +35,7 @@ Evidence lands under `<workspace>/.ontology/`:
 | `snapshots/sha256-<digest>.<format>` | Raw source bytes, stored once under their content digest. The source file can change or be deleted afterwards; the stored snapshot is unaffected. |
 | `observations/<ingest_id>.jsonl` | One JSON object per record, written atomically. `ingest_id` is `ing-<utc-timestamp>-<digest8>-<run8>`; the run suffix keeps every run's file distinct and observation files are never overwritten. |
 | `canon.db` | SQLite canonical store: current entity state, append-only events, observation links, and frozen projection runs ([canonical.md](canonical.md)). |
-| `trace.jsonl` | Append-only trace events: `observation.accepted`, `observation.rejected`, `ingest.completed`, `ingest.failed`, `canonical.event_recorded`, `canonical.applied`, `canonical.failed`, `projection.completed`. |
+| `trace.jsonl` | Append-only trace events: `observation.accepted`, `observation.rejected`, `ingest.completed`, `ingest.failed`, `canonical.event_recorded`, `canonical.applied`, `canonical.failed`, `projection.completed`, `projection.failed`. |
 
 `.ontology/` is git-ignored: runtime snapshots, databases, and traces are never committed.
 

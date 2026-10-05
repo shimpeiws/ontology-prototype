@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -158,7 +159,132 @@ def test_projection_uses_explicit_store(tmp_path: Path) -> None:
         workspace, "CompletedButNotInvoiced", as_of=AS_OF, store=store
     )
     assert result.ok
+    # A clean run on an empty store emits no diagnostics at all — a silently
+    # swallowed warning would show up here.
+    assert result.diagnostics == []
     assert result.candidates == []
     assert result.recorded
     assert (tmp_path / "elsewhere" / "canon.db").exists()
     assert not (Path(workspace.path) / RUNTIME_DIR / "canon.db").exists()
+
+
+def test_projection_read_failure_becomes_diagnostic(tmp_path: Path) -> None:
+    workspace = make_projected_ws(tmp_path)
+
+    class LockedStore:
+        def subject_ids_with_event(self, event, subject):
+            raise sqlite3.OperationalError("database is locked")
+
+    result = run_projection(
+        workspace,
+        "CompletedButNotInvoiced",
+        as_of=AS_OF,
+        store=LockedStore(),
+    )
+
+    # Store read failures are diagnostics, not tracebacks through the CLI.
+    assert not result.ok
+    assert "PROJECTION.STORE_ERROR" in [d.code for d in result.diagnostics]
+    assert not result.recorded
+    assert get_projection_run(workspace, result.run_id) is None
+
+
+def test_subject_mismatch_run_is_not_recorded(tmp_path: Path) -> None:
+    # A projection subject that disagrees with the interval event subjects
+    # fails the run — and a failed run is never frozen, so a recorded run
+    # always means "evaluated successfully".
+    docs = support.base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"][
+        "subject"
+    ] = "Person"
+    ws_dir = support.make_workspace(tmp_path / "ws", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok, [d.format() for d in loaded.diagnostics]
+    assert loaded.workspace is not None
+
+    result = run_projection(
+        loaded.workspace, "CompletedButNotInvoiced", as_of=AS_OF
+    )
+
+    assert not result.ok
+    assert "PROJECTION.SUBJECT_MISMATCH" in [
+        d.code for d in result.diagnostics
+    ]
+    assert not result.recorded
+    assert get_projection_run(loaded.workspace, result.run_id) is None
+
+
+def test_projection_record_failure_becomes_diagnostic(tmp_path: Path) -> None:
+    workspace = make_projected_ws(tmp_path)
+
+    class RecordingFailsStore:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def subject_ids_with_event(self, event, subject):
+            return self.inner.subject_ids_with_event(event, subject)
+
+        def events_for_subject(self, entity, entity_id):
+            return self.inner.events_for_subject(entity, entity_id)
+
+        def event_links(self, fact_key):
+            return self.inner.event_links(fact_key)
+
+        def entity_state(self, entity, entity_id):
+            return self.inner.entity_state(entity, entity_id)
+
+        def record_projection_run(self, **kwargs):
+            raise sqlite3.OperationalError("readonly database")
+
+    store = RecordingFailsStore(
+        SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    )
+    result = run_projection(
+        workspace, "CompletedButNotInvoiced", as_of=AS_OF, store=store
+    )
+
+    assert not result.ok
+    assert "PROJECTION.STORE_ERROR" in [d.code for d in result.diagnostics]
+    assert not result.recorded
+
+
+def test_projection_trace_error_is_warning(tmp_path: Path) -> None:
+    workspace = make_projected_ws(tmp_path)
+
+    class FailingTrace:
+        def emit(self, stage, kind, data):
+            raise OSError("no space left")
+
+    result = run_projection(
+        workspace, "CompletedButNotInvoiced", as_of=AS_OF, trace=FailingTrace()
+    )
+
+    # A trace failure degrades to a warning; the run still succeeds.
+    assert result.ok
+    assert "PROJECTION.TRACE_ERROR" in [d.code for d in result.diagnostics]
+    assert result.recorded
+
+
+def test_definition_digest_changes_with_contract(tmp_path: Path) -> None:
+    # INV-009: a contract edit changes the digest even when the candidate
+    # list is identical — frozen runs record which definition produced them.
+    workspace = make_projected_ws(tmp_path)
+    first = run_projection(workspace, "CompletedButNotInvoiced", as_of=AS_OF)
+    assert first.ok
+
+    docs = support.base_docs()
+    docs["evaluation"]["evaluation"]["baseline"] = {"value": 8}
+    other_dir = support.make_workspace(tmp_path / "other", docs)
+    loaded = load_workspace(other_dir)
+    assert loaded.ok and loaded.workspace is not None
+    snapshot = write_snapshot(tmp_path, "jobs-2.csv", CSV_SAMPLE)
+    assert ingest_snapshot(
+        loaded.workspace, snapshot, observed_at=FIXED_NOW
+    ).ok
+
+    second = run_projection(
+        loaded.workspace, "CompletedButNotInvoiced", as_of=AS_OF
+    )
+    assert second.ok
+    assert second.definition_digest != first.definition_digest
+    assert [c.subject_id for c in second.candidates] == ["A01"]

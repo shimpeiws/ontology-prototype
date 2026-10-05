@@ -26,7 +26,6 @@ import dataclasses
 import hashlib
 import io
 import json
-import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -321,7 +320,10 @@ def _apply_canonical(
         canonical = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     try:
         applied = canonical.apply(result.ingest_id or "", result.accepted)
-    except (sqlite3.Error, OSError) as exc:
+    except Exception as exc:
+        # The store is a pluggable boundary: any failure it raises — sqlite
+        # errors, IO errors, or a custom implementation's own exceptions —
+        # becomes a diagnostic, never a mid-run crash.
         message = exc.strerror if isinstance(exc, OSError) else str(exc)
         diag.error(
             "CANON.STORE_ERROR",

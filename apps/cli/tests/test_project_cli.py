@@ -94,6 +94,111 @@ def test_project_run_inspection(tmp_path: Path, capsys) -> None:
     assert "PROJECTION.UNKNOWN_RUN" in capsys.readouterr().out
 
 
+def test_project_json_on_error_paths(tmp_path: Path, capsys) -> None:
+    workspace = ingested_workspace(tmp_path)
+    capsys.readouterr()
+
+    # --json must produce parseable JSON on every error path, like check and
+    # ingest already do.
+    assert (
+        main(["project", str(workspace), "--as-of", "bogus", "--json"])
+        == EXIT_INVALID
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["diagnostics"][0]["code"] == "PROJECTION.INVALID_AS_OF"
+
+    assert main(["project", str(workspace), "--json"]) == EXIT_INVALID
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["diagnostics"][0]["code"] == "PROJECTION.AS_OF_REQUIRED"
+
+    assert (
+        main(["project", str(workspace), "--run", "prj-nope", "--json"])
+        == EXIT_INVALID
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["diagnostics"][0]["code"] == "PROJECTION.UNKNOWN_RUN"
+
+    # An invalid workspace reports JSON too.
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert (
+        main(["project", str(empty), "--as-of", "2026-10-05T00:00:00Z", "--json"])
+        == EXIT_INVALID
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["diagnostics"]
+
+
+def test_project_run_conflicts_with_compute_args(
+    tmp_path: Path, capsys
+) -> None:
+    workspace = ingested_workspace(tmp_path)
+    capsys.readouterr()
+
+    assert (
+        main(["project", str(workspace), "CompletedButNotInvoiced", "--run", "prj-x"])
+        == EXIT_INVALID
+    )
+    assert "PROJECTION.CONFLICTING_ARGS" in capsys.readouterr().out
+
+    assert (
+        main(
+            [
+                "project",
+                str(workspace),
+                "--run",
+                "prj-x",
+                "--as-of",
+                "2026-10-05T00:00:00Z",
+            ]
+        )
+        == EXIT_INVALID
+    )
+    assert "PROJECTION.CONFLICTING_ARGS" in capsys.readouterr().out
+
+
+def test_project_run_json_is_enveloped(tmp_path: Path, capsys) -> None:
+    workspace = ingested_workspace(tmp_path)
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "project",
+                str(workspace),
+                "--as-of",
+                "2026-10-05T00:00:00Z",
+                "--json",
+            ]
+        )
+        == EXIT_OK
+    )
+    run_id = json.loads(capsys.readouterr().out)["run_id"]
+
+    assert (
+        main(["project", str(workspace), "--run", run_id, "--json"]) == EXIT_OK
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["run"]["run_id"] == run_id
+    assert payload["run"]["candidates"]
+
+
+def test_project_run_is_read_only_on_fresh_workspace(
+    tmp_path: Path, capsys
+) -> None:
+    workspace = copy_example(tmp_path)
+    # --run on a workspace with no canon.db must not create runtime artifacts.
+    assert (
+        main(["project", str(workspace), "--run", "prj-nope"]) == EXIT_INVALID
+    )
+    capsys.readouterr()
+    assert not (workspace / ".ontology" / "canon.db").exists()
+
+
 def test_as_of_requires_explicit_offset(tmp_path: Path, capsys) -> None:
     workspace = ingested_workspace(tmp_path)
 

@@ -20,11 +20,13 @@ Each candidate carries the canonical subject, the subject entity's current prope
 
 Every run persists into `projection_runs` (append-only, like `events`):
 
-- the projection definition digest — schema version, projection declaration, semantic id, the evaluation interval it reads, and the fixed threshold;
+- the projection definition digest — schema version, projection declaration, semantic id and version, the full evaluation contract, the interval events' declarations, the date-only timezone policy, and the fixed threshold;
 - the input references examined — per subject, the start/end fact keys and the exclusion reason;
 - the full candidate set as computed.
 
 A historical run is therefore inspectable with `project --run <id>` and unchanged by later ingestion or configuration edits; a definition or contract edit changes the digest even when the candidate list stays the same.
+
+Only successful runs are frozen: a run that fails (`SUBJECT_MISMATCH`, a store error, …) is not recorded, so a stored run always means "evaluated to this candidate set" and never "evaluation failed". The attempt is still traced as `projection.failed` (successful runs emit `projection.completed`), so no record in `projection_runs` plus a failed trace event is inspectable evidence of a failed run. `project --run` is read-only — it does not create `.ontology/` or `canon.db` on a workspace that has not ingested — and cannot be combined with `--as-of` or a projection name.
 
 ## Diagnostics
 
@@ -33,8 +35,15 @@ A historical run is therefore inspectable with `project --run <id>` and unchange
 - `PROJECTION.NAIVE_AS_OF` — `as_of` had no timezone offset.
 - `PROJECTION.SUBJECT_MISMATCH` — the evaluation interval's event subjects do not match the projection subject.
 - `PROJECTION.FUTURE_EVENT` — warning: a start event occurred after `as_of`.
-- `PROJECTION.STORE_ERROR` — the frozen run could not be persisted.
+- `PROJECTION.STORE_ERROR` — canonical state could not be read, or the frozen run could not be persisted.
 - `PROJECTION.TRACE_ERROR` — warning: the trace event could not be written.
+
+CLI argument errors use the same diagnostic channel (and honor `--json`):
+
+- `PROJECTION.AS_OF_REQUIRED` — computing a projection needs `--as-of`.
+- `PROJECTION.INVALID_AS_OF` — `--as-of` is not an ISO 8601 datetime with an explicit offset.
+- `PROJECTION.UNKNOWN_RUN` — `--run` names no recorded run (failed runs are never recorded).
+- `PROJECTION.CONFLICTING_ARGS` — `--run` was combined with `--as-of` or a projection name.
 
 ## Non-goals
 
