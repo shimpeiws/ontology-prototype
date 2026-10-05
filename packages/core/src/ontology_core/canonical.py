@@ -21,6 +21,12 @@ persists them under ``<workspace>/.ontology/canon.db``:
   version, the candidate input digest, the raw model output, and the
   validated/rejected proposal split. It never carries an approval or
   execution state — human decisions and write-back are separate stages.
+- ``proposals`` — validated action proposals persisted with their
+  diagnosis run (see decisions.py), append-only. Each row carries the
+  exact payload digest a later decision binds to.
+- ``decisions`` — append-only human approvals/rejections. A proposal's
+  current lifecycle state is derived from its latest decision; history
+  is never rewritten.
 
 One ingest run applies in a single transaction: entity upserts, event
 inserts, and observation links commit together or not at all. v0.1 assumes a
@@ -101,6 +107,29 @@ CREATE TABLE IF NOT EXISTS diagnosis_runs (
     diagnostics TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS proposals (
+    proposal_id TEXT PRIMARY KEY,
+    diagnosis_run_id TEXT NOT NULL,
+    proposal_index INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    params TEXT NOT NULL,
+    reason TEXT,
+    subject_entity TEXT,
+    subject_id TEXT,
+    related_entities TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    payload_digest TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS decisions (
+    decision_id TEXT PRIMARY KEY,
+    proposal_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reviewer TEXT NOT NULL,
+    reason TEXT,
+    payload_digest TEXT NOT NULL,
+    decided_at TEXT NOT NULL
+);
 CREATE TRIGGER IF NOT EXISTS events_no_update
 BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'canonical events are append-only'); END;
@@ -119,6 +148,18 @@ BEGIN SELECT RAISE(ABORT, 'diagnosis runs are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS diagnosis_runs_no_delete
 BEFORE DELETE ON diagnosis_runs
 BEGIN SELECT RAISE(ABORT, 'diagnosis runs are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS proposals_no_update
+BEFORE UPDATE ON proposals
+BEGIN SELECT RAISE(ABORT, 'proposals are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS proposals_no_delete
+BEFORE DELETE ON proposals
+BEGIN SELECT RAISE(ABORT, 'proposals are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS decisions_no_update
+BEFORE UPDATE ON decisions
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS decisions_no_delete
+BEFORE DELETE ON decisions
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
 """
 
 
@@ -217,12 +258,33 @@ class CanonicalStore(Protocol):
         """A frozen run record with parsed inputs/candidates, or None."""
         ...
 
-    def record_diagnosis_run(self, record: dict[str, Any]) -> None:
-        """Append one diagnosis run record; runs are append-only."""
+    def record_diagnosis_run(
+        self,
+        record: dict[str, Any],
+        proposal_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Append one diagnosis run record (and its validated proposal
+        rows) in a single transaction; both are append-only."""
         ...
 
     def diagnosis_run(self, run_id: str) -> dict[str, Any] | None:
         """A recorded diagnosis run with parsed JSON columns, or None."""
+        ...
+
+    def proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        """A persisted proposal with parsed JSON columns, or None."""
+        ...
+
+    def proposals(self) -> list[dict[str, Any]]:
+        """All persisted proposals, ordered by creation time."""
+        ...
+
+    def record_decision(self, record: dict[str, Any]) -> None:
+        """Append one human decision; decisions are append-only."""
+        ...
+
+    def decisions_for(self, proposal_id: str) -> list[dict[str, Any]]:
+        """All decisions on one proposal, ordered by decided_at."""
         ...
 
 
@@ -507,7 +569,11 @@ class SqliteCanonicalStore:
             "candidates": json.loads(row[6]),
         }
 
-    def record_diagnosis_run(self, record: dict[str, Any]) -> None:
+    def record_diagnosis_run(
+        self,
+        record: dict[str, Any],
+        proposal_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
         conn = self._connect()
         with conn:
             conn.execute(
@@ -537,6 +603,135 @@ class SqliteCanonicalStore:
                     _iso_z(record["created_at"]),
                 ),
             )
+            for row in proposal_rows or []:
+                conn.execute(
+                    """
+                    INSERT INTO proposals (
+                        proposal_id, diagnosis_run_id, proposal_index,
+                        action, params, reason,
+                        subject_entity, subject_id, related_entities,
+                        evidence, payload_digest, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        row["proposal_id"],
+                        row["diagnosis_run_id"],
+                        row["proposal_index"],
+                        row["action"],
+                        json.dumps(row["params"], sort_keys=True),
+                        row.get("reason"),
+                        row.get("subject_entity"),
+                        row.get("subject_id"),
+                        json.dumps(row["related_entities"], sort_keys=True),
+                        json.dumps(row["evidence"], sort_keys=True),
+                        row["payload_digest"],
+                        _iso_z(row["created_at"]),
+                    ),
+                )
+
+    def proposal(self, proposal_id: str) -> dict[str, Any] | None:
+        if not self._has_db():
+            return None
+        row = self._connect().execute(
+            """
+            SELECT diagnosis_run_id, proposal_index, action, params, reason,
+                   subject_entity, subject_id, related_entities, evidence,
+                   payload_digest, created_at
+            FROM proposals WHERE proposal_id = ?
+            """,
+            (proposal_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "proposal_id": proposal_id,
+            "diagnosis_run_id": row[0],
+            "proposal_index": row[1],
+            "action": row[2],
+            "params": json.loads(row[3]),
+            "reason": row[4],
+            "subject_entity": row[5],
+            "subject_id": row[6],
+            "related_entities": json.loads(row[7]),
+            "evidence": json.loads(row[8]),
+            "payload_digest": row[9],
+            "created_at": row[10],
+        }
+
+    def proposals(self) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT proposal_id, diagnosis_run_id, proposal_index, action,
+                   params, reason, subject_entity, subject_id,
+                   related_entities, evidence, payload_digest, created_at
+            FROM proposals ORDER BY created_at, proposal_id
+            """
+        ).fetchall()
+        return [
+            {
+                "proposal_id": row[0],
+                "diagnosis_run_id": row[1],
+                "proposal_index": row[2],
+                "action": row[3],
+                "params": json.loads(row[4]),
+                "reason": row[5],
+                "subject_entity": row[6],
+                "subject_id": row[7],
+                "related_entities": json.loads(row[8]),
+                "evidence": json.loads(row[9]),
+                "payload_digest": row[10],
+                "created_at": row[11],
+            }
+            for row in rows
+        ]
+
+    def record_decision(self, record: dict[str, Any]) -> None:
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO decisions (
+                    decision_id, proposal_id, decision, reviewer, reason,
+                    payload_digest, decided_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record["decision_id"],
+                    record["proposal_id"],
+                    record["decision"],
+                    record["reviewer"],
+                    record.get("reason"),
+                    record["payload_digest"],
+                    _iso_z(record["decided_at"]),
+                ),
+            )
+
+    def decisions_for(self, proposal_id: str) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT decision_id, decision, reviewer, reason, payload_digest,
+                   decided_at
+            FROM decisions WHERE proposal_id = ?
+            ORDER BY decided_at, decision_id
+            """,
+            (proposal_id,),
+        ).fetchall()
+        return [
+            {
+                "decision_id": row[0],
+                "proposal_id": proposal_id,
+                "decision": row[1],
+                "reviewer": row[2],
+                "reason": row[3],
+                "payload_digest": row[4],
+                "decided_at": row[5],
+            }
+            for row in rows
+        ]
 
     def diagnosis_run(self, run_id: str) -> dict[str, Any] | None:
         if not self._has_db():

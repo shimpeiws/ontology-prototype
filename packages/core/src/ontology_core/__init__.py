@@ -12,6 +12,14 @@ from .canonical import (
     SqliteCanonicalStore,
     event_fact_key,
 )
+from .decisions import (
+    ApprovalCheck,
+    DecisionResult,
+    check_approval,
+    decide,
+    payload_digest,
+    proposal_view,
+)
 from .diagnostics import Diagnostic, Diagnostics
 from .diagnosis import (
     PROMPT_VERSION,
@@ -76,10 +84,12 @@ __all__ = [
     "ActionSpec",
     "AgentDefinition",
     "ApplyResult",
+    "ApprovalCheck",
     "CanonicalEvent",
     "CanonicalStore",
     "Condition",
     "Diagnostic",
+    "DecisionResult",
     "Diagnostics",
     "DiagnosisProvider",
     "DiagnosisResult",
@@ -122,11 +132,15 @@ __all__ = [
     "WORKSPACE_FILES",
     "Workspace",
     "__version__",
+    "check_approval",
+    "decide",
     "event_fact_key",
     "get_diagnosis_run",
     "get_projection_run",
     "ingest_snapshot",
     "load_workspace",
+    "payload_digest",
+    "proposal_view",
     "run_diagnosis",
     "run_projection",
 ]

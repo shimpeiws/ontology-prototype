@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .canonical import CanonicalStore, SqliteCanonicalStore
+from .decisions import build_proposal_rows
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
 from .model import PropertySpec, Workspace
@@ -322,7 +323,14 @@ def run_diagnosis(
                 "rejected": result.rejected,
                 "diagnostics": [d.to_dict() for d in diag.items],
                 "created_at": created_at,
-            }
+            },
+            build_proposal_rows(
+                workspace,
+                result.run_id,
+                result.proposals,
+                candidates,
+                created_at,
+            ),
         )
         result.recorded = True
     except Exception as exc:

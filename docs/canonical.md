@@ -11,6 +11,9 @@
 | `entity_observations` | Every accepted observation that resolved an entity, linked to that entity. |
 | `event_observations` | Every accepted observation that asserted an event fact, including repeats of an already-known fact. |
 | `projection_runs` | Frozen projection results (see [projections.md](projections.md)). |
+| `diagnosis_runs` | Recorded diagnosis runs (see [diagnosis.md](diagnosis.md)). |
+| `proposals` | Validated action proposals with payload digests (see [decisions.md](decisions.md)). |
+| `decisions` | Append-only human approve/reject decisions; latest wins (see [decisions.md](decisions.md)). |
 
 ## Event identity and append-only history
 
