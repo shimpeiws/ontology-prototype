@@ -182,30 +182,53 @@ def backfill_proposals(
         for run in store.diagnosis_runs():
             run_id = run["run_id"]
             # Rows already indexed for this run own their ids: a proposal
-            # that matches one by payload keeps that identity (and its
-            # decisions) instead of being duplicated under a new suffix.
-            by_digest: dict[str, list[int]] = {}
-            used: set[int] = set()
-            for existing in all_rows:
-                if existing["diagnosis_run_id"] != run_id:
-                    continue
-                by_digest.setdefault(
-                    existing["payload_digest"], []
-                ).append(existing["proposal_index"])
-                used.add(existing["proposal_index"])
+            # that matches one keeps that identity (and its decisions)
+            # instead of being duplicated under a new suffix. Matching is
+            # positional first — the row at the proposal's own index is
+            # unambiguous — then by (digest, reason) to reconcile ids
+            # assigned under an older numbering scheme; identical
+            # payloads are told apart by their reason so a missing twin
+            # is restored rather than hidden.
+            existing = [
+                row
+                for row in all_rows
+                if row["diagnosis_run_id"] == run_id
+            ]
+            by_index = {row["proposal_index"]: row for row in existing}
+            claimed: set[int] = set()
+            used: set[int] = set(by_index)
             subject_entity = _frozen_subject(store, run, current_subject)
             raw_items = _raw_output_items(run)
             for position, prop in enumerate(run.get("proposals") or []):
                 digest = payload_digest(
                     prop.get("action"), prop.get("params") or {}
                 )
-                pending = by_digest.get(digest)
-                if pending:
-                    pending.pop(0)
-                    continue
                 index = prop.get("index")
                 if not isinstance(index, int):
                     index = _match_output_index(prop, raw_items, position)
+                row = by_index.get(index)
+                if (
+                    row is not None
+                    and row["proposal_index"] not in claimed
+                    and row["payload_digest"] == digest
+                ):
+                    claimed.add(row["proposal_index"])
+                    continue
+                twin = next(
+                    (
+                        row
+                        for row in sorted(
+                            existing, key=lambda r: r["proposal_index"]
+                        )
+                        if row["proposal_index"] not in claimed
+                        and row["payload_digest"] == digest
+                        and row["reason"] == prop.get("reason")
+                    ),
+                    None,
+                )
+                if twin is not None:
+                    claimed.add(twin["proposal_index"])
+                    continue
                 while index in used:
                     index += 1
                 used.add(index)

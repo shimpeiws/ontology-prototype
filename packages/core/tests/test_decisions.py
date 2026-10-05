@@ -1165,3 +1165,77 @@ def test_backfill_resolves_index_collisions(tmp_path: Path) -> None:
     views = proposal_view(workspace)
     ids = sorted(v["proposal_id"] for v in views)
     assert ids == ["dgx-mixed-p1", "dgx-mixed-p2", "dgx-mixed-p3"]
+
+
+def test_backfill_restores_missing_twin_proposal(tmp_path: Path) -> None:
+    """Two identical-payload proposals where only the later was indexed:
+    the earlier one must be restored under its own id, not hidden by a
+    digest match against its twin."""
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    params = {"target": "taro", "related_entity": "A01", "reason": "x"}
+    digest = payload_digest("SendReminder", params)
+    conn = store._connect()
+    conn.execute(
+        "INSERT INTO diagnosis_runs (run_id, provider, model,"
+        " prompt_version, prompt, status, input_digest, provider_called,"
+        " output, deliverables, proposals, rejected, diagnostics,"
+        " created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-twins",
+            "legacy-provider",
+            "m",
+            "diagnosis.v1",
+            "prompt",
+            "ok",
+            "sha256:x",
+            1,
+            "{}",
+            "{}",
+            json.dumps(
+                [
+                    {"action": "SendReminder", "params": params,
+                     "reason": "check A"},
+                    {"action": "SendReminder", "params": params,
+                     "reason": "check B"},
+                ]
+            ),
+            "[]",
+            "[]",
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    # Only the later proposal ("check B") is indexed at -p1.
+    conn.execute(
+        "INSERT INTO proposals (proposal_id, diagnosis_run_id,"
+        " proposal_index, action, params, reason, subject_entity,"
+        " subject_id, related_entities, evidence, payload_digest,"
+        " created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-twins-p1",
+            "dgx-twins",
+            1,
+            "SendReminder",
+            json.dumps(params),
+            "check B",
+            "Job",
+            "A01",
+            "[]",
+            "{}",
+            digest,
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.commit()
+
+    views = {
+        v["proposal_id"]: v for v in proposal_view(workspace)
+    }
+    assert set(views) == {"dgx-twins-p0", "dgx-twins-p1"}
+    assert views["dgx-twins-p0"]["reason"] == "check A"
+    assert views["dgx-twins-p1"]["reason"] == "check B"

@@ -106,9 +106,12 @@ Backfilled rows reconstruct history conservatively:
 - `subject_entity` comes from the frozen projection run (not the current
   contract), so a workspace edited since diagnosis cannot relabel what
   was proposed.
-- Rows already indexed for a run keep their ids: a proposal matching an
-  existing row's payload digest reuses that identity — decisions
-  recorded against it are never split across a renumbered duplicate.
+- Rows already indexed for a run keep their ids: a proposal is matched
+  to an existing row positionally first (same `proposal_index` and
+  payload digest), then by payload digest plus `reason` to reconcile
+  ids assigned under an older numbering scheme — decisions recorded
+  against a row are never split across a renumbered duplicate, and
+  identical payloads are told apart by their reason.
 - For records that carry the model-output `index`, the `-pN` suffix is
   the raw output position. Older records without it try to recover the
   position by matching each proposal back to the recorded model output
