@@ -50,7 +50,8 @@ what is already known, inside the same transaction:
   keeps both facts and records the ambiguity for an operator to resolve;
   nothing is overwritten.
 - ``correlated_intervention`` — a persisted proposal targets the fact's
-  subject (as its canonical subject or a related entity). The link is
+  subject (as its canonical subject or a related entity), and the fact
+  did not occur before the day the proposal was recorded. The link is
   explicitly a correlation: the system observed the fact *after* an
   intervention on the same subject, which is not a causal claim.
 
@@ -1086,11 +1087,12 @@ def _link_new_fact(
     type and subject with a different ``occurred_at`` is a possible
     correction (both facts stay; the link only flags the ambiguity), and
     every persisted proposal touching the event's subject — as its
-    canonical subject or a related entity — gets a
-    ``correlated_intervention`` link. Proposal state is deliberately not
-    part of the link: correlation is worth recording even when the
-    intervention was rejected or failed, and the live decision/execution
-    state stays queryable through the proposal id.
+    canonical subject or a related entity — and recorded no later than
+    the day the fact occurred gets a ``correlated_intervention`` link.
+    Proposal state is deliberately not part of the link: correlation is
+    worth recording even when the intervention was rejected or failed,
+    and the live decision/execution state stays queryable through the
+    proposal id.
     """
     created = _iso_z(observed_at)
     links: list[FactLink] = []
@@ -1151,6 +1153,20 @@ def _link_new_fact(
         )
         if not touches_subject:
             continue
+        # A fact dated before the day the proposal was recorded cannot
+        # be a later observation of that intervention — ingestion order
+        # is not business-event order. The comparison is at day
+        # granularity: source times are often date-only (midnight), so an
+        # intraday comparison would misclassify same-day facts. When the
+        # proposal's time cannot be read the ordering is unknown and the
+        # correlation still records.
+        proposed_at = _parse_time(proposal.get("created_at"))
+        if (
+            proposed_at is not None
+            and event.occurred_at.astimezone(timezone.utc).date()
+            < proposed_at.date()
+        ):
+            continue
         link = FactLink(
             fact_key=fact_key,
             relation=REL_CORRELATED_INTERVENTION,
@@ -1202,6 +1218,22 @@ def _link_rows(rows: Iterable[tuple]) -> list[dict[str, Any]]:
 
 def _iso_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_time(value: Any) -> datetime | None:
+    """Best-effort parse of a stored timestamp into an aware datetime."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _insert_proposal_rows(

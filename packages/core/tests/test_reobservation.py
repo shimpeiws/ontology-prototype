@@ -587,6 +587,64 @@ def test_link_matches_via_related_entities_ref(tmp_path: Path) -> None:
     assert targets == {"run-rel-p0", "run-null-p0"}
 
 
+def test_fact_predating_intervention_does_not_link(tmp_path: Path) -> None:
+    """A fact dated before the proposal was recorded is provably not a
+    later outcome — ingestion order is not business-event order."""
+    workspace = make_ws(tmp_path)
+    ingest(workspace, tmp_path, "jobs.csv", INITIAL_CSV, FIXED_NOW)
+    open_store(workspace).record_proposal_rows(
+        [
+            {
+                "proposal_id": "run-p-p0",
+                "diagnosis_run_id": "run-p",
+                "proposal_index": 0,
+                "action": "SendReminder",
+                "params": {"target": "taro", "related_entity": "0101"},
+                "reason": "x",
+                "subject_entity": "Job",
+                "subject_id": "0101",
+                "related_entities": [],
+                "evidence": {},
+                "payload_digest": "sha256:p",
+                "created_at": datetime(2026, 10, 5, tzinfo=timezone.utc),
+            }
+        ]
+    )
+
+    # The invoice was issued on 10-03 — before the proposal existed —
+    # even though the snapshot reporting it only arrives on 10-06.
+    earlier_invoice = HEADER + "0101,completed,taro,42.5,2026-10-01,2026-10-03\n"
+    first = ingest(
+        workspace, tmp_path, "jobs-a.csv", earlier_invoice, LATER
+    )
+    assert first.ok
+    invoice = next(
+        f for f in facts(workspace, "Job", "0101") if f.event == "InvoiceIssued"
+    )
+    links = open_store(workspace).fact_links(invoice.fact_key)
+    assert [
+        l for l in links if l["relation"] == "correlated_intervention"
+    ] == []
+
+    # A fact dated after the proposal still links.
+    newest_invoice = HEADER + "0101,completed,taro,42.5,2026-10-01,2026-10-07\n"
+    second = ingest(
+        workspace, tmp_path, "jobs-b.csv", newest_invoice, EVEN_LATER
+    )
+    assert second.ok
+    newest = next(
+        f
+        for f in facts(workspace, "Job", "0101")
+        if f.occurred_at == datetime(2026, 10, 7, tzinfo=timezone.utc)
+    )
+    links = open_store(workspace).fact_links(newest.fact_key)
+    assert [
+        l["target"]
+        for l in links
+        if l["relation"] == "correlated_intervention"
+    ] == ["run-p-p0"]
+
+
 def test_apply_survives_unreadable_proposal_row(tmp_path: Path) -> None:
     """A corrupt proposals row must not fail canonical apply — linking
     is auxiliary, so it is skipped rather than breaking the run."""
