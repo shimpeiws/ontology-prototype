@@ -427,6 +427,38 @@ def test_identical_reingest_preserves_guardrail_evidence(
     assert after["postdating_as_of"] == 1
 
 
+def test_legacy_backfill_survives_read_only_close(tmp_path: Path) -> None:
+    # Devin review: _migrate's backfill ran inside the connection's
+    # pending transaction. A read-only caller closing the store rolled
+    # it back while the new column stayed, so legacy invoices kept an
+    # empty timestamp forever and the guardrail excluded them as
+    # postdating. The migration now commits before anyone can close.
+    runtime = tmp_path / "runtime"
+    store = SqliteCanonicalStore(runtime)
+    add_invoices(store, [("inv-b1", "B1", False)])
+    store.close()
+
+    # Simulate a database written before the column existed.
+    raw = sqlite3.connect(runtime / "canon.db")
+    raw.execute("ALTER TABLE entities DROP COLUMN properties_changed_at")
+    raw.commit()
+    raw.close()
+
+    # A read-only open runs the migration, then closes without writes.
+    reader = SqliteCanonicalStore(runtime)
+    assert reader.entities_of_type("Invoice")
+    reader.close()
+
+    raw = sqlite3.connect(runtime / "canon.db")
+    values = raw.execute(
+        "SELECT properties_changed_at, updated_at FROM entities"
+    ).fetchall()
+    raw.close()
+    assert values
+    for changed_at, updated_at in values:
+        assert changed_at == updated_at
+
+
 def test_guardrail_not_applicable_to_non_job_subjects(
     tmp_path: Path,
 ) -> None:

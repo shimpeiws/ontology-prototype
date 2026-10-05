@@ -533,6 +533,11 @@ class SqliteCanonicalStore:
                 "UPDATE entities SET properties_changed_at = updated_at "
                 "WHERE properties_changed_at = ''"
             )
+            # The backfill must commit now: a read-only caller can close
+            # the connection without a write, and a rolled-back update
+            # would leave the column present but empty — with no later
+            # pass to repair it.
+            conn.commit()
 
     def close(self) -> None:
         if self._conn is not None:
