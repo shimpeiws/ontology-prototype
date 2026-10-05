@@ -322,6 +322,140 @@ def test_guardrail_unsupported_metric(tmp_path: Path) -> None:
     ]
 
 
+def test_count_aggregation_never_fabricates_an_aggregate(
+    tmp_path: Path,
+) -> None:
+    # FIND-001: `count` returned 0.0 on an empty cohort because the
+    # count branch ran before the empty guard — a fabricated aggregate
+    # that made `change` measured and could attain the target on zero
+    # evidence. No measured intervals means no aggregate, for every
+    # aggregation.
+    docs = support.base_docs()
+    docs["evaluation"]["evaluation"]["aggregation"] = "count"
+    ws_dir = support.make_workspace(tmp_path / "ws", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok and loaded.workspace is not None
+    workspace = loaded.workspace
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        "id,status,assignee,amount,completed_at,invoiced_at\n"
+        "B1,completed,taro,1,2026-09-21,2026-09-30\n"
+        "A1,completed,hanako,1,2026-10-06,2026-10-09\n",
+    )
+    assert ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW).ok
+
+    result = run_evaluation(workspace, as_of=AS_OF, boundary=BOUNDARY)
+
+    assert result.ok
+    report = result.report
+    # Non-empty cohorts report the interval count as the aggregate…
+    assert report["cohorts"]["baseline"]["aggregate"] == 1.0
+    assert report["cohorts"]["after"]["aggregate"] == 1.0
+    # …and a count delta is movement, not a duration verdict.
+    assert report["change"] == {
+        "status": "measured",
+        "value": 0.0,
+        "direction": "unchanged",
+    }
+
+    # An empty after cohort stays unavailable even under `count`.
+    workspace2_dir = support.make_workspace(tmp_path / "ws2", docs)
+    loaded2 = load_workspace(workspace2_dir)
+    assert loaded2.ok and loaded2.workspace is not None
+    snapshot2 = write_snapshot(
+        tmp_path,
+        "jobs2.csv",
+        "id,status,assignee,amount,completed_at,invoiced_at\n"
+        "B1,completed,taro,1,2026-09-21,2026-09-30\n",
+    )
+    assert ingest_snapshot(
+        loaded2.workspace, snapshot2, observed_at=FIXED_NOW
+    ).ok
+
+    result2 = run_evaluation(
+        loaded2.workspace, as_of=AS_OF, boundary=BOUNDARY
+    )
+
+    assert result2.ok
+    report2 = result2.report
+    assert report2["cohorts"]["after"]["aggregate"] is None
+    assert report2["cohorts"]["after"]["counts"]["paired"] == 0
+    assert report2["change"]["status"] == "unavailable"
+    assert report2["target"]["status"] == "unverified"
+    assert report2["overall"]["status"] == "unverified"
+
+
+def test_subject_with_only_future_events_is_documented(
+    tmp_path: Path,
+) -> None:
+    # FIND-003: a subject whose only interval facts are all after as_of
+    # is `excluded` — inspectable in the inputs with its future fact
+    # keys, emitting no diagnostic because it asserts nothing about the
+    # as-of state.
+    csv_text = (
+        "id,status,assignee,amount,completed_at,invoiced_at\n"
+        "I1,in_progress,hanako,1,,2026-10-25\n"
+    )
+    workspace = make_evaluated_ws(tmp_path, csv_text)
+
+    result = run_evaluation(workspace, as_of=AS_OF, boundary=BOUNDARY)
+
+    assert result.ok
+    entry = result.report["inputs"][0]
+    assert entry["subject_id"] == "I1"
+    assert entry["disposition"] == "excluded"
+    assert entry["excluded"] == "no events at or before as_of"
+    assert entry["future_end_fact_keys"]
+    assert result.report["unpaired_ends"] == []
+    # No interval diagnostic fires for an all-future subject — the only
+    # diagnostic is the unrelated missing guardrail evidence.
+    assert [d.code for d in result.diagnostics] == [
+        "EVALUATION.GUARDRAIL_UNAVAILABLE"
+    ]
+
+
+def test_record_failure_reports_but_does_not_freeze(
+    tmp_path: Path,
+) -> None:
+    # FIND-002: a run whose freeze fails still returns the computed
+    # report — but recorded stays False so no consumer can mistake it
+    # for an inspectable run.
+    workspace = make_evaluated_ws(tmp_path)
+
+    class UnrecordableStore:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def subject_ids_with_event(self, event, subject):
+            return self._inner.subject_ids_with_event(event, subject)
+
+        def events_for_subject(self, entity, subject_id):
+            return self._inner.events_for_subject(entity, subject_id)
+
+        def entities_of_type(self, entity_type):
+            return self._inner.entities_of_type(entity_type)
+
+        def record_evaluation_run(self, **kwargs):
+            raise sqlite3.OperationalError("disk full")
+
+    inner = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    result = run_evaluation(
+        workspace,
+        as_of=AS_OF,
+        boundary=BOUNDARY,
+        store=UnrecordableStore(inner),
+    )
+
+    assert not result.ok
+    assert result.report is not None
+    assert result.recorded is False
+    assert "EVALUATION.STORE_ERROR" in [
+        d.code for d in result.diagnostics
+    ]
+    assert get_evaluation_run(workspace, result.run_id) is None
+
+
 def test_empty_and_partial_cohorts(tmp_path: Path) -> None:
     # An empty after cohort leaves target unverified; both empty leaves
     # change unavailable — honest unavailability, not a zero claim.

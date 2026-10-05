@@ -355,7 +355,12 @@ class CanonicalStore(Protocol):
         ...
 
     def entities_of_type(self, entity_type: str) -> list[dict[str, Any]]:
-        """All current entity states of one type, ordered by entity id."""
+        """All current entity states of one type, ordered by entity id.
+
+        Guardrail evidence reads go through this method; an
+        implementation predating it fails loudly as a store error
+        rather than silently evaluating a guardrail on no evidence.
+        """
         ...
 
     def subject_ids_with_event(self, event: str, subject_entity: str) -> list[str]:

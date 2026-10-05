@@ -21,16 +21,21 @@ Each subject resolves to exactly one disposition:
 - **invalid** — every end event precedes the start event, so the only pairings would have negative duration (`EVALUATION.NEGATIVE_INTERVAL`).
 - **ambiguous** — the interval cannot be paired uniquely: more than one start event, or end events on both sides of the start (`EVALUATION.AMBIGUOUS_INTERVAL`). Ambiguous subjects are excluded from aggregates.
 - **unpaired_end** — an end event with no visible start event (`EVALUATION.END_WITHOUT_START`); it belongs to no cohort and is reported under `unpaired_ends`.
+- **excluded** — no visible events at all: a future-dated start event (`EVALUATION.FUTURE_EVENT`), or a subject whose only interval facts are all after `as_of`. Excluded subjects stay inspectable in the report inputs with their future fact keys; an all-future subject emits no diagnostic because it asserts nothing about the as-of state.
 
 ## Aggregates, target, guardrails
 
-The report computes per cohort the paired intervals and their aggregate in the contract's unit (for v0.1, `median` of `duration` in `days`). `change` is `baseline − after`; for the duration metric a positive value is an improvement. Either cohort without measured intervals makes `change` and the target `unavailable`/`unverified` — honest unavailability, never a zero claim.
+The report computes per cohort the paired intervals and their aggregate in the contract's unit (for v0.1, `median` of `duration` in `days`). `change` is `baseline − after`; for the duration metric a positive value is an improvement. Either cohort without measured intervals makes `change` and the target `unavailable`/`unverified` — honest unavailability, never a zero claim, and this holds for every aggregation: a cohort with zero paired intervals has no aggregate at all (its interval count is already explicit in `counts` and `sample`).
+
+With `aggregation: count` the aggregate is the number of paired intervals rather than a duration, and `change.direction` is reported as `increase`/`decrease`/`unchanged` — interval-count movement, not a duration verdict.
 
 The target compares the after aggregate with the contract comparator — `lt` is strict, so a median exactly on the target is a **miss**.
 
 Guardrails evaluate per cohort from explicit counts and denominators. The registered `invoice_error_rate` semantics reads `Invoice` entities linked to a cohort subject through the `job` ref, counting those whose boolean `error` flag is `true` over those carrying a boolean flag; invoices without the flag and invoices linked to no cohort subject are reported as evidence gaps, never folded into the rate. `not_increase` requires rates for both cohorts; a missing denominator makes the guardrail **unavailable** — never `passed`. A contract naming a metric with no registered semantics also reports `unavailable`.
 
-`overall` is `success` only when the target is attained and every guardrail passed; a missed target or failed guardrail is `not_met`; anything else is `unverified`.
+`overall` is `success` only when the target is attained and every guardrail passed; a missed target or failed guardrail is `not_met`; anything else is `unverified`. The exit code reports operational success only — `ontology evaluate` exits nonzero when the evaluation could not be computed or frozen, not on the business verdict; a `not_met` report still exits 0 and is inspected via stdout or `--json`.
+
+Guardrail evidence reads the latest *observed* entity state, not the state as of `as_of` — the same caveat as projection candidates. Invoice properties may postdate the evaluation instant; the paired intervals themselves are strictly `occurred_at <= as_of`.
 
 ## Frozen runs
 
@@ -60,7 +65,8 @@ The report records an observed difference between time-based cohorts. The bounda
 - `EVALUATION.FUTURE_EVENT` — warning: a start event occurred after `as_of`.
 - `EVALUATION.GUARDRAIL_UNAVAILABLE` — warning: a guardrail lacks the evidence to decide.
 - `EVALUATION.UNSUPPORTED_GUARDRAIL` — warning: a guardrail metric has no registered semantics.
-- `EVALUATION.STORE_ERROR` — canonical state could not be read, or the frozen run could not be persisted.
+- `EVALUATION.STORE_ERROR` — canonical state could not be read, or the frozen run could not be persisted. A store write failure still prints the computed report, but without a `run <id>` label and with a `report not frozen` note — an unrecorded run id is never presented as inspectable.
+- `EVALUATION.UNKNOWN_EVENT` — the contract's interval event is not declared in the domain (unreachable through `load_workspace`, which validates it; only a directly constructed `Workspace` can produce it).
 - `EVALUATION.TRACE_ERROR` — warning: the trace event could not be written.
 
 CLI argument errors use the same diagnostic channel (and honor `--json`):

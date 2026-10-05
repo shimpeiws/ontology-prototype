@@ -1217,7 +1217,15 @@ def _cmd_evaluate(
         for diagnostic in result.diagnostics:
             print(diagnostic.format())
         if result.report is not None:
-            _print_evaluation_report(result.report, run_id=result.run_id)
+            # Only a recorded run is labeled `run <id>`: an unrecorded
+            # report (e.g. the freeze itself failed) must never present
+            # a run id that `evaluate --run` cannot find.
+            _print_evaluation_report(
+                result.report,
+                run_id=result.run_id if result.recorded else None,
+            )
+            if not result.recorded:
+                print("  report not frozen (run not recorded)")
 
     return EXIT_OK if result.ok else EXIT_INVALID
 

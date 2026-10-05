@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 from clisupport import copy_example
 
 from ontology_cli.main import EXIT_INVALID, EXIT_OK, main
+from ontology_core import SqliteCanonicalStore
 
 JOBS_CSV = (
     "id,status,assignee,completed_at,invoiced_at\n"
@@ -235,6 +237,48 @@ def test_evaluate_reports_store_error(tmp_path: Path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
     assert payload["diagnostics"][0]["code"] == "EVALUATION.STORE_ERROR"
+
+
+def test_evaluate_not_met_still_exits_ok(tmp_path: Path, capsys) -> None:
+    # FIND-004: the exit code reports operational success only — a
+    # missed target is a `not_met` report, still inspectable on stdout.
+    workspace = copy_example(tmp_path)
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        "id,status,assignee,completed_at,invoiced_at\n"
+        "B1,completed,taro,2026-09-21,2026-09-30\n"
+        "A1,completed,hanako,2026-10-06,2026-10-10\n",
+    )
+    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    capsys.readouterr()
+
+    assert main(evaluate_args(workspace)) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "target lt 4 days: missed" in out
+    assert "overall: not_met" in out
+
+
+def test_evaluate_record_failure_does_not_label_run(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    # FIND-002: a run whose freeze fails must never present its run id
+    # as inspectable — `evaluate --run` could not find it.
+    workspace = ingested_workspace(tmp_path)
+    capsys.readouterr()
+
+    def boom(self, **kwargs):
+        raise sqlite3.OperationalError("disk full")
+
+    monkeypatch.setattr(
+        SqliteCanonicalStore, "record_evaluation_run", boom
+    )
+
+    assert main(evaluate_args(workspace)) == EXIT_INVALID
+    out = capsys.readouterr().out
+    assert "EVALUATION.STORE_ERROR" in out
+    assert "report not frozen (run not recorded)" in out
+    assert "run evl-" not in out
 
 
 def test_evaluate_boundary_after_as_of(tmp_path: Path, capsys) -> None:

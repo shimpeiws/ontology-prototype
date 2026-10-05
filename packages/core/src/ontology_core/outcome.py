@@ -36,6 +36,11 @@ Within a cohort, each subject resolves to exactly one disposition:
   from aggregates.
 - ``unpaired_end`` — an end event with no visible start event
   (``EVALUATION.END_WITHOUT_START``); it belongs to no cohort.
+- ``excluded`` — no visible events at all: a future-dated start event
+  (``EVALUATION.FUTURE_EVENT``) or a subject whose only interval facts
+  are all after ``as_of``. Excluded subjects are inspectable in the
+  report inputs with their future fact keys; an all-future subject
+  emits no diagnostic because it asserts nothing about the as-of state.
 
 A baseline pair whose end occurred at or after the boundary is flagged
 ``closes_after_boundary`` — its start places it in the baseline cohort
@@ -480,16 +485,28 @@ def _build_report(
     after_agg = report_cohorts["after"]["aggregate"]
     if baseline_agg is not None and after_agg is not None:
         delta = baseline_agg - after_agg
-        change: dict[str, Any] = {
-            "status": "measured",
-            "value": delta,
-            "direction": (
+        if evaluation.aggregation == "count":
+            # A count delta is interval-count movement, not a duration
+            # verdict — "fewer measured intervals" is not an improvement.
+            direction = (
+                "decrease"
+                if delta > 0
+                else "increase"
+                if delta < 0
+                else "unchanged"
+            )
+        else:
+            direction = (
                 "improvement"
                 if delta > 0
                 else "regression"
                 if delta < 0
                 else "unchanged"
-            ),
+            )
+        change: dict[str, Any] = {
+            "status": "measured",
+            "value": delta,
+            "direction": direction,
         }
     else:
         missing = [
@@ -586,10 +603,15 @@ def _ambiguous(
 
 
 def _aggregate(durations: list[float], aggregation: str) -> float | None:
+    if not durations:
+        # No measured intervals means no aggregate — for every
+        # aggregation, count included. The interval count itself is
+        # already reported explicitly in the cohort's counts and sample;
+        # returning 0 here would feed a fabricated aggregate into
+        # change and target.
+        return None
     if aggregation == "count":
         return float(len(durations))
-    if not durations:
-        return None
     if aggregation == "median":
         return float(statistics.median(durations))
     if aggregation == "mean":
