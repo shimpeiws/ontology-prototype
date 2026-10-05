@@ -9,11 +9,16 @@ downstream workflow (validation, approval, write-back) unchanged.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
+import tomllib
 from pathlib import Path
 
+import pytest
+
 from ontology_core import (
+    RUNTIME_DIR,
     SCENARIOS,
     CsvReminderAdapter,
     RunBudget,
@@ -33,9 +38,9 @@ from ontology_core.diagnosis_eval import (
     DATASET_UNTRUSTED,
     EVAL_VERSION,
     INJECTION_TEXT,
-    PROMPT_VERSION as EVAL_PROMPT_VERSION,
     SECRET_MARKER,
     FIXTURE_DIR,
+    EvalError,
     ScriptedProvider,
 )
 
@@ -87,7 +92,9 @@ def test_suite_passes_on_committed_fixtures(tmp_path: Path) -> None:
     report = run_suite(tmp_path / "suite")
 
     assert report.eval_version == EVAL_VERSION
-    assert report.prompt_version == EVAL_PROMPT_VERSION
+    # The pinned literal, not the re-exported symbol — a prompt-version
+    # bump is a deliberate contract change and must fail this test.
+    assert report.prompt_version == "diagnosis.v1"
     assert report.within_budget
     assert report.provider_requests == len(SCENARIOS)
     assert report.passed, [
@@ -184,7 +191,15 @@ def test_provider_failure_scenarios(tmp_path: Path) -> None:
     record = get_diagnosis_run(
         prep.workspace, crash.run_id, store=prep.store
     )
+    # The marker must not reach any recorded surface — diagnostics, the
+    # run record, or the trace log — and the crash must still be recorded
+    # as an exception class, not silently dropped.
     assert SECRET_MARKER not in json.dumps(record)
+    assert "unexpected RuntimeError" in json.dumps(record)
+    trace = Path(prep.workspace.path) / RUNTIME_DIR / "trace.jsonl"
+    assert SECRET_MARKER not in (
+        trace.read_text() if trace.is_file() else ""
+    )
 
 
 def test_untrusted_source_scenario(tmp_path: Path) -> None:
@@ -199,11 +214,43 @@ def test_untrusted_source_scenario(tmp_path: Path) -> None:
     record = get_diagnosis_run(
         prep.workspace, outcome.run_id, store=prep.store
     )
-    # Embedded as escaped JSON string data inside the candidate block.
+    # Embedded as escaped JSON string data inside the candidate block —
+    # and never present in raw form anywhere else in the prompt.
     assert json.dumps(INJECTION_TEXT) in record["prompt"]
+    assert INJECTION_TEXT not in record["prompt"]
     assert record["rejected"][0]["reason"].find(
         "not among the diagnosed candidates"
     ) != -1
+
+
+def test_prepare_rejects_materialized_scratch(tmp_path: Path) -> None:
+    """INV-008: re-preparing a used scratch would append duplicate
+    observations and change evidence ids, so prepare refuses it."""
+    dest = tmp_path / "ws"
+    prepare(dest)
+    with pytest.raises(EvalError):
+        prepare(dest)
+
+
+def test_package_data_covers_fixture_tree() -> None:
+    """INV-009: the committed package-data globs must match every file
+    under eval_fixtures, or `python -m ontology_core.diagnosis_eval`
+    fails on an installed wheel while passing from source."""
+    pyproject = FIXTURE_DIR.parents[2] / "pyproject.toml"
+    globs = tomllib.loads(pyproject.read_text())["tool"]["setuptools"][
+        "package-data"
+    ]["ontology_core"]
+    package_root = FIXTURE_DIR.parent
+    uncovered = [
+        str(path.relative_to(package_root))
+        for path in FIXTURE_DIR.rglob("*")
+        if path.is_file()
+        and not any(
+            fnmatch.fnmatch(str(path.relative_to(package_root)), glob)
+            for glob in globs
+        )
+    ]
+    assert uncovered == []
 
 
 def test_budget_bounds_provider_requests(tmp_path: Path) -> None:
@@ -342,6 +389,23 @@ def test_evaluate_subject_respects_budget(tmp_path: Path) -> None:
     assert report.repeats_requested == 5
     assert report.repeats_completed == 2
     assert report.provider_requests == 2
+    assert report.repeats_clamped
+    assert report.to_dict()["repeats_clamped"] is True
+
+
+def test_evaluate_subject_default_budget_clamps_to_one(tmp_path: Path) -> None:
+    """INV-009: the default budget clamps repeats to 1 — a caller asking
+    for more sees repeats_clamped instead of silently getting a smaller
+    sample."""
+    report = evaluate_subject(
+        tmp_path / "subject",
+        ScriptedProvider("subject-double", "x"),
+        model="eval/subject",
+        repeats=3,
+    )
+    assert report.repeats_requested == 3
+    assert report.repeats_completed == 1
+    assert report.repeats_clamped
 
 
 def test_main_runs_the_suite(tmp_path: Path, capsys) -> None:

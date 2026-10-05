@@ -24,7 +24,11 @@ python -m ontology_core.diagnosis_eval <scratch-dir> # keep materialized workspa
 The suite materializes each fixture dataset into a scratch directory,
 ingests it at a fixed observation time, freezes one projection run, and
 replays that frozen run through every scenario. Nothing is written into the
-committed fixture tree or the installed package.
+committed fixture tree or the installed package. Scratch directories are
+inspect-only after a run: `prepare` refuses a directory that already
+contains a materialized `.ontology/` store, because re-ingesting would
+append duplicate observations and change the evidence ids a frozen run is
+compared on.
 
 ## Pinned versions
 
@@ -80,7 +84,7 @@ controlled or live:
 | check | criterion |
 | --- | --- |
 | `contract_valid` | run status `ok`, no error diagnostics |
-| `deliverables_complete` | every declared deliverable validated into the result |
+| `deliverables_complete` | every declared deliverable validated into the result except `action_proposals`, which `intervention_proposed` covers — an empty proposal list is still a contract-valid response |
 | `permitted_actions_only` | every accepted proposal uses an allowlisted action |
 | `proposals_grounded` | every accepted proposal cites a diagnosed candidate id |
 | `evidence_grounded` | every hypothesis cites evidence ids, none unverified |
@@ -103,10 +107,19 @@ runs at most `min(repeats, budget.repeats)` passes while never exceeding
 the request cap. The suite refuses further provider calls once the cap is
 spent and reports the shortfall instead of overrunning silently.
 
+A "provider request" here means one invocation of
+`DiagnosisProvider.complete()` — the boundary the harness can observe. A
+live adapter that retries internally can turn one invocation into several
+HTTP requests; the cap bounds invocations, and real per-request spend is
+the adapter's contract, not the harness's.
+
 For the live comparison, the budget means: one frozen candidate set (2
 candidates), a small number of repeats per model (suggest ≤3), and one
-provider request per run — so a two-model comparison stays well under a
-dozen requests.
+provider invocation per run — so a two-model comparison stays well under a
+dozen invocations. Note `RunBudget` defaults to `repeats=1`: asking for
+more repeats requires an explicit budget, and a `SubjectReport` whose
+budget allowed fewer repeats than requested is marked
+`repeats_clamped` instead of silently shrinking the sample.
 
 ## Reuse by the live-model comparison
 
@@ -114,7 +127,7 @@ The follow-on issue runs real providers through the same frozen input
 without modifying the harness:
 
 ```python
-from ontology_core import evaluate_subject
+from ontology_core import RunBudget, evaluate_subject
 from ontology_cli.providers import OpenRouterProvider
 
 report = evaluate_subject(
@@ -122,6 +135,7 @@ report = evaluate_subject(
     OpenRouterProvider(),
     model="openai/gpt-4o-mini",
     repeats=3,
+    budget=RunBudget(repeats=3, max_provider_requests=8),
 )
 report.to_dict()   # per-run deterministic checks + budget accounting
 ```

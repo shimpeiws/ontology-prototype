@@ -162,9 +162,14 @@ class CountingProvider:
 class RunBudget:
     """Bounded budget for one evaluation run.
 
-    ``max_provider_requests`` caps total provider calls across the suite
-    or a subject evaluation; ``repeats`` caps how many times one
-    configuration may be re-run over the frozen input.
+    ``max_provider_requests`` caps total *provider invocations* — calls
+    through the ``DiagnosisProvider.complete()`` boundary — across the
+    suite or a subject evaluation. A live adapter that retries internally
+    can issue several HTTP requests per invocation; those happen below
+    this boundary and are not counted here. ``repeats`` caps how many
+    times one configuration may be re-run over the frozen input; the
+    default is 1, so requesting more repeats requires an explicit
+    ``RunBudget``.
     """
 
     repeats: int = 1
@@ -196,7 +201,8 @@ class Scenario:
     ``outputs/<output>`` file verbatim, ``provider_error`` and ``crash``
     fail at the boundary. ``checks`` names extra scenario-specific checks;
     ``same_input_as`` asserts this run's input digest matches another
-    scenario's on the same dataset.
+    scenario's on the same dataset — the referenced scenario must be
+    declared *earlier* in ``SCENARIOS`` so its digest is already recorded.
     """
 
     id: str
@@ -308,6 +314,12 @@ class SubjectReport:
     runs: list[SubjectRun]
 
     @property
+    def repeats_clamped(self) -> bool:
+        """True when the budget allowed fewer repeats than requested —
+        a silently smaller sample must be visible in the report."""
+        return self.repeats_completed < self.repeats_requested
+
+    @property
     def passed(self) -> bool:
         return bool(self.runs) and all(r.passed for r in self.runs)
 
@@ -321,6 +333,7 @@ class SubjectReport:
             "repeats_completed": self.repeats_completed,
             "provider_requests": self.provider_requests,
             "within_budget": self.within_budget,
+            "repeats_clamped": self.repeats_clamped,
             "passed": self.passed,
             "runs": [r.to_dict() for r in self.runs],
         }
@@ -476,7 +489,7 @@ SCENARIOS: tuple[Scenario, ...] = (
             provider_called=True,
             recorded_proposals=0,
         ),
-        checks=("secret_not_leaked",),
+        checks=("secret_not_leaked", "error_class_recorded"),
     ),
     Scenario(
         id="untrusted-source",
@@ -521,6 +534,14 @@ def prepare(
         raise EvalError(f"missing fixture workspace at {fixture_ws}")
     if not fixture_data.is_file():
         raise EvalError(f"unknown fixture dataset {dataset!r}")
+    if (dest / RUNTIME_DIR).exists():
+        # Re-ingesting into a materialized scratch would append duplicate
+        # observations and change evidence ids — repeatability requires a
+        # fresh directory per prepare.
+        raise EvalError(
+            f"{dest} already holds a materialized evaluation workspace; "
+            "pass a fresh scratch directory"
+        )
     dest.mkdir(parents=True, exist_ok=True)
     for name in WORKSPACE_FILES.values():
         shutil.copyfile(fixture_ws / name, dest / name)
@@ -807,10 +828,11 @@ def _check_injection_embedded(
     """The injection must reach the provider only as JSON-escaped data."""
     prompt = record.get("prompt", "") if record else ""
     embedded = json.dumps(INJECTION_TEXT) in prompt
+    raw_absent = INJECTION_TEXT not in prompt
     return Check(
         "injection_embedded_as_data",
-        embedded,
-        "injection text appears in the prompt as escaped JSON string data",
+        embedded and raw_absent,
+        "injection text appears only as escaped JSON string data",
     )
 
 
@@ -824,17 +846,39 @@ def _check_secret_not_leaked(
     surfaces = " ".join(d.message for d in result.diagnostics)
     if record is not None:
         surfaces += json.dumps(record)
+    trace_file = Path(prepared.workspace.path) / RUNTIME_DIR / "trace.jsonl"
+    if trace_file.is_file():
+        surfaces += trace_file.read_text(encoding="utf-8")
     leaked = SECRET_MARKER in surfaces
     return Check(
         "secret_not_leaked",
         not leaked,
-        f"marker {'leaked' if leaked else 'absent'} in diagnostics/record",
+        f"marker {'leaked' if leaked else 'absent'} in diagnostics/record/trace",
+    )
+
+
+def _check_error_class_recorded(
+    result: DiagnosisResult,
+    record: dict[str, Any] | None,
+    prepared: PreparedEval,
+) -> Check:
+    """The crash is still recorded — reduced to its exception class, not
+    silently dropped. Without this check an absent marker could also mean
+    'nothing was recorded at all'."""
+    recorded = any(
+        "unexpected RuntimeError" in d.message for d in result.diagnostics
+    )
+    return Check(
+        "error_class_recorded",
+        recorded,
+        "unexpected provider exception recorded by class name",
     )
 
 
 _EXTRA_CHECKS = {
     "injection_embedded_as_data": _check_injection_embedded,
     "secret_not_leaked": _check_secret_not_leaked,
+    "error_class_recorded": _check_error_class_recorded,
 }
 
 
@@ -974,7 +1018,9 @@ def evaluate_subject(
     hands a real adapter (e.g. the CLI's OpenRouterProvider) to the same
     frozen candidates and the same deterministic scoring the controlled
     suite exercises. ``repeats`` and the request cap are bounded by
-    ``budget``.
+    ``budget`` — a report whose budget allowed fewer repeats than
+    requested sets ``repeats_clamped`` rather than silently shrinking the
+    sample.
     """
     prep = prepare(Path(scratch_dir) / "subject", dataset=DATASET_CLEAN)
     counting = CountingProvider(provider)
