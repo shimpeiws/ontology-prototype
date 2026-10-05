@@ -876,3 +876,146 @@ def test_multiple_subject_refs_all_visible(tmp_path: Path) -> None:
         tuple(sorted({"param": "also_job", "entity": "Job",
                       "id": "B02"}.items())),
     }
+
+
+def test_backfill_uses_frozen_run_subject(tmp_path: Path) -> None:
+    """A workspace edited since diagnosis cannot relabel a historical
+    proposal: subject_entity comes from the frozen projection run."""
+    import dataclasses
+
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    projection = run_projection(
+        workspace, "CompletedButNotInvoiced", as_of=AS_OF
+    )
+    assert projection.ok
+
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    conn = store._connect()
+    conn.execute(
+        "INSERT INTO diagnosis_runs (run_id, projection_run_id, provider,"
+        " model, prompt_version, prompt, status, input_digest,"
+        " provider_called, deliverables, proposals, rejected, diagnostics,"
+        " created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-legacy",
+            projection.run_id,
+            "legacy-provider",
+            "m",
+            "diagnosis.v1",
+            "prompt",
+            "ok",
+            "sha256:legacy",
+            1,
+            "{}",
+            json.dumps(
+                [
+                    {
+                        "action": "SendReminder",
+                        "params": {
+                            "target": "taro",
+                            "related_entity": "A01",
+                            "reason": "x",
+                        },
+                        "reason": "legacy proposal",
+                    }
+                ]
+            ),
+            "[]",
+            "[]",
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.commit()
+
+    # The workspace projection now selects Person, but the frozen run
+    # diagnosed Job candidates — the row must keep the historical truth.
+    proj_spec = workspace.domain.projections[workspace.agent.projection]
+    changed_domain = dataclasses.replace(
+        workspace.domain,
+        projections={
+            workspace.agent.projection: dataclasses.replace(
+                proj_spec, subject="Person"
+            )
+        },
+    )
+    changed_ws = dataclasses.replace(workspace, domain=changed_domain)
+
+    view = proposal_view(changed_ws)[0]
+    assert view["subject_entity"] == "Job"
+    assert view["subject_id"] == "A01"
+
+
+def test_backfill_recovers_raw_output_index(tmp_path: Path) -> None:
+    """A legacy record without `index` gets the raw output position when
+    it can be recovered unambiguously — a rejected earlier item no
+    longer shifts the accepted proposal's `-pN`."""
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    proposal_params = {
+        "target": "taro",
+        "related_entity": "A01",
+        "reason": "x",
+    }
+    raw_output = json.dumps(
+        {
+            "explanation": "x",
+            "hypotheses": [],
+            "follow_up_questions": [],
+            "action_proposals": [
+                {"action": "DeleteJob", "params": {}},  # raw index 0: rejected
+                {
+                    "action": "SendReminder",
+                    "params": proposal_params,
+                    "reason": "x",
+                    "approved": True,  # stripped at validation time
+                },  # raw index 1: accepted
+            ],
+        }
+    )
+    conn = store._connect()
+    conn.execute(
+        "INSERT INTO diagnosis_runs (run_id, provider, model,"
+        " prompt_version, prompt, status, input_digest, provider_called,"
+        " output, deliverables, proposals, rejected, diagnostics,"
+        " created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dgx-legacy",
+            "legacy-provider",
+            "m",
+            "diagnosis.v1",
+            "prompt",
+            "ok",
+            "sha256:legacy",
+            1,
+            raw_output,
+            "{}",
+            json.dumps(
+                [
+                    {
+                        "action": "SendReminder",
+                        "params": proposal_params,
+                        "reason": "x",
+                        # validated record: no "index", stripped extras
+                    }
+                ]
+            ),
+            json.dumps([{"index": 0, "item": {"action": "DeleteJob",
+                                              "params": {}},
+                         "reason": "not permitted"}]),
+            "[]",
+            "2026-10-04T00:00:00Z",
+        ),
+    )
+    conn.commit()
+
+    view = proposal_view(workspace)[0]
+    assert view["proposal_index"] == 1
+    assert view["proposal_id"] == "dgx-legacy-p1"

@@ -157,20 +157,30 @@ def backfill_proposals(
     their index rows so they can be reviewed and decided; backfilled rows
     carry empty ``evidence`` because the run record keeps no candidates.
     Best-effort: any failure leaves the table unchanged.
+
+    Historical context is reconstructed conservatively:
+
+    - ``subject_entity`` comes from the frozen projection run when one is
+      recorded, so a workspace edited since diagnosis cannot relabel what
+      was actually proposed.
+    - Rows from records that carry the model-output ``index`` keep it;
+      pre-``index`` records try to recover the raw output position by
+      matching each proposal back to the recorded model output, and fall
+      back to the validated-array position only when no unambiguous match
+      exists.
     """
     try:
-        subject_entity = workspace.domain.projections[
+        current_subject = workspace.domain.projections[
             workspace.agent.projection
         ].subject
         rows = []
         for run in store.diagnosis_runs():
+            subject_entity = _frozen_subject(store, run, current_subject)
+            raw_items = _raw_output_items(run)
             for position, prop in enumerate(run.get("proposals") or []):
-                # Newer runs carry the model-output index on each proposal;
-                # older ones predate it — their ``-pN`` ids used the array
-                # position, which is what the fallback reproduces.
                 index = prop.get("index")
                 if not isinstance(index, int):
-                    index = position
+                    index = _match_output_index(prop, raw_items, position)
                 proposal_id = f"{run['run_id']}-p{index}"
                 if store.proposal(proposal_id) is not None:
                     continue
@@ -207,6 +217,64 @@ def backfill_proposals(
         # Backfill is repair, not a write path: a failure leaves things as
         # they were and must not break inspection or decide.
         pass
+
+
+def _frozen_subject(
+    store: CanonicalStore, run: dict[str, Any], current_subject: str
+) -> str:
+    """The projection subject the diagnosis actually ran against, from
+    the frozen run record — the current contract may have changed since."""
+    run_id = run.get("projection_run_id")
+    if not run_id:
+        return current_subject
+    try:
+        record = store.projection_run(run_id)
+    except Exception:
+        record = None
+    if record is None or not isinstance(record.get("subject"), str):
+        return current_subject
+    return record["subject"]
+
+
+def _raw_output_items(run: dict[str, Any]) -> list[Any] | None:
+    """The model's raw ``action_proposals`` list from a recorded run, or
+    ``None`` when the output is absent or unparseable."""
+    output = run.get("output")
+    if not isinstance(output, str) or not output:
+        return None
+    from .diagnosis import _extract_json  # lazy: diagnosis imports us
+
+    parsed = _extract_json(output)
+    if not isinstance(parsed, dict):
+        return None
+    items = parsed.get("action_proposals")
+    return items if isinstance(items, list) else None
+
+
+def _match_output_index(
+    prop: dict[str, Any], raw_items: list[Any] | None, position: int
+) -> int:
+    """Recover a legacy proposal's raw output index by matching it back
+    to the recorded model output.
+
+    A validated record keeps only ``action``/``params``/``reason`` (extra
+    keys the model sent were stripped), so matching compares action and
+    params only. Anything short of a single unambiguous match falls back
+    to the validated-array position — a backfilled ``-pN`` suffix is only
+    ever a raw-output index when it could actually be recovered.
+    """
+    if raw_items is None:
+        return position
+    action = prop.get("action")
+    params = prop.get("params") or {}
+    matches = [
+        i
+        for i, item in enumerate(raw_items)
+        if isinstance(item, dict)
+        and item.get("action") == action
+        and item.get("params") == params
+    ]
+    return matches[0] if len(matches) == 1 else position
 
 
 @dataclass

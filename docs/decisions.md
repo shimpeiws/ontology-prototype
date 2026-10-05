@@ -97,13 +97,23 @@ only copy. Two gaps self-heal the next time `proposals`/`decide` runs:
 - Runs recorded before the `proposals` table existed keep their
   validated proposals only inside the run record; inspection backfills
   index rows for them (with empty `evidence`, since run records keep no
-  candidates). Pre-`index` records use the array position, matching the
-  original `-pN` ids.
+  candidates).
 - A run whose proposal indexing failed (`DIAGNOSIS.PROPOSAL_ROWS_ERROR`)
   is repaired the same way.
 
-Backfill is idempotent and best-effort: a failure leaves the table
-unchanged rather than breaking inspection.
+Backfilled rows reconstruct history conservatively:
+
+- `subject_entity` comes from the frozen projection run (not the current
+  contract), so a workspace edited since diagnosis cannot relabel what
+  was proposed.
+- For records that carry the model-output `index`, the `-pN` suffix is
+  the raw output position. Older records without it try to recover the
+  position by matching each proposal back to the recorded model output
+  (single unambiguous action+params match required); when no match is
+  possible, the suffix is the validated-array position — in that case it
+  identifies the row, not a raw-output offset.
+- Backfill is idempotent and best-effort: a failure leaves the table
+  unchanged rather than breaking inspection.
 
 ## What the agent cannot do
 
