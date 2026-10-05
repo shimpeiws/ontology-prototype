@@ -1,4 +1,8 @@
-"""Validation of the evaluation contract (evaluation.yaml)."""
+"""Validation of the evaluation contract (evaluation.yaml).
+
+Outcome evaluation over canonical state — pairing interval events into
+baseline/after cohorts and freezing reports — lives in ``outcome.py``.
+"""
 
 from __future__ import annotations
 

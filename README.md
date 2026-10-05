@@ -40,6 +40,7 @@ ontology diagnose examples/job-invoicing --as-of 2026-10-05T00:00:00Z --provider
 ontology proposals examples/job-invoicing
 ontology decide examples/job-invoicing <proposal-id> --approve --reviewer fde-sato
 ontology execute examples/job-invoicing <proposal-id>
+ontology evaluate examples/job-invoicing --boundary 2026-10-05T00:00:00Z --as-of 2026-10-15T00:00:00Z
 ```
 
 `ontology check` loads a workspace directory (the four files `domain.yaml`, `mapping.yaml`, `evaluation.yaml`, `agent.yaml`), prints structured diagnostics, and exits `0` when the workspace is valid, `1` otherwise. See [docs/workspace.md](docs/workspace.md) for the definition format and validation rules.
@@ -54,7 +55,9 @@ ontology execute examples/job-invoicing <proposal-id>
 
 `ontology execute` runs an approved proposal through a write-back adapter after rechecking approval against the stored payload digest. The local `csv` adapter appends one inspectable row to `.ontology/reminders.csv`; every attempt is persisted append-only with an idempotency key, status (`succeeded`/`failed`/`uncertain`), and receipt — repeated success replays the receipt without duplicating, and an uncertain attempt refuses blind retry. See [docs/execution.md](docs/execution.md).
 
-Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — evaluation and trace inspection — are not commands yet; they will land as later issues on the same shared core.
+`ontology evaluate` pairs the contract's interval events per canonical subject at an explicit `--as-of`, splits baseline/after cohorts at an explicit `--boundary`, and reports medians, pending/invalid/ambiguous counts, the strict target verdict, and guardrail verdicts from explicit evidence — then freezes the report append-only for `evaluate --run <id>`. Cohorts are time-based observations; the report never claims an intervention caused the change. See [docs/evaluation.md](docs/evaluation.md).
+
+Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — trace inspection — are not commands yet; they will land as later issues on the same shared core.
 
 ## Library use
 

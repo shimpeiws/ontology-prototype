@@ -16,6 +16,7 @@
 | `decisions` | Append-only human approve/reject decisions; latest wins (see [decisions.md](decisions.md)). |
 | `executions` | Append-only write-back attempts: an `attempting` intent row then an outcome row (`succeeded`/`failed`/`uncertain`), latest row wins (see [execution.md](execution.md)). |
 | `fact_links` | Append-only associations recorded when a fact is appended: `possibly_corrects` (an earlier fact for the same event and subject carries a different `occurred_at`) and `correlated_intervention` (a persisted proposal targets the fact's subject). |
+| `evaluation_runs` | Frozen outcome-evaluation reports (see [evaluation.md](evaluation.md)). |
 
 ## Event identity and append-only history
 

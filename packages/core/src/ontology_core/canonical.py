@@ -37,6 +37,12 @@ persists them under ``<workspace>/.ontology/canon.db``:
   adapter receipt or sanitized error. An execution's current state
   derives from its latest recorded row (insertion order, not wall
   clock — same rule as decisions).
+- ``evaluation_runs`` — frozen outcome-evaluation reports (see
+  outcome.py), append-only. A record carries the contract digest, the
+  explicit as-of time and cohort boundary, and the full report —
+  cohort aggregates, pairing evidence, guardrail evidence, and the
+  verdict — so a historical report is inspectable and unchanged by
+  later ingestion or contract edits.
 
 Fact links
 ----------
@@ -228,6 +234,21 @@ BEGIN SELECT RAISE(ABORT, 'fact links are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS fact_links_no_delete
 BEFORE DELETE ON fact_links
 BEGIN SELECT RAISE(ABORT, 'fact links are append-only'); END;
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+    run_id TEXT PRIMARY KEY,
+    evaluation TEXT NOT NULL,
+    as_of TEXT NOT NULL,
+    boundary TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    contract_digest TEXT NOT NULL,
+    report TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS evaluation_runs_no_update
+BEFORE UPDATE ON evaluation_runs
+BEGIN SELECT RAISE(ABORT, 'evaluation runs are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS evaluation_runs_no_delete
+BEFORE DELETE ON evaluation_runs
+BEGIN SELECT RAISE(ABORT, 'evaluation runs are append-only'); END;
 """
 
 # fact_links relation kinds. ``possibly_corrects`` points at an earlier fact
@@ -331,6 +352,10 @@ class CanonicalStore(Protocol):
 
     def entity_state(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
         """Current properties and provenance for one entity, or None."""
+        ...
+
+    def entities_of_type(self, entity_type: str) -> list[dict[str, Any]]:
+        """All current entity states of one type, ordered by entity id."""
         ...
 
     def subject_ids_with_event(self, event: str, subject_entity: str) -> list[str]:
@@ -437,6 +462,24 @@ class CanonicalStore(Protocol):
         self, proposal_id: str
     ) -> list[dict[str, Any]]:
         """All attempts recorded for one proposal, in insertion order."""
+        ...
+
+    def record_evaluation_run(
+        self,
+        *,
+        run_id: str,
+        evaluation: str,
+        as_of: datetime,
+        boundary: datetime,
+        created_at: datetime,
+        contract_digest: str,
+        report: dict[str, Any],
+    ) -> None:
+        """Freeze one outcome-evaluation report; runs are append-only."""
+        ...
+
+    def evaluation_run(self, run_id: str) -> dict[str, Any] | None:
+        """A frozen evaluation report with its parsed payload, or None."""
         ...
 
 
@@ -631,6 +674,28 @@ class SqliteCanonicalStore:
             "last_observation_id": row[2],
             "updated_at": row[3],
         }
+
+    def entities_of_type(self, entity_type: str) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT entity_id, properties, first_observation_id,
+                   last_observation_id, updated_at
+            FROM entities WHERE entity_type = ? ORDER BY entity_id
+            """,
+            (entity_type,),
+        ).fetchall()
+        return [
+            {
+                "entity_id": row[0],
+                "properties": json.loads(row[1]),
+                "first_observation_id": row[2],
+                "last_observation_id": row[3],
+                "updated_at": row[4],
+            }
+            for row in rows
+        ]
 
     def subject_ids_with_event(self, event: str, subject_entity: str) -> list[str]:
         if not self._has_db():
@@ -1070,6 +1135,60 @@ class SqliteCanonicalStore:
             }
             for row in rows
         ]
+
+    def record_evaluation_run(
+        self,
+        *,
+        run_id: str,
+        evaluation: str,
+        as_of: datetime,
+        boundary: datetime,
+        created_at: datetime,
+        contract_digest: str,
+        report: dict[str, Any],
+    ) -> None:
+        conn = self._connect()
+        with conn:
+            conn.execute(
+                """
+                INSERT INTO evaluation_runs (
+                    run_id, evaluation, as_of, boundary, created_at,
+                    contract_digest, report
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    evaluation,
+                    _iso_z(as_of),
+                    _iso_z(boundary),
+                    _iso_z(created_at),
+                    contract_digest,
+                    json.dumps(report, sort_keys=True),
+                ),
+            )
+
+    def evaluation_run(self, run_id: str) -> dict[str, Any] | None:
+        if not self._has_db():
+            return None
+        row = self._connect().execute(
+            """
+            SELECT evaluation, as_of, boundary, created_at,
+                   contract_digest, report
+            FROM evaluation_runs WHERE run_id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": run_id,
+            "evaluation": row[0],
+            "as_of": row[1],
+            "boundary": row[2],
+            "created_at": row[3],
+            "contract_digest": row[4],
+            "report": json.loads(row[5]),
+        }
 
 
 def _link_new_fact(

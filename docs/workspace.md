@@ -107,6 +107,7 @@ evaluation:
 - `start_event` and `end_event` must be different domain events sharing one subject.
 - `target.comparator` is `lt | lte | gt | gte`; `lt` is strict, so a 4-day median misses a `< 4` target.
 - Guardrail comparator `not_increase` compares against the baseline and takes no `value`; other comparators require a numeric `value`.
+- `ontology evaluate` executes the contract — see [evaluation.md](evaluation.md) for cohort, pairing, and guardrail-evidence rules.
 
 ## agent.yaml
 
