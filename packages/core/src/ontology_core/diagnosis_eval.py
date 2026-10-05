@@ -542,6 +542,19 @@ def prepare(
             f"{dest} already holds a materialized evaluation workspace; "
             "pass a fresh scratch directory"
         )
+    collisions = sorted(
+        name
+        for name in (*WORKSPACE_FILES.values(), dataset)
+        if (dest / name).exists()
+    )
+    if collisions:
+        # copyfile overwrites silently — a directory that only *looks*
+        # like an empty scratch (no .ontology marker) must not lose
+        # files the caller already owned.
+        raise EvalError(
+            f"{dest} already contains files the fixture would "
+            f"overwrite: {collisions}; pass a fresh scratch directory"
+        )
     dest.mkdir(parents=True, exist_ok=True)
     for name in WORKSPACE_FILES.values():
         shutil.copyfile(fixture_ws / name, dest / name)
@@ -758,6 +771,7 @@ def _expectation_checks(
     result: DiagnosisResult,
     record: dict[str, Any] | None,
     expect: Expectation,
+    prepared: PreparedEval,
 ) -> list[Check]:
     checks: list[Check] = []
     codes = {d.code for d in result.diagnostics}
@@ -807,14 +821,29 @@ def _expectation_checks(
             )
         )
     if expect.recorded_proposals is not None:
-        persisted = (
+        embedded = (
             len(record.get("proposals") or []) if record else None
+        )
+        # The review/execution path reads the separate proposals index,
+        # not the run record's embedded payloads — a proposal_rows build
+        # failure is deliberately non-fatal to the run, so both stores
+        # must agree before this expectation can pass.
+        indexed = (
+            sum(
+                1
+                for row in prepared.store.proposals()
+                if row.get("diagnosis_run_id") == result.run_id
+            )
+            if result.run_id
+            else None
         )
         checks.append(
             Check(
                 "recorded_proposals",
-                persisted == expect.recorded_proposals,
-                f"persisted proposals {persisted}, expected {expect.recorded_proposals}",
+                embedded == expect.recorded_proposals
+                and indexed == expect.recorded_proposals,
+                f"persisted proposals embedded={embedded} "
+                f"indexed={indexed}, expected {expect.recorded_proposals}",
             )
         )
     return checks
@@ -901,7 +930,7 @@ def run_scenario(
         if result.run_id
         else None
     )
-    checks = _expectation_checks(result, record, scenario.expect)
+    checks = _expectation_checks(result, record, scenario.expect, prepared)
     if scenario.quality:
         checks.extend(
             score_run(result, prepared.workspace, prepared.candidates, record)
@@ -1004,25 +1033,23 @@ def run_suite(
     )
 
 
-def evaluate_subject(
-    scratch_dir: str | Path,
+def evaluate_prepared(
+    prepared: PreparedEval,
     provider: DiagnosisProvider,
     *,
     model: str,
     repeats: int = DEFAULT_BUDGET.repeats,
     budget: RunBudget = DEFAULT_BUDGET,
 ) -> SubjectReport:
-    """Score one provider/model against the frozen clean dataset.
+    """Score one provider/model against an already-frozen dataset.
 
-    This is the entry point the live-model comparison issue uses: it
-    hands a real adapter (e.g. the CLI's OpenRouterProvider) to the same
-    frozen candidates and the same deterministic scoring the controlled
-    suite exercises. ``repeats`` and the request cap are bounded by
-    ``budget`` — a report whose budget allowed fewer repeats than
-    requested sets ``repeats_clamped`` rather than silently shrinking the
-    sample.
+    This is the comparison entry point: ``prepare`` once, then hand the
+    same ``PreparedEval`` to every provider/model under test — each
+    subject sees identical candidates, evidence ids, and input digest.
+    ``evaluate_subject`` is the convenience wrapper that prepares its
+    own workspace per call, so two of its calls can never share input.
     """
-    prep = prepare(Path(scratch_dir) / "subject", dataset=DATASET_CLEAN)
+    prep = prepared
     counting = CountingProvider(provider)
     runs: list[SubjectRun] = []
     allowed = min(repeats, budget.repeats, budget.max_provider_requests)
@@ -1062,6 +1089,32 @@ def evaluate_subject(
         provider_requests=len(counting.requests),
         within_budget=len(counting.requests) <= budget.max_provider_requests,
         runs=runs,
+    )
+
+
+def evaluate_subject(
+    scratch_dir: str | Path,
+    provider: DiagnosisProvider,
+    *,
+    model: str,
+    repeats: int = DEFAULT_BUDGET.repeats,
+    budget: RunBudget = DEFAULT_BUDGET,
+) -> SubjectReport:
+    """Score one provider/model against the frozen clean dataset.
+
+    This is the entry point the live-model comparison issue uses: it
+    hands a real adapter (e.g. the CLI's OpenRouterProvider) to the same
+    frozen candidates and the same deterministic scoring the controlled
+    suite exercises. ``repeats`` and the request cap are bounded by
+    ``budget`` — a report whose budget allowed fewer repeats than
+    requested sets ``repeats_clamped`` rather than silently shrinking the
+    sample. For multi-subject comparisons share one ``PreparedEval``
+    through ``evaluate_prepared`` — each call here prepares a fresh
+    workspace, so two calls cannot see identical input.
+    """
+    prep = prepare(Path(scratch_dir) / "subject", dataset=DATASET_CLEAN)
+    return evaluate_prepared(
+        prep, provider, model=model, repeats=repeats, budget=budget
     )
 
 
@@ -1147,6 +1200,7 @@ __all__ = [
     "ScriptedProvider",
     "SubjectReport",
     "SubjectRun",
+    "evaluate_prepared",
     "evaluate_subject",
     "main",
     "prepare",

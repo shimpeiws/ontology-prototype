@@ -24,6 +24,7 @@ from ontology_core import (
     RunBudget,
     check_approval,
     decide,
+    evaluate_prepared,
     evaluate_subject,
     execute,
     get_diagnosis_run,
@@ -33,6 +34,7 @@ from ontology_core import (
     run_suite,
 )
 from ontology_core import diagnosis_eval
+import ontology_core.diagnosis as diagnosis_module
 from ontology_core.diagnosis_eval import (
     DATASET_CLEAN,
     DATASET_UNTRUSTED,
@@ -414,3 +416,68 @@ def test_main_runs_the_suite(tmp_path: Path, capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["passed"] is True
     assert payload["eval_version"] == EVAL_VERSION
+
+
+def test_prepare_refuses_nonempty_scratch(tmp_path: Path) -> None:
+    """A caller-supplied directory holding files but no .ontology marker
+    must be refused — copyfile would otherwise overwrite caller-owned
+    files silently."""
+    dest = tmp_path / "ws"
+    dest.mkdir()
+    (dest / "domain.yaml").write_text("mine: true\n")
+    (dest / "jobs.csv").write_text("caller-owned\n")
+
+    with pytest.raises(EvalError, match="overwrite"):
+        prepare(dest)
+
+    assert (dest / "domain.yaml").read_text() == "mine: true\n"
+    assert (dest / "jobs.csv").read_text() == "caller-owned\n"
+
+
+def test_evaluate_prepared_shares_frozen_input(tmp_path: Path) -> None:
+    """Two subjects evaluated on one PreparedEval must see identical
+    input — same projection run, same input digest."""
+    prep = prepare(tmp_path / "shared")
+    golden = _golden_text(prep.candidates)
+    subject_a = evaluate_prepared(
+        prep, ScriptedProvider("subject-a", golden), model="eval/model-a"
+    )
+    subject_b = evaluate_prepared(
+        prep, ScriptedProvider("subject-b", golden), model="eval/model-b"
+    )
+
+    rec_a = get_diagnosis_run(
+        prep.workspace, subject_a.runs[0].run_id, store=prep.store
+    )
+    rec_b = get_diagnosis_run(
+        prep.workspace, subject_b.runs[0].run_id, store=prep.store
+    )
+    assert rec_a["projection_run_id"] == rec_b["projection_run_id"]
+    assert rec_a["input_digest"] == rec_b["input_digest"]
+
+
+def test_recorded_proposals_checks_persisted_index(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """recorded_proposals must verify the separate proposals index, not
+    only the run record's embedded payloads — a non-fatal index-build
+    failure must turn the check red instead of leaving it green."""
+    prep = prepare(tmp_path / "ws")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("index write failed")
+
+    monkeypatch.setattr(
+        diagnosis_module, "build_proposal_rows", boom
+    )
+    result = run_scenario(prep, _scenario("golden-baseline"))
+
+    record = get_diagnosis_run(
+        prep.workspace, result.run_id, store=prep.store
+    )
+    assert record is not None
+    assert len(record["proposals"]) == 1
+    check = next(
+        c for c in result.checks if c.name == "recorded_proposals"
+    )
+    assert not check.passed
