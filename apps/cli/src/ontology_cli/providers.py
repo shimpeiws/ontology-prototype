@@ -30,6 +30,16 @@ DEFAULT_MODEL = "openai/gpt-4o-mini"
 DEFAULT_TIMEOUT_SECONDS = 60
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so the Authorization header can never be re-sent
+    to a different host by urllib's default redirect handling."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ProviderError(
+            f"OpenRouter attempted a redirect (HTTP {code})"
+        )
+
+
 class OpenRouterProvider:
     """OpenRouter chat-completions adapter (stdlib HTTP, no SDK)."""
 
@@ -49,6 +59,7 @@ class OpenRouterProvider:
             )
         self._api_key = key
         self._timeout = timeout
+        self._opener = urllib.request.build_opener(_NoRedirect())
 
     def complete(self, request: ProviderRequest) -> str:
         body = {
@@ -66,7 +77,7 @@ class OpenRouterProvider:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(
+            with self._opener.open(
                 http_request, timeout=self._timeout
             ) as response:
                 payload = json.loads(response.read().decode("utf-8"))

@@ -45,6 +45,10 @@ from .trace import JsonlTraceSink, TraceSink
 # shape or the output contract changes so recorded runs stay comparable.
 PROMPT_VERSION = "diagnosis.v1"
 
+# A single provider call carries the whole candidate set, so cap it:
+# beyond this, a run would exceed model output limits and fail opaque.
+MAX_CANDIDATES = 50
+
 
 class ProviderError(Exception):
     """A provider call failed in a way adapters can report safely.
@@ -219,6 +223,14 @@ def run_diagnosis(
                 else:
                     diag.warning(item.code, item.message)
 
+    if len(candidates) > MAX_CANDIDATES:
+        diag.error(
+            "DIAGNOSIS.TOO_MANY_CANDIDATES",
+            f"{len(candidates)} candidates exceeds the per-run cap "
+            f"of {MAX_CANDIDATES}",
+            hint="narrow the candidate set (e.g. an earlier as_of) "
+            "before diagnosing",
+        )
     if diag.has_errors:
         result.diagnostics = diag.items
         _emit_trace(trace, result, diag)
@@ -254,9 +266,19 @@ def run_diagnosis(
 
     deliverables: dict[str, Any] = {}
     if provider_called and not diag.has_errors:
-        deliverables = _validate_output(
-            workspace, raw_output or "", candidates, store, diag, result
-        )
+        try:
+            deliverables = _validate_output(
+                workspace, raw_output or "", candidates, store, diag, result
+            )
+        except Exception as exc:
+            # Defense in depth: model output is untrusted, so an
+            # unexpected validator fault is still INVALID_OUTPUT —
+            # never a traceback out of this stage.
+            diag.error(
+                "DIAGNOSIS.INVALID_OUTPUT",
+                f"output validation failed unexpectedly: {exc}",
+            )
+            result.proposals = []
         result.deliverables = deliverables
 
     result.status = "failed" if diag.has_errors else "ok"
@@ -496,7 +518,14 @@ def _validate_output(
         if name == "action_proposals":
             continue
         value = parsed.get(name)
-        deliverables[name] = _check_deliverable(name, value, diag)
+        deliverables[name] = _check_deliverable(
+            name, value, store, candidates, diag
+        )
+
+    # Contract-level failures fail the whole run: no proposal from a
+    # malformed output may reach the validated list.
+    if diag.has_errors:
+        return deliverables
 
     proposals_node = parsed.get("action_proposals", [])
     if "action_proposals" in wanted:
@@ -526,7 +555,11 @@ def _validate_output(
 
 
 def _check_deliverable(
-    name: str, value: Any, diag: Diagnostics
+    name: str,
+    value: Any,
+    store: CanonicalStore,
+    candidates: list[dict[str, Any]],
+    diag: Diagnostics,
 ) -> Any:
     """Validate one non-proposal deliverable; returns the value or None."""
     if name == "explanation":
@@ -566,9 +599,24 @@ def _check_deliverable(
                     f"hypotheses[{i}].evidence must be a list of strings",
                 )
                 continue
-            accepted.append(
-                {"statement": item["statement"], "evidence": evidence}
-            )
+            unverified = _unverified_evidence(store, candidates, evidence)
+            if unverified:
+                diag.warning(
+                    "DIAGNOSIS.UNVERIFIED_EVIDENCE",
+                    f"hypotheses[{i}] cites evidence ids that do not "
+                    f"resolve to recorded facts: {unverified}",
+                )
+                accepted.append(
+                    {
+                        "statement": item["statement"],
+                        "evidence": evidence,
+                        "unverified_evidence": unverified,
+                    }
+                )
+            else:
+                accepted.append(
+                    {"statement": item["statement"], "evidence": evidence}
+                )
         return accepted
     if name == "follow_up_questions":
         if not isinstance(value, list) or not all(
@@ -581,6 +629,39 @@ def _check_deliverable(
             return None
         return value
     return value
+
+
+def _unverified_evidence(
+    store: CanonicalStore,
+    candidates: list[dict[str, Any]],
+    evidence: list[str],
+) -> list[str]:
+    """Evidence ids that cannot be resolved to anything recorded.
+
+    An id verifies when it appears in the diagnosed candidates' own
+    evidence links (fact keys, observation ids, ingest ids) or resolves
+    to a recorded canonical fact — anything else is hallucination-shaped
+    and gets flagged rather than silently trusted.
+    """
+    known: set[str] = set()
+    for candidate in candidates:
+        ev = candidate.get("evidence") or {}
+        for key in ("fact_key", "entity_observation_id"):
+            if ev.get(key):
+                known.add(ev[key])
+        for key in ("observation_ids", "ingest_ids"):
+            known.update(ev.get(key) or [])
+    unverified: list[str] = []
+    for evidence_id in evidence:
+        if evidence_id in known:
+            continue
+        try:
+            resolved = bool(store.event_links(evidence_id))
+        except Exception:
+            resolved = False
+        if not resolved:
+            unverified.append(evidence_id)
+    return unverified
 
 
 def _check_proposal(
@@ -608,8 +689,13 @@ def _check_proposal(
     action = item.get("action")
     params = item.get("params")
     reason = item.get("reason")
+    # Type-check before dict.get: a non-string action (list/dict) is
+    # unhashable and would raise instead of being rejected.
+    if not isinstance(action, str):
+        reject(f"action must be a string, got {action!r}")
+        return
     spec = workspace.agent.permitted_actions.get(action)
-    if not isinstance(action, str) or spec is None:
+    if spec is None:
         reject(
             f"action {action!r} is not in permitted_actions "
             f"({', '.join(sorted(workspace.agent.permitted_actions))})"
@@ -628,6 +714,17 @@ def _check_proposal(
     subject_entity = workspace.domain.projections[
         workspace.agent.projection
     ].subject
+    # A proposal must be grounded in the diagnosed candidates: the action
+    # needs a ref param pointing at the projection's subject entity.
+    if not any(
+        p.type == "ref" and p.ref == subject_entity
+        for p in spec.params.values()
+    ):
+        reject(
+            f"action {action!r} declares no param referencing "
+            f"{subject_entity}; proposals must cite a diagnosed candidate"
+        )
+        return
     candidate_ids = {c["subject"]["id"] for c in candidates}
     for pname, pspec in spec.params.items():
         value = params.get(pname)
@@ -636,8 +733,9 @@ def _check_proposal(
                 reject(f"missing required param {pname!r}")
                 return
             continue
-        if not _param_type_ok(value, pspec):
-            reject(f"param {pname!r} must be {pspec.type}")
+        type_error = _param_error(value, pspec)
+        if type_error is not None:
+            reject(f"param {pname!r}: {type_error}")
             return
         if pspec.type == "ref":
             problem = _check_ref(
@@ -651,20 +749,34 @@ def _check_proposal(
     )
 
 
-def _param_type_ok(value: Any, spec: PropertySpec) -> bool:
+def _param_error(value: Any, spec: PropertySpec) -> str | None:
+    """A rejection reason when ``value`` does not satisfy ``spec``."""
     if spec.type == "ref":
-        return isinstance(value, str) and bool(value)
+        if isinstance(value, str) and value:
+            return None
+        return f"must be {spec.type} (a {spec.ref} id string)"
     if spec.type == "string":
-        return isinstance(value, str)
+        return None if isinstance(value, str) else "must be string"
     if spec.type == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return None
+        return "must be integer"
     if spec.type == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return None
+        return "must be number"
     if spec.type == "boolean":
-        return isinstance(value, bool)
+        return None if isinstance(value, bool) else "must be boolean"
     if spec.type in ("date", "datetime"):
-        return isinstance(value, str)
-    return False
+        if isinstance(value, str):
+            try:
+                datetime.fromisoformat(value)
+            except ValueError:
+                pass
+            else:
+                return None
+        return f"must be {spec.type} (ISO 8601)"
+    return f"unsupported param type {spec.type!r}"
 
 
 def _check_ref(

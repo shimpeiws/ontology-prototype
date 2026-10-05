@@ -133,6 +133,22 @@ def test_diagnose_invalid_as_of(tmp_path, capsys) -> None:
     assert "INVALID_AS_OF" in capsys.readouterr().out
 
 
+def test_no_input_reported_before_provider_resolution(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """FIND-010: a missing candidate source is reported even when the
+    provider could not be resolved (key unset)."""
+    workspace = setup_workspace(tmp_path)
+    capsys.readouterr()
+    monkeypatch.delenv(providers.OPENROUTER_KEY_ENV, raising=False)
+    code = main(
+        ["diagnose", str(workspace), "--provider", "openrouter", "--json"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["diagnostics"][0]["code"] == "DIAGNOSIS.NO_INPUT"
+
+
 def test_openrouter_without_key_is_a_diagnostic(
     tmp_path, capsys, monkeypatch
 ) -> None:

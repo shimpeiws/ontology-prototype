@@ -539,6 +539,18 @@ def _cmd_diagnose(
             _print_run_record(record)
         return EXIT_OK
 
+    # Validate the candidate source before touching the provider so a
+    # missing --run/--as-of is not masked by a credential error.
+    if run_id is None and as_of is None:
+        _emit_error(
+            workspace,
+            as_json,
+            "DIAGNOSIS.NO_INPUT",
+            "a diagnosis run needs a candidate source",
+            hint="pass --run <projection-run-id> or --as-of <datetime>",
+        )
+        return EXIT_INVALID
+
     if as_of is not None:
         as_of_dt = _parse_as_of(as_of)
         if as_of_dt is None:

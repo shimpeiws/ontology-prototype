@@ -79,22 +79,42 @@ The core validates before anything is recorded as a proposal:
   params, scalar types checked.
 - A `ref` param must resolve to an existing canonical entity; a ref to the
   projection's subject entity must cite one of the diagnosed candidates.
+- An action with no param referencing the projection's subject entity cannot
+  produce a proposal — it would be ungrounded in the candidate set.
+- Hypothesis evidence ids are checked against the candidate's own evidence
+  links and the canonical event log; ids that resolve nowhere are kept but
+  flagged `unverified_evidence` with a `DIAGNOSIS.UNVERIFIED_EVIDENCE`
+  warning.
+- Scalar params are type-checked; `date`/`datetime` params must parse as
+  ISO 8601.
 
 Failures split two ways: contract-level failures (unparseable output,
-mis-typed deliverables) fail the whole run with `DIAGNOSIS.INVALID_OUTPUT`;
-per-item failures reject only that proposal and are kept in `rejected` with a
-reason. Rejected proposals are never executable. A provider failure becomes
+mis-typed deliverables) fail the whole run with `DIAGNOSIS.INVALID_OUTPUT` —
+no proposal from that output may reach the validated list; per-item failures
+reject only that proposal and are kept in `rejected` with a reason. Rejected
+proposals are never executable. A provider failure becomes
 `DIAGNOSIS.PROVIDER_ERROR` — never a traceback.
+
+A run caps at 50 candidates (`DIAGNOSIS.TOO_MANY_CANDIDATES`); one provider
+call carries the whole candidate set, and an unbounded set would exceed
+model output limits and fail opaquely.
 
 ## Recording
 
-Every attempted run is appended to `diagnosis_runs` (append-only, like
-`projection_runs`): run id, the source projection run id, provider and model
-identity, prompt version and full prompt, a digest of the exact input
-(candidate set + agent contract), the raw model output, validated
-deliverables, accepted and rejected proposals, diagnostics, and a timestamp.
-`status` is `ok` or `failed`; `provider_called` is false when no candidates
-were in scope. Diagnosis never mutates entities, events, or projection runs.
+Every run that reaches provider invocation is appended to `diagnosis_runs`
+(append-only, like `projection_runs`): run id, the source projection run id,
+provider and model identity, prompt version and full prompt, a digest of the
+exact input (candidate set + agent contract), the raw model output,
+validated deliverables, accepted and rejected proposals, diagnostics, and a
+timestamp. `status` is `ok` or `failed`; `provider_called` is false when no
+candidates were in scope. Failures before a run exists (bad arguments, an
+unknown or mismatched projection run) emit a `diagnosis.failed` trace event
+with a null run id but are not recorded.
+
+Diagnosis never mutates entities, events, or existing projection runs —
+but note `--as-of` computes a projection first, which freezes a *new*
+`projection_runs` row and emits `projection.*` trace events, exactly as a
+standalone `ontology project` would.
 
 Trace events: `diagnosis.completed` / `diagnosis.failed` in
 `.ontology/trace.jsonl`.
