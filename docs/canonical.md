@@ -6,7 +6,7 @@
 
 | Table | Content |
 | --- | --- |
-| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids and the last observation time. An upsert applies only when the new observation is more recent than the stored one — `updated_at` moves forward in observation time, so out-of-order evidence can never regress current state. Equal observation times resolve by ingest id (the larger id wins), which keeps replays order-independent; two rows for one entity in a single run resolve to the first row. |
+| `entities` | Current state per `(entity_type, entity_id)`: the resolved property set plus first/last observation ids, the last observation time, and `properties_changed_at` — the observation time of the last upsert that actually changed the stored property set. An upsert applies only when the new observation is more recent than the stored one — `updated_at` moves forward in observation time, so out-of-order evidence can never regress current state — while `properties_changed_at` stays put when a re-observation carries identical properties. Equal observation times resolve by ingest id (the larger id wins), which keeps replays order-independent; two rows for one entity in a single run resolve to the first row. |
 | `events` | Append-only business facts keyed by a stable `fact_key`. |
 | `entity_observations` | Every accepted observation that resolved an entity, linked to that entity. |
 | `event_observations` | Every accepted observation that asserted an event fact, including repeats of an already-known fact. |
@@ -16,6 +16,7 @@
 | `decisions` | Append-only human approve/reject decisions; latest wins (see [decisions.md](decisions.md)). |
 | `executions` | Append-only write-back attempts: an `attempting` intent row then an outcome row (`succeeded`/`failed`/`uncertain`), latest row wins (see [execution.md](execution.md)). |
 | `fact_links` | Append-only associations recorded when a fact is appended: `possibly_corrects` (an earlier fact for the same event and subject carries a different `occurred_at`) and `correlated_intervention` (a persisted proposal targets the fact's subject). |
+| `evaluation_runs` | Frozen outcome-evaluation reports (see [evaluation.md](evaluation.md)). |
 
 ## Event identity and append-only history
 

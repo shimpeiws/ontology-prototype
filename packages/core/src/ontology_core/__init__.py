@@ -98,6 +98,7 @@ from .model import (
     TaskSpec,
     Workspace,
 )
+from .outcome import EvaluationResult, get_evaluation_run, run_evaluation
 from .projections import (
     ProjectionCandidate,
     ProjectionResult,
@@ -141,6 +142,7 @@ __all__ = [
     "EntityType",
     "EvalError",
     "EvalReport",
+    "EvaluationResult",
     "EvaluationDefinition",
     "Expectation",
     "EventBinding",
@@ -198,6 +200,7 @@ __all__ = [
     "execute",
     "execution_identity",
     "get_diagnosis_run",
+    "get_evaluation_run",
     "get_projection_run",
     "ingest_snapshot",
     "load_workspace",
@@ -205,6 +208,7 @@ __all__ = [
     "prepare",
     "proposal_view",
     "run_diagnosis",
+    "run_evaluation",
     "run_projection",
     "run_scenario",
     "run_suite",

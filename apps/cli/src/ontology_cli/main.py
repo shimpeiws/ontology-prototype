@@ -22,11 +22,13 @@ from ontology_core import (
     decide,
     execute,
     get_diagnosis_run,
+    get_evaluation_run,
     get_projection_run,
     ingest_snapshot,
     load_workspace,
     proposal_view,
     run_diagnosis,
+    run_evaluation,
     run_projection,
 )
 from ontology_core.evidence import RUNTIME_DIR
@@ -48,10 +50,10 @@ def build_parser() -> argparse.ArgumentParser:
             "projection over canonical events), 'diagnose' "
             "(model-backed diagnosis with validated action proposals), "
             "'proposals'/'decide' (proposal inspection and human "
-            "approve/reject decisions), and 'execute' (write-back of an "
+            "approve/reject decisions), 'execute' (write-back of an "
             "approved proposal through a local CSV adapter with "
-            "receipts and retry protection). Evaluation is a planned "
-            "capability, not yet a command."
+            "receipts and retry protection), and 'evaluate' "
+            "(baseline/after outcome evaluation with a frozen report)."
         ),
     )
     parser.add_argument(
@@ -252,6 +254,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the execution result as JSON",
     )
+
+    evaluate_parser = commands.add_parser(
+        "evaluate",
+        help="evaluate baseline/after cohorts of the contract interval "
+        "and freeze the report",
+    )
+    evaluate_parser.add_argument(
+        "workspace",
+        type=Path,
+        help="directory containing domain.yaml, mapping.yaml, evaluation.yaml, agent.yaml",
+    )
+    evaluate_parser.add_argument(
+        "--boundary",
+        metavar="DATETIME",
+        help="ISO 8601 datetime with an explicit offset splitting the "
+        "baseline and after cohorts; required unless --run",
+    )
+    evaluate_parser.add_argument(
+        "--as-of",
+        metavar="DATETIME",
+        help="ISO 8601 datetime with an explicit offset; required unless --run",
+    )
+    evaluate_parser.add_argument(
+        "--run",
+        metavar="RUN_ID",
+        help="inspect a previously frozen evaluation report instead of computing",
+    )
+    evaluate_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the evaluation result as JSON",
+    )
     return parser
 
 
@@ -297,6 +331,14 @@ def main(argv: list[str] | None = None) -> int:
             args.workspace,
             args.proposal,
             adapter_name=args.adapter,
+            as_json=args.json,
+        )
+    if args.command == "evaluate":
+        return _cmd_evaluate(
+            args.workspace,
+            boundary=args.boundary,
+            as_of=args.as_of,
+            run_id=args.run,
             as_json=args.json,
         )
     return EXIT_INVALID  # pragma: no cover - argparse enforces the subcommand
@@ -1048,6 +1090,193 @@ def _cmd_execute(
             if result.error:
                 print(f"  error: {result.error}")
     return EXIT_OK if result.ok else EXIT_INVALID
+
+
+def _cmd_evaluate(
+    workspace: Path,
+    *,
+    boundary: str | None,
+    as_of: str | None,
+    run_id: str | None,
+    as_json: bool,
+) -> int:
+    if run_id is not None and (as_of is not None or boundary is not None):
+        _emit_error(
+            workspace,
+            as_json,
+            "EVALUATION.CONFLICTING_ARGS",
+            "--run inspects a frozen report and cannot be combined with "
+            "--as-of or --boundary",
+        )
+        return EXIT_INVALID
+
+    if run_id is not None:
+        # Inspection is read-only and needs only the canonical store's
+        # location — not the current definitions. A frozen report stays
+        # inspectable even when a later edit makes the workspace invalid.
+        try:
+            record = get_evaluation_run(workspace, run_id)
+        except Exception as exc:
+            _emit_error(
+                workspace,
+                as_json,
+                "EVALUATION.STORE_ERROR",
+                f"cannot read canonical store: {exc}",
+            )
+            return EXIT_INVALID
+        if record is None:
+            _emit_error(
+                workspace,
+                as_json,
+                "EVALUATION.UNKNOWN_RUN",
+                f"no frozen evaluation report {run_id!r}",
+                hint="reports are recorded only when an evaluation "
+                "completes without errors",
+            )
+            return EXIT_INVALID
+        if as_json:
+            print(
+                json.dumps(
+                    {"workspace": str(workspace), "ok": True, "run": record},
+                    indent=2,
+                )
+            )
+        else:
+            _print_evaluation_report(record["report"], run_id=record["run_id"])
+        return EXIT_OK
+
+    loaded = load_workspace(workspace)
+    if not loaded.ok:
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "valid": False,
+                        "ok": False,
+                        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in loaded.diagnostics:
+                print(diagnostic.format())
+            print(f"workspace invalid: {workspace} ({len(loaded.errors)} errors)")
+        return EXIT_INVALID
+    assert loaded.workspace is not None
+
+    missing = []
+    if boundary is None:
+        missing.append("--boundary")
+    if as_of is None:
+        missing.append("--as-of")
+    if missing:
+        _emit_error(
+            workspace,
+            as_json,
+            "EVALUATION.REQUIRED_ARGS",
+            f"computing an evaluation needs {' and '.join(missing)}",
+            hint="or pass --run <run-id> to inspect a frozen report",
+        )
+        return EXIT_INVALID
+    parsed: dict[str, datetime] = {}
+    for flag, text in (("--as-of", as_of), ("--boundary", boundary)):
+        parsed_dt = _parse_as_of(text)
+        if parsed_dt is None:
+            _emit_error(
+                workspace,
+                as_json,
+                "EVALUATION.INVALID_TIME",
+                f"invalid {flag} {text!r}: expected an ISO 8601 datetime "
+                "with an explicit offset (e.g. '2026-10-05T00:00:00Z')",
+            )
+            return EXIT_INVALID
+        parsed[flag] = parsed_dt
+
+    result = run_evaluation(
+        loaded.workspace,
+        as_of=parsed["--as-of"],
+        boundary=parsed["--boundary"],
+    )
+
+    if as_json:
+        payload = {
+            "workspace": str(workspace),
+            "ok": result.ok,
+            "run_id": result.run_id,
+            "evaluation": result.evaluation,
+            "as_of": result.as_of.isoformat() if result.as_of else None,
+            "boundary": (
+                result.boundary.isoformat() if result.boundary else None
+            ),
+            "contract_digest": result.contract_digest,
+            "recorded": result.recorded,
+            "report": result.report,
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
+        print(json.dumps(payload, indent=2))
+    else:
+        for diagnostic in result.diagnostics:
+            print(diagnostic.format())
+        if result.report is not None:
+            # Only a recorded run is labeled `run <id>`: an unrecorded
+            # report (e.g. the freeze itself failed) must never present
+            # a run id that `evaluate --run` cannot find.
+            _print_evaluation_report(
+                result.report,
+                run_id=result.run_id if result.recorded else None,
+            )
+            if not result.recorded:
+                print("  report not frozen (run not recorded)")
+
+    return EXIT_OK if result.ok else EXIT_INVALID
+
+
+def _print_evaluation_report(report: dict, *, run_id: str | None) -> None:
+    label = f"run {run_id}: " if run_id else ""
+    print(
+        f"{label}{report['evaluation']} — "
+        f"as-of {report['as_of']}, boundary {report['cohort_boundary']}"
+    )
+    # `count` aggregates are interval counts, not durations.
+    unit = "intervals" if report["aggregation"] == "count" else report["unit"]
+    for name in ("baseline", "after"):
+        cohort = report["cohorts"][name]
+        counts = cohort["counts"]
+        aggregate = (
+            f"{cohort['aggregate']:g} {unit}"
+            if cohort["aggregate"] is not None
+            else "unavailable"
+        )
+        print(
+            f"  {name}: {report['aggregation']} {aggregate} "
+            f"({counts['paired']} paired, {counts['pending']} pending, "
+            f"{counts['invalid']} invalid, {counts['ambiguous']} ambiguous)"
+        )
+    change = report["change"]
+    if change["status"] == "measured":
+        print(
+            f"  change: {change['value']:g} {unit} "
+            f"({change['direction']})"
+        )
+    else:
+        print(f"  change: unavailable — {change['reason']}")
+    target = report["target"]
+    print(
+        f"  target {target['comparator']} {target['value']:g} {unit}: "
+        f"{target['status']}"
+    )
+    for guardrail in report["guardrails"]:
+        detail = (
+            f" — {guardrail['reason']}"
+            if guardrail.get("reason")
+            else ""
+        )
+        print(f"  guardrail {guardrail['name']}: {guardrail['status']}{detail}")
+    if report["unpaired_ends"]:
+        print(f"  unpaired end events: {len(report['unpaired_ends'])}")
+    print(f"  overall: {report['overall']['status']}")
 
 
 if __name__ == "__main__":
