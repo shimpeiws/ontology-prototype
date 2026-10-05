@@ -120,11 +120,6 @@ def csv_adapter(workspace) -> CsvReminderAdapter:
     return CsvReminderAdapter(reminders_path(workspace))
 
 
-def csv_key(workspace) -> str:
-    """The adapter key a CSV adapter on the default path binds to."""
-    return f"csv-reminders|{reminders_path(workspace)}"
-
-
 def test_approved_proposal_executes_with_receipt(tmp_path: Path) -> None:
     workspace, proposal = make_proposal(tmp_path)
     approve(workspace, proposal)
@@ -141,7 +136,8 @@ def test_approved_proposal_executes_with_receipt(tmp_path: Path) -> None:
         execution_identity(
             proposal["proposal_id"],
             proposal["payload_digest"],
-            csv_key(workspace),
+            "csv-reminders",
+            str(reminders_path(workspace)),
         )
     )
 
@@ -990,7 +986,10 @@ def test_execution_latest_row_ignores_created_at_clock_rewind(
     approve(workspace, proposal)
     pid = proposal["proposal_id"]
     exe_id, key = execution_identity(
-        pid, proposal["payload_digest"], csv_key(workspace)
+        pid,
+        proposal["payload_digest"],
+        "csv-reminders",
+        str(reminders_path(workspace)),
     )
     store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
     base = {
@@ -1161,6 +1160,14 @@ def test_execute_surfaces_adapter_error_in_result(tmp_path: Path) -> None:
     )
     assert result.status == "failed"
     assert result.error == "destination unavailable"
+
+
+def test_execution_identity_never_collides_on_separator() -> None:
+    """Distinct (adapter, destination) pairs must not share a key — the
+    encoding is unambiguous even when a value contains '|'."""
+    a = execution_identity("p", "d", "a|b", "c")
+    b = execution_identity("p", "d", "a", "b|c")
+    assert a != b
 
 
 def test_execute_truncates_adapter_failure_message(tmp_path: Path) -> None:

@@ -33,7 +33,9 @@ persisted proposal. Per call it:
 2. Resolves the deterministic execution identity — `execution_id` and
    `idempotency_key` derive from `proposal_id` + `payload_digest` +
    adapter key (the adapter's `name`, plus its `destination` when it
-   exposes one — for the CSV adapter, the output path). Every call for
+   exposes one — for the CSV adapter, the output path; the two fields
+   are encoded unambiguously, so no pair of values can collide). Every
+   call for
    the same approved payload and destination converges on one
    execution; a different destination is a *different* execution with
    its own attempt history, so a receipt is never replayed for a file

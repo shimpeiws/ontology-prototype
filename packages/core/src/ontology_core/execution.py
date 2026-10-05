@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -373,7 +374,10 @@ class ExecutionResult:
 
 
 def execution_identity(
-    proposal_id: str, payload_digest: str, adapter_key: str = ""
+    proposal_id: str,
+    payload_digest: str,
+    adapter_name: str = "",
+    destination: str | None = None,
 ) -> tuple[str, str]:
     """Deterministic ``(execution_id, idempotency_key)`` for one proposal.
 
@@ -382,15 +386,16 @@ def execution_identity(
     call for the same approved payload and destination converges on the
     same execution. A different destination is a different execution:
     replaying one destination's receipt under another would be a lie.
+    The adapter name and destination are JSON-encoded separately so no
+    pair of distinct values can collide into one key.
     """
-    raw = (
-        _DIGEST_VERSION
-        + "\n"
-        + proposal_id
-        + "\n"
-        + payload_digest
-        + "\n"
-        + adapter_key
+    raw = "\n".join(
+        [
+            _DIGEST_VERSION,
+            proposal_id,
+            payload_digest,
+            json.dumps([adapter_name, destination]),
+        ]
     ).encode("utf-8")
     digest = hashlib.sha256(raw).hexdigest()
     return f"exe-{digest[:16]}", f"idem-{digest[:32]}"
@@ -454,14 +459,11 @@ def execute(
     # or output file is a different execution with its own attempt
     # history — never a replay of a foreign receipt.
     adapter_name = result.adapter or ""
-    destination = getattr(adapter, "destination", None)
-    adapter_key = (
-        adapter_name
-        if not destination
-        else f"{adapter_name}|{destination}"
-    )
     result.execution_id, result.idempotency_key = execution_identity(
-        proposal_id, proposal["payload_digest"], adapter_key
+        proposal_id,
+        proposal["payload_digest"],
+        adapter_name,
+        getattr(adapter, "destination", None),
     )
     try:
         prior = store.executions_for_key(result.idempotency_key)
