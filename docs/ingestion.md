@@ -35,9 +35,19 @@ Evidence lands under `<workspace>/.ontology/`:
 | `snapshots/sha256-<digest>.<format>` | Raw source bytes, stored once under their content digest. The source file can change or be deleted afterwards; the stored snapshot is unaffected. |
 | `observations/<ingest_id>.jsonl` | One JSON object per record, written atomically. `ingest_id` is `ing-<utc-timestamp>-<digest8>-<run8>`; the run suffix keeps every run's file distinct and observation files are never overwritten. |
 | `canon.db` | SQLite canonical store: current entity state, append-only events, observation links, and frozen projection runs ([canonical.md](canonical.md)). |
-| `trace.jsonl` | Append-only trace events: `observation.accepted`, `observation.rejected`, `ingest.completed`, `ingest.failed`, `canonical.event_recorded`, `canonical.applied`, `canonical.failed`, `projection.completed`, `projection.failed`. |
+| `trace.jsonl` | Append-only trace events: `observation.accepted`, `observation.rejected`, `ingest.completed`, `ingest.failed`, `canonical.event_recorded`, `canonical.fact_linked`, `canonical.applied`, `canonical.failed`, `projection.completed`, `projection.failed`. |
 
 `.ontology/` is git-ignored: runtime snapshots, databases, and traces are never committed.
+
+## Re-ingesting later snapshots
+
+The same command re-observes a source after it changes — run it again with the newer file (`examples/job-invoicing/data/jobs-later.csv` shows job 101 after its invoice was issued):
+
+```bash
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-later.csv
+```
+
+Re-ingestion goes through the identical normalization and mapping path; only *new* facts append to `events` (the fact key covers event, subject, and `occurred_at`), while every observation — including repeats — lands in `event_observations` for provenance. A record absent from the later snapshot deletes nothing. When a later snapshot asserts an event the store already knows at a *different* `occurred_at`, the new fact is appended alongside the old one, the pair is linked in `fact_links` (`possibly_corrects`), and the run surfaces a `CANON.POSSIBLE_CORRECTION` warning — a corrected timestamp and a distinct occurrence are ambiguous, so both stay and a human resolves it. New facts also link to interventions on the same subject (`correlated_intervention`), keeping correlation explicitly distinct from causation. See [canonical.md](canonical.md#re-observation-corrections-and-intervention-links).
 
 ## Diagnostics
 
@@ -58,3 +68,4 @@ Ingestion diagnostics reuse the workspace diagnostic shape: `file` is the snapsh
 - `INGEST.EMPTY` — warning: the snapshot parsed but contained no records.
 - `CANON.STORE_ERROR` — canonical entity/event persistence failed ([canonical.md](canonical.md)).
 - `CANON.SKIPPED` — warning: canonical apply skipped because evidence persistence failed.
+- `CANON.POSSIBLE_CORRECTION` — warning: a newly appended fact conflicts on `occurred_at` with an earlier fact for the same event and subject; both are retained and linked, and the run still succeeds.

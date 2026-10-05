@@ -32,8 +32,14 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .canonical import ApplyResult, CanonicalStore, SqliteCanonicalStore
+from .canonical import (
+    REL_POSSIBLY_CORRECTS,
+    ApplyResult,
+    CanonicalStore,
+    SqliteCanonicalStore,
+)
 from .conditions import evaluate_condition
+from .decisions import backfill_proposals
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
 from .model import FieldAssignment, Workspace
@@ -300,6 +306,7 @@ def ingest_snapshot(
                     "entities_upserted": result.canonical.entities_upserted,
                     "events_appended": result.canonical.events_appended,
                     "events_reobserved": result.canonical.events_reobserved,
+                    "fact_links": len(result.canonical.links),
                 }
                 if result.canonical is not None
                 else None
@@ -331,6 +338,12 @@ def _apply_canonical(
         return None
     if canonical is None:
         canonical = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    # Repair the proposals index — the same best-effort backfill
+    # proposals/decide/execute run — before applying: a proposal recorded
+    # before the index existed (or whose indexing failed) would otherwise
+    # never get a correlated_intervention link, since links are only
+    # recorded when a fact is appended.
+    backfill_proposals(workspace, canonical)
     try:
         applied = canonical.apply(result.ingest_id or "", result.accepted)
     except Exception as exc:
@@ -365,6 +378,46 @@ def _apply_canonical(
                 "observation_id": event.first_observation_id,
             },
         )
+    appended_by_key = {e.fact_key: e for e in applied.appended}
+    corrections: dict[str, list[Any]] = {}
+    for link in applied.links:
+        trace.emit(
+            "canonical",
+            "canonical.fact_linked",
+            {
+                "ingest_id": result.ingest_id,
+                "fact_key": link.fact_key,
+                "relation": link.relation,
+                "target": link.target,
+                "observation_id": link.observation_id,
+                **({"context": link.context} if link.context else {}),
+            },
+        )
+        if link.relation == REL_POSSIBLY_CORRECTS:
+            corrections.setdefault(link.fact_key, []).append(link)
+    # One warning per new fact, not per link: a fact conflicting with n
+    # earlier facts is one ambiguity for the operator, and n warnings
+    # would bury the signal on a repetitive event type.
+    for fact_key, fact_links in corrections.items():
+        event = appended_by_key.get(fact_key)
+        subject = (
+            f"{event.subject_entity}/{event.subject_id}"
+            if event is not None
+            else "unknown subject"
+        )
+        priors = ", ".join(
+            str(link.context.get("prior_occurred_at")) for link in fact_links
+        )
+        diag.warning(
+            "CANON.POSSIBLE_CORRECTION",
+            f"{fact_links[0].context.get('event', 'event')} on {subject} "
+            f"now has conflicting occurrence times "
+            f"({priors} vs {fact_links[0].context.get('occurred_at')}) — "
+            "possible source correction or a distinct occurrence",
+            file=label,
+            hint="all facts are retained and linked; nothing is "
+            "overwritten — resolve the ambiguity against the source",
+        )
     trace.emit(
         "canonical",
         "canonical.applied",
@@ -374,6 +427,7 @@ def _apply_canonical(
             "entities_upserted": applied.entities_upserted,
             "events_appended": applied.events_appended,
             "events_reobserved": applied.events_reobserved,
+            "fact_links": len(applied.links),
         },
     )
     return applied

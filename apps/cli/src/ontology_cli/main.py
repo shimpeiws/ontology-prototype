@@ -373,6 +373,9 @@ def _cmd_ingest(workspace: Path, snapshot: Path, *, as_json: bool) -> int:
                     "entities_upserted": result.canonical.entities_upserted,
                     "events_appended": result.canonical.events_appended,
                     "events_reobserved": result.canonical.events_reobserved,
+                    "fact_links": [
+                        link.to_dict() for link in result.canonical.links
+                    ],
                 }
                 if result.canonical is not None
                 else None
@@ -406,6 +409,12 @@ def _cmd_ingest(workspace: Path, snapshot: Path, *, as_json: bool) -> int:
                     f"{result.canonical.events_appended} events appended, "
                     f"{result.canonical.events_reobserved} re-observed"
                 )
+                if result.canonical.links:
+                    for link in result.canonical.links:
+                        print(
+                            f"link: {link.fact_key} "
+                            f"{link.relation} {link.target}"
+                        )
 
     return EXIT_OK if result.ok else EXIT_INVALID
 
