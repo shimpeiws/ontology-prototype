@@ -10,7 +10,7 @@ The authoring flow spans four surfaces with fixed responsibilities ([monorepo.md
 
 | Surface | Owns | Must never |
 | --- | --- | --- |
-| Web (`apps/web`) | Presentation, draft state, field-level feedback, navigation | Access SQLite, reimplement authoritative validation, store provider credentials |
+| Web (`apps/web`) | Presentation, draft state, field-level feedback, navigation | Access SQLite, reimplement authoritative validation, persist provider credentials in committed definitions or browser storage |
 | API (`apps/api`) | Typed/versioned request/result contract over the core; workspace load/inspect, draft validation, isolated preview, save; enforce configured workspace roots | Execute CLI subprocesses for business operations, duplicate core validation |
 | Shared core (`packages/core`) | Authoritative validation, mapping semantics, workspace persistence, bundle digests | Import any app |
 | CLI (`apps/cli`) | `ontology check`/`ingest`/`project` over the same core and the same YAML files | Diverge from the core's diagnostics or file format |
