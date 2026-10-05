@@ -145,3 +145,12 @@ and follow-up questions. Earlier iterations that returned `ref` params as
 objects were correctly rejected by validation — the validator, not the model,
 decides what counts as a proposal. Final provider/model selection and
 comparative validation are tracked separately under issue #12.
+
+## Evaluation harness
+
+A repeatable controlled-double evaluation — frozen fixtures, quality
+criteria, a bounded run budget, and a provider/model substitution proof —
+lives in `ontology_core/diagnosis_eval.py` and is documented in
+[diagnosis-evaluation.md](diagnosis-evaluation.md). Run it with
+`python -m ontology_core.diagnosis_eval`; the live-model comparison reuses
+it through `evaluate_subject` without modification.

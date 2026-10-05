@@ -1,0 +1,45 @@
+schema_version: 1
+kind: domain
+domain:
+  name: job-invoicing-eval
+  description: Frozen fixture domain for the diagnosis evaluation harness.
+  policies:
+    entity_id_type: string
+    event_times:
+      occurrence_field: occurred_at
+      observation_field: observed_at
+      date_only_timezone: UTC
+  entities:
+    Job:
+      description: A unit of work delivered for a customer.
+      properties:
+        status:
+          type: string
+          required: true
+        assignee:
+          type: ref
+          ref: Person
+    Invoice:
+      description: A bill issued for a job.
+      properties:
+        job:
+          type: ref
+          ref: Job
+        error:
+          type: boolean
+    Person:
+      properties:
+        name:
+          type: string
+  events:
+    JobCompleted:
+      subject: Job
+    InvoiceIssued:
+      subject: Job
+      properties:
+        invoice:
+          type: ref
+          ref: Invoice
+  projections:
+    CompletedButNotInvoiced:
+      subject: Job

@@ -1,0 +1,14 @@
+{
+  "explanation": "A deliverable is missing and a proposal snuck in anyway.",
+  "action_proposals": [
+    {
+      "action": "SendReminder",
+      "params": {
+        "target": "taro",
+        "related_entity": "E01",
+        "reason": "This proposal must never survive a contract-level failure."
+      },
+      "reason": "Whole output should be discarded."
+    }
+  ]
+}

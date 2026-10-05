@@ -1,0 +1,28 @@
+schema_version: 1
+kind: agent
+agent:
+  name: billing-delay-diagnosis
+  description: Diagnose completed-but-uninvoiced jobs and propose a reminder.
+  projection: CompletedButNotInvoiced
+  task:
+    goal: Identify likely causes of delayed invoicing and suggest an intervention.
+    deliverables:
+      - explanation
+      - hypotheses
+      - follow_up_questions
+      - action_proposals
+  permitted_actions:
+    SendReminder:
+      description: Send a billing-readiness reminder to the assignee.
+      params:
+        target:
+          type: ref
+          ref: Person
+          required: true
+        related_entity:
+          type: ref
+          ref: Job
+          required: true
+        reason:
+          type: string
+          required: true
