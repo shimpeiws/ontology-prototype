@@ -6,9 +6,13 @@ only PyYAML at runtime.
 """
 
 from .canonical import (
+    FACT_LINK_RELATIONS,
+    REL_CORRELATED_INTERVENTION,
+    REL_POSSIBLY_CORRECTS,
     ApplyResult,
     CanonicalEvent,
     CanonicalStore,
+    FactLink,
     SqliteCanonicalStore,
     event_fact_key,
 )
@@ -116,6 +120,8 @@ __all__ = [
     "EvidenceStore",
     "ExecutionAdapter",
     "ExecutionResult",
+    "FACT_LINK_RELATIONS",
+    "FactLink",
     "FieldAssignment",
     "FileEvidenceStore",
     "GuardrailSpec",
@@ -133,6 +139,8 @@ __all__ = [
     "PropertySpec",
     "ProviderError",
     "ProviderRequest",
+    "REL_CORRELATED_INTERVENTION",
+    "REL_POSSIBLY_CORRECTS",
     "RUNTIME_DIR",
     "ResolvedEntity",
     "ResolvedEvent",

@@ -15,12 +15,22 @@
 | `proposals` | Validated action proposals with payload digests (see [decisions.md](decisions.md)). |
 | `decisions` | Append-only human approve/reject decisions; latest wins (see [decisions.md](decisions.md)). |
 | `executions` | Append-only write-back attempts: an `attempting` intent row then an outcome row (`succeeded`/`failed`/`uncertain`), latest row wins (see [execution.md](execution.md)). |
+| `fact_links` | Append-only associations recorded when a fact is appended: `possibly_corrects` (an earlier fact for the same event and subject carries a different `occurred_at`) and `correlated_intervention` (a persisted proposal targets the fact's subject). |
 
 ## Event identity and append-only history
 
 A fact key is `sha256` over the event type, subject entity/id, and `occurred_at` — never the observation or ingestion time. Re-ingesting the same snapshot therefore inserts no duplicate events; the repeat observation still links to the existing fact via `event_observations`, which is how a later run can see when and how often a fact was observed.
 
-`UPDATE` and `DELETE` triggers on `events` make the append-only rule structural: history cannot be silently rewritten, and a source that omits a fact never deletes it. If a later snapshot reports a corrected timestamp, the correction lands as a *new* fact key (different `occurred_at`) alongside the original — reconciliation is a later stage's job (#8).
+`UPDATE` and `DELETE` triggers on `events` make the append-only rule structural: history cannot be silently rewritten, and a source that omits a fact never deletes it. If a later snapshot reports a corrected timestamp, the correction lands as a *new* fact key (different `occurred_at`) alongside the original.
+
+## Re-observation: corrections and intervention links
+
+When `apply` appends a *new* fact it records, in the same transaction, how that fact relates to existing state — both relations land in `fact_links` (`fact_key`, `relation`, `target`, `ingest_id`, `observation_id`, `created_at`), append-only like `events`:
+
+- `possibly_corrects` — the store sees another fact for the same event type and subject with a *different* `occurred_at`. A corrected timestamp and a legitimate second occurrence are indistinguishable at this layer, so both facts are kept and the ingest run surfaces a `CANON.POSSIBLE_CORRECTION` warning naming both times. Adjudicating which occurrence is real stays with the operator; nothing is overwritten.
+- `correlated_intervention` — a persisted proposal targets the fact's subject (as its canonical `subject_entity`/`subject_id` or a `related_entities` ref). This links a later fact such as `InvoiceIssued` to the intervention for traceability. It is a **correlation, never a causal claim**, and it is recorded regardless of the proposal's decision or execution state — a fact observed after a rejected proposal or a failed execution is still worth tracing. The proposal id embeds its diagnosis run id, and live decision/execution state stays queryable through it.
+
+Links are created only when a fact first lands; re-observing a known fact adds observation provenance (`event_observations`) but no new links. Before applying, ingest runs the same best-effort `proposals` index repair as `decide`/`execute`, so interventions recorded before the index existed still link. Query a fact's associations with `store.fact_links(fact_key)` or everything pointing at a proposal with `store.links_for_target(proposal_id)`; every link also emits a `canonical.fact_linked` trace event.
 
 `occurred_at` (when the business fact happened) and `observed_at` (when the system learned it) are stored as separate columns; a source-reported `observed_at` wins over the ingest timestamp.
 
@@ -35,3 +45,4 @@ A fact key is `sha256` over the event type, subject entity/id, and `occurred_at`
 
 - `CANON.STORE_ERROR` — the canonical store could not be written. The store is a pluggable boundary, so any failure it raises — sqlite errors, IO errors, or a custom implementation's own exception — becomes this diagnostic, never a mid-run traceback.
 - `CANON.SKIPPED` — warning: evidence persistence failed, so the canonical apply was skipped to avoid facts without inspectable provenance.
+- `CANON.POSSIBLE_CORRECTION` — warning: a newly appended fact conflicts with an earlier fact for the same event and subject on `occurred_at` — a possible source correction or a distinct occurrence. Both facts are retained and linked (`fact_links`, relation `possibly_corrects`); the run still succeeds.

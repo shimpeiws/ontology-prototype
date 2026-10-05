@@ -27,6 +27,8 @@ persists them under ``<workspace>/.ontology/canon.db``:
 - ``decisions`` — append-only human approvals/rejections. A proposal's
   current lifecycle state is derived from its latest decision; history
   is never rewritten.
+- ``fact_links`` — append-only associations recorded when a fact is
+  appended (see "Fact links" below).
 - ``executions`` — append-only write-back attempts (see execution.py).
   Each adapter-reaching attempt writes an ``attempting`` intent row
   before the adapter call and an outcome row after, carrying the
@@ -36,9 +38,28 @@ persists them under ``<workspace>/.ontology/canon.db``:
   derives from its latest recorded row (insertion order, not wall
   clock — same rule as decisions).
 
+Fact links
+----------
+
+When a run appends a *new* fact, ``apply`` also records how it relates to
+what is already known, inside the same transaction:
+
+- ``possibly_corrects`` — another fact already exists for the same event
+  type and subject with a *different* ``occurred_at``. The store cannot
+  tell a corrected timestamp from a legitimate second occurrence, so it
+  keeps both facts and records the ambiguity for an operator to resolve;
+  nothing is overwritten.
+- ``correlated_intervention`` — a persisted proposal targets the fact's
+  subject (as its canonical subject or a related entity). The link is
+  explicitly a correlation: the system observed the fact *after* an
+  intervention on the same subject, which is not a causal claim.
+
+Re-observing an already-known fact creates no links — they belong to the
+moment the fact first lands.
+
 One ingest run applies in a single transaction: entity upserts, event
-inserts, and observation links commit together or not at all. v0.1 assumes a
-single writer per workspace, matching the evidence store.
+inserts, observation links, and fact links commit together or not at all.
+v0.1 assumes a single writer per workspace, matching the evidence store.
 """
 
 from __future__ import annotations
@@ -190,7 +211,31 @@ BEGIN SELECT RAISE(ABORT, 'executions are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS executions_no_delete
 BEFORE DELETE ON executions
 BEGIN SELECT RAISE(ABORT, 'executions are append-only'); END;
+CREATE TABLE IF NOT EXISTS fact_links (
+    fact_key TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    target TEXT NOT NULL,
+    ingest_id TEXT NOT NULL,
+    observation_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (fact_key, relation, target)
+);
+CREATE INDEX IF NOT EXISTS fact_links_target ON fact_links (target);
+CREATE TRIGGER IF NOT EXISTS fact_links_no_update
+BEFORE UPDATE ON fact_links
+BEGIN SELECT RAISE(ABORT, 'fact links are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS fact_links_no_delete
+BEFORE DELETE ON fact_links
+BEGIN SELECT RAISE(ABORT, 'fact links are append-only'); END;
 """
+
+# fact_links relation kinds. ``possibly_corrects`` points at an earlier fact
+# key; ``correlated_intervention`` points at a proposal id. Both are recorded
+# associations, never verdicts — a correction is ambiguous (the new fact may
+# be a distinct occurrence) and a correlation is never a causal claim.
+REL_POSSIBLY_CORRECTS = "possibly_corrects"
+REL_CORRELATED_INTERVENTION = "correlated_intervention"
+FACT_LINK_RELATIONS = (REL_POSSIBLY_CORRECTS, REL_CORRELATED_INTERVENTION)
 
 
 def event_fact_key(
@@ -233,6 +278,37 @@ class CanonicalEvent:
         }
 
 
+@dataclass(frozen=True)
+class FactLink:
+    """An append-only association recorded when a fact was appended.
+
+    ``relation`` is one of ``FACT_LINK_RELATIONS``; ``target`` is the
+    earlier fact key (``possibly_corrects``) or the proposal id
+    (``correlated_intervention``) the new fact is associated with.
+    ``context`` carries display details — for a correction candidate the
+    two conflicting occurrence times.
+    """
+
+    fact_key: str
+    relation: str
+    target: str
+    observation_id: str
+    ingest_id: str
+    context: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "fact_key": self.fact_key,
+            "relation": self.relation,
+            "target": self.target,
+            "observation_id": self.observation_id,
+            "ingest_id": self.ingest_id,
+        }
+        if self.context:
+            data["context"] = self.context
+        return data
+
+
 @dataclass
 class ApplyResult:
     """What one ingest run changed in the canonical store."""
@@ -242,6 +318,7 @@ class ApplyResult:
     events_appended: int = 0
     events_reobserved: int = 0
     appended: list[CanonicalEvent] = field(default_factory=list)
+    links: list[FactLink] = field(default_factory=list)
 
 
 class CanonicalStore(Protocol):
@@ -267,6 +344,14 @@ class CanonicalStore(Protocol):
 
     def event_links(self, fact_key: str) -> list[tuple[str, str]]:
         """``(observation_id, ingest_id)`` pairs that asserted this fact."""
+        ...
+
+    def fact_links(self, fact_key: str) -> list[dict[str, Any]]:
+        """All links recorded for one fact (corrections, interventions)."""
+        ...
+
+    def links_for_target(self, target: str) -> list[dict[str, Any]]:
+        """All links pointing at one target (a fact key or proposal id)."""
         ...
 
     def record_projection_run(
@@ -396,6 +481,10 @@ class SqliteCanonicalStore:
     def apply(self, ingest_id: str, observations: Iterable[Any]) -> ApplyResult:
         conn = self._connect()
         result = ApplyResult()
+        # Read once before the loop: the proposals index cannot change
+        # inside this transaction, and a new fact links against whatever
+        # interventions were already recorded.
+        proposals = self.proposals()
         # ``with conn:`` commits on success and rolls back on any exception,
         # so a failed run never leaves half-written canonical state.
         with conn:
@@ -493,6 +582,17 @@ class SqliteCanonicalStore:
                                 ingest_id=ingest_id,
                             )
                         )
+                        result.links.extend(
+                            _link_new_fact(
+                                conn,
+                                event,
+                                fact_key,
+                                observation.observation_id,
+                                observation.observed_at,
+                                ingest_id,
+                                proposals,
+                            )
+                        )
                     else:
                         result.events_reobserved += 1
         return result
@@ -577,6 +677,36 @@ class SqliteCanonicalStore:
             (fact_key,),
         ).fetchall()
         return [(row[0], row[1]) for row in rows]
+
+    def fact_links(self, fact_key: str) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        return _link_rows(
+            self._connect().execute(
+                """
+                SELECT fact_key, relation, target, ingest_id,
+                       observation_id, created_at
+                FROM fact_links WHERE fact_key = ?
+                ORDER BY relation, target
+                """,
+                (fact_key,),
+            ).fetchall()
+        )
+
+    def links_for_target(self, target: str) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        return _link_rows(
+            self._connect().execute(
+                """
+                SELECT fact_key, relation, target, ingest_id,
+                       observation_id, created_at
+                FROM fact_links WHERE target = ?
+                ORDER BY fact_key, relation
+                """,
+                (target,),
+            ).fetchall()
+        )
 
     def record_projection_run(
         self,
@@ -935,6 +1065,135 @@ class SqliteCanonicalStore:
         ]
 
 
+def _link_new_fact(
+    conn: sqlite3.Connection,
+    event: Any,
+    fact_key: str,
+    observation_id: str,
+    observed_at: datetime,
+    ingest_id: str,
+    proposals: list[dict[str, Any]],
+) -> list[FactLink]:
+    """Record how one newly appended fact relates to existing state.
+
+    Runs inside the apply transaction: a prior fact for the same event
+    type and subject with a different ``occurred_at`` is a possible
+    correction (both facts stay; the link only flags the ambiguity), and
+    every persisted proposal touching the event's subject — as its
+    canonical subject or a related entity — gets a
+    ``correlated_intervention`` link. Proposal state is deliberately not
+    part of the link: correlation is worth recording even when the
+    intervention was rejected or failed, and the live decision/execution
+    state stays queryable through the proposal id.
+    """
+    created = _iso_z(observed_at)
+    links: list[FactLink] = []
+
+    priors = conn.execute(
+        """
+        SELECT fact_key, occurred_at FROM events
+        WHERE event = ? AND subject_entity = ? AND subject_id = ?
+          AND fact_key <> ?
+        ORDER BY occurred_at, fact_key
+        """,
+        (event.event, event.subject_entity, event.subject_id, fact_key),
+    ).fetchall()
+    for prior_key, prior_occurred_at in priors:
+        link = FactLink(
+            fact_key=fact_key,
+            relation=REL_POSSIBLY_CORRECTS,
+            target=prior_key,
+            observation_id=observation_id,
+            ingest_id=ingest_id,
+            context={
+                "event": event.event,
+                "subject": {
+                    "entity": event.subject_entity,
+                    "id": event.subject_id,
+                },
+                "occurred_at": _iso_z(event.occurred_at),
+                "prior_occurred_at": prior_occurred_at,
+            },
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO fact_links (
+                fact_key, relation, target, ingest_id,
+                observation_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                link.fact_key,
+                link.relation,
+                link.target,
+                ingest_id,
+                observation_id,
+                created,
+            ),
+        )
+        links.append(link)
+
+    for proposal in proposals:
+        related = proposal["related_entities"]
+        touches_subject = (
+            proposal["subject_entity"] == event.subject_entity
+            and proposal["subject_id"] == event.subject_id
+        ) or any(
+            ref.get("entity") == event.subject_entity
+            and ref.get("id") == event.subject_id
+            for ref in related
+        )
+        if not touches_subject:
+            continue
+        link = FactLink(
+            fact_key=fact_key,
+            relation=REL_CORRELATED_INTERVENTION,
+            target=proposal["proposal_id"],
+            observation_id=observation_id,
+            ingest_id=ingest_id,
+            context={
+                "event": event.event,
+                "subject": {
+                    "entity": event.subject_entity,
+                    "id": event.subject_id,
+                },
+                "action": proposal["action"],
+            },
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO fact_links (
+                fact_key, relation, target, ingest_id,
+                observation_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                link.fact_key,
+                link.relation,
+                link.target,
+                ingest_id,
+                observation_id,
+                created,
+            ),
+        )
+        links.append(link)
+    return links
+
+
+def _link_rows(rows: Iterable[tuple]) -> list[dict[str, Any]]:
+    return [
+        {
+            "fact_key": row[0],
+            "relation": row[1],
+            "target": row[2],
+            "ingest_id": row[3],
+            "observation_id": row[4],
+            "created_at": row[5],
+        }
+        for row in rows
+    ]
+
+
 def _iso_z(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -986,6 +1245,10 @@ __all__ = [
     "CANON_DB",
     "CanonicalEvent",
     "CanonicalStore",
+    "FACT_LINK_RELATIONS",
+    "FactLink",
+    "REL_CORRELATED_INTERVENTION",
+    "REL_POSSIBLY_CORRECTS",
     "SqliteCanonicalStore",
     "event_fact_key",
 ]
