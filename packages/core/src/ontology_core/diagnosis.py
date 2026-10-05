@@ -188,12 +188,26 @@ def run_diagnosis(
                 "without errors",
             )
         if record is not None:
+            subject = workspace.domain.projections[
+                workspace.agent.projection
+            ].subject
             if record["projection"] != workspace.agent.projection:
                 diag.error(
                     "DIAGNOSIS.RUN_MISMATCH",
                     f"run {run_id!r} is a {record['projection']!r} run; the "
                     f"workspace agent tasks "
                     f"{workspace.agent.projection!r}",
+                )
+            elif record["subject"] != subject:
+                # The projection definition may have changed subject under
+                # the same name since the run froze; reusing those
+                # candidates would attach proposals to the wrong entity.
+                diag.error(
+                    "DIAGNOSIS.RUN_MISMATCH",
+                    f"run {run_id!r} froze {record['subject']!r} "
+                    f"candidates; the workspace projection now selects "
+                    f"{subject!r}",
+                    hint="diagnose with --as-of to compute fresh candidates",
                 )
             else:
                 candidates = record["candidates"]
@@ -252,11 +266,18 @@ def run_diagnosis(
             raw_output = provider.complete(
                 ProviderRequest(prompt=prompt, model=model)
             )
-        except Exception as exc:
-            detail = exc if isinstance(exc, ProviderError) else ProviderError(str(exc))
+        except ProviderError as exc:
             diag.error(
                 "DIAGNOSIS.PROVIDER_ERROR",
-                f"provider call failed: {detail}",
+                f"provider call failed: {exc}",
+            )
+        except Exception as exc:
+            # An unexpected adapter exception may embed request details —
+            # including credentials — in its message. Record only the
+            # exception class; adapters report detail via ProviderError.
+            diag.error(
+                "DIAGNOSIS.PROVIDER_ERROR",
+                f"provider call failed: unexpected {type(exc).__name__}",
             )
     else:
         diag.warning(
@@ -529,7 +550,12 @@ def _validate_output(
 
     proposals_node = parsed.get("action_proposals", [])
     if "action_proposals" in wanted:
-        if not isinstance(proposals_node, list):
+        if "action_proposals" not in parsed:
+            diag.error(
+                "DIAGNOSIS.INVALID_OUTPUT",
+                "required deliverable 'action_proposals' is missing",
+            )
+        elif not isinstance(proposals_node, list):
             diag.error(
                 "DIAGNOSIS.INVALID_OUTPUT",
                 "deliverable 'action_proposals' must be a list",
@@ -744,6 +770,19 @@ def _check_proposal(
             if problem is not None:
                 reject(f"param {pname!r}: {problem}")
                 return
+    # A declared-but-optional subject ref may simply be omitted; without a
+    # *provided* ref to the subject entity the proposal is ungrounded.
+    if not any(
+        pspec.type == "ref"
+        and pspec.ref == subject_entity
+        and params.get(pname) is not None
+        for pname, pspec in spec.params.items()
+    ):
+        reject(
+            f"proposal must set a param referencing {subject_entity} "
+            "to cite the diagnosed candidate"
+        )
+        return
     result.proposals.append(
         ActionProposal(action=action, params=params, reason=reason)
     )
@@ -767,15 +806,29 @@ def _param_error(value: Any, spec: PropertySpec) -> str | None:
         return "must be number"
     if spec.type == "boolean":
         return None if isinstance(value, bool) else "must be boolean"
-    if spec.type in ("date", "datetime"):
-        if isinstance(value, str):
+    if spec.type == "date":
+        # Strict date-only: datetimes must not validate as dates.
+        if isinstance(value, str) and re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", value
+        ):
             try:
-                datetime.fromisoformat(value)
+                datetime.strptime(value, "%Y-%m-%d")
             except ValueError:
                 pass
             else:
                 return None
-        return f"must be {spec.type} (ISO 8601)"
+        return "must be date (YYYY-MM-DD)"
+    if spec.type == "datetime":
+        # Datetimes carry an explicit offset, like the projection as_of.
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value)
+            except ValueError:
+                pass
+            else:
+                if parsed.tzinfo is not None:
+                    return None
+        return "must be datetime (ISO 8601 with an offset)"
     return f"unsupported param type {spec.type!r}"
 
 

@@ -54,6 +54,9 @@ class ProjectionCandidate:
     # as_of — see ``evidence["entity_updated_at"]`` for its stamp.
     properties: dict[str, Any]
     evidence: dict[str, Any]
+    # Declared type of each property ("ref:Person", "string", ...) so
+    # consumers can match refs without re-reading the domain definition.
+    property_types: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -62,6 +65,7 @@ class ProjectionCandidate:
             "elapsed_seconds": self.elapsed_seconds,
             "elapsed_days": round(self.elapsed_seconds / 86400, 6),
             "properties": self.properties,
+            "property_types": self.property_types,
             "evidence": self.evidence,
         }
 
@@ -298,6 +302,14 @@ def _completed_but_not_invoiced(
                 occurred_at=first.occurred_at,
                 elapsed_seconds=elapsed,
                 properties=entity["properties"] if entity else {},
+                property_types={
+                    name: (
+                        f"{spec.type}:{spec.ref}" if spec.ref else spec.type
+                    )
+                    for name, spec in workspace.domain.entities[
+                        subject_entity
+                    ].properties.items()
+                },
                 evidence={
                     "fact_key": first.fact_key,
                     "observation_ids": [obs for obs, _ in links],

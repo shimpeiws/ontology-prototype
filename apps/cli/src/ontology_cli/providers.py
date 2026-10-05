@@ -103,33 +103,22 @@ class OpenRouterProvider:
 class StubProvider:
     """Deterministic offline provider for tests and credential-free runs.
 
-    Parses the candidate block back out of the rendered prompt and emits a
-    contract-valid proposal for the first candidate, so the full
-    validate-record pipeline runs without a network.
+    Parses the candidate and permitted-action blocks back out of the
+    rendered prompt and emits a contract-valid proposal for the first
+    candidate, so the full validate-record pipeline runs without a
+    network — whatever the workspace's permitted actions are.
     """
 
     name = "stub"
 
     def complete(self, request: ProviderRequest) -> str:
         candidates = _prompt_candidates(request.prompt)
+        actions = _prompt_actions(request.prompt)
         proposals: list[dict[str, Any]] = []
         if candidates:
-            subject = candidates[0]["subject"]
-            assignee = candidates[0].get("properties", {}).get("assignee")
-            proposals.append(
-                {
-                    "action": "SendReminder",
-                    "params": {
-                        "target": assignee or "unknown",
-                        "related_entity": subject["id"],
-                        "reason": (
-                            "stub provider: candidate is past the delay "
-                            "threshold"
-                        ),
-                    },
-                    "reason": "stub proposal for the first candidate",
-                }
-            )
+            proposal = _stub_proposal(candidates[0], actions)
+            if proposal is not None:
+                proposals.append(proposal)
         return json.dumps(
             {
                 "explanation": (
@@ -164,6 +153,81 @@ def _prompt_candidates(prompt: str) -> list[dict[str, Any]]:
     except json.JSONDecodeError:
         return []
     return value if isinstance(value, list) else []
+
+
+def _prompt_actions(prompt: str) -> dict[str, Any]:
+    marker = "Permitted actions:\n"
+    if marker not in prompt:
+        return {}
+    tail = prompt.split(marker, 1)[1].strip().splitlines()[0]
+    try:
+        value = json.loads(tail)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+_PLACEHOLDERS = {
+    "string": "stub",
+    "integer": 0,
+    "number": 0.0,
+    "boolean": True,
+    "date": "2026-01-01",
+    "datetime": "2026-01-01T00:00:00Z",
+}
+
+
+def _stub_proposal(
+    candidate: dict[str, Any], actions: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Build a proposal for the first permitted action whose params the
+    stub can satisfy.
+
+    The stub can conjure the candidate's own subject id plus ref-typed
+    property values (via ``property_types``); an action qualifies when it
+    declares a ref param to the subject entity and every other required
+    param is fillable that way or is a scalar.
+    """
+    subject = candidate["subject"]
+    properties = candidate.get("properties", {})
+    property_types = candidate.get("property_types", {})
+    for name, spec in actions.items():
+        params: dict[str, Any] = {}
+        has_subject_ref = False
+        satisfiable = True
+        for pname, summary in spec.get("params", {}).items():
+            required = summary.endswith("(required)")
+            ptype = summary.split(" ", 1)[0].split(" —", 1)[0]
+            if ptype.startswith("ref:"):
+                if ptype == f"ref:{subject['entity']}":
+                    params[pname] = subject["id"]
+                    has_subject_ref = True
+                    continue
+                # A ref to another entity: fill it from a candidate
+                # property declared with that ref type, if one exists.
+                source = next(
+                    (
+                        prop
+                        for prop, ptype_of in property_types.items()
+                        if ptype_of == ptype and properties.get(prop)
+                    ),
+                    None,
+                )
+                if source is not None:
+                    params[pname] = properties[source]
+                elif required:
+                    satisfiable = False
+                    break
+                # optional non-subject ref: omit it
+            else:
+                params[pname] = _PLACEHOLDERS.get(ptype, "stub")
+        if satisfiable and has_subject_ref:
+            return {
+                "action": name,
+                "params": params,
+                "reason": "stub proposal for the first candidate",
+            }
+    return None
 
 
 def resolve_provider(name: str):

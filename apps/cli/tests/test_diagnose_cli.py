@@ -149,6 +149,68 @@ def test_no_input_reported_before_provider_resolution(
     assert payload["diagnostics"][0]["code"] == "DIAGNOSIS.NO_INPUT"
 
 
+def test_conflicting_sources_before_provider_resolution(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """--run + --as-of is rejected before provider resolution, so a
+    missing credential cannot mask the conflicting-source diagnostic."""
+    workspace = setup_workspace(tmp_path)
+    capsys.readouterr()
+    monkeypatch.delenv(providers.OPENROUTER_KEY_ENV, raising=False)
+    code = main(
+        [
+            "diagnose",
+            str(workspace),
+            "--run",
+            "prj-x",
+            "--as-of",
+            "2026-10-05T00:00:00Z",
+            "--provider",
+            "openrouter",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert payload["diagnostics"][0]["code"] == "DIAGNOSIS.CONFLICTING_ARGS"
+
+
+def test_stub_follows_permitted_actions(tmp_path, capsys) -> None:
+    """The stub adapts to the workspace's permitted actions instead of
+    hardcoding SendReminder, and fills non-subject refs from ref-typed
+    candidate properties."""
+    workspace = clisupport.copy_example(tmp_path)
+
+    def rename(doc):
+        actions = doc["agent"]["permitted_actions"]
+        actions["NotifyOwner"] = actions.pop("SendReminder")
+
+    clisupport.rewrite(workspace, "agent", rename)
+    (tmp_path / "jobs.csv").write_text(CSV_SAMPLE, encoding="utf-8")
+    assert main(["ingest", str(workspace), str(tmp_path / "jobs.csv")]) == 0
+    capsys.readouterr()
+
+    code = main(
+        [
+            "diagnose",
+            str(workspace),
+            "--as-of",
+            "2026-10-05T00:00:00Z",
+            "--provider",
+            "stub",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    proposal = payload["proposals"][0]
+    assert proposal["action"] == "NotifyOwner"
+    assert proposal["params"]["related_entity"] == "101"
+    # The required ref:Person param is filled from the Job's ref-typed
+    # 'assignee' property.
+    assert proposal["params"]["target"] == "taro"
+
+
 def test_openrouter_without_key_is_a_diagnostic(
     tmp_path, capsys, monkeypatch
 ) -> None:

@@ -797,3 +797,184 @@ def test_diagnosis_trace_events(tmp_path: Path) -> None:
     ]
     assert "diagnosis.completed" in kinds
     assert "diagnosis.failed" in kinds
+
+
+def test_missing_required_proposals_fails_contract(tmp_path: Path) -> None:
+    """A required action_proposals deliverable absent from the output is
+    a contract failure — not an empty list substituted in its place."""
+    workspace, run_id = make_frozen_run(tmp_path)
+    output = json.dumps(
+        {
+            "explanation": "x",
+            "hypotheses": [],
+            "follow_up_questions": [],
+        }
+    )
+    result = run_diagnosis(
+        workspace, FixedProvider(output), model="m", run_id=run_id
+    )
+    assert not result.ok
+    assert result.status == "failed"
+    assert result.proposals == []
+    assert "DIAGNOSIS.INVALID_OUTPUT" in {
+        d.code for d in result.diagnostics
+    }
+
+
+def test_optional_subject_ref_omitted_is_ungrounded(tmp_path: Path) -> None:
+    """An optional ref to the subject entity may be omitted by the model;
+    the proposal then has no anchor to a diagnosed candidate."""
+    docs = support.base_docs()
+    docs["agent"]["agent"]["permitted_actions"]["NoteCandidate"] = {
+        "params": {
+            "note": {"type": "string", "required": True},
+            "related_entity": {
+                "type": "ref",
+                "ref": "Job",
+                "required": False,
+            },
+        }
+    }
+    ws_dir = support.make_workspace(tmp_path / "ws", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok
+    workspace = loaded.workspace
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    projection = run_projection(
+        workspace, "CompletedButNotInvoiced", as_of=AS_OF
+    )
+
+    def out(params):
+        return json.dumps(
+            {
+                "explanation": "x",
+                "hypotheses": [],
+                "follow_up_questions": [],
+                "action_proposals": [
+                    {"action": "NoteCandidate", "params": params}
+                ],
+            }
+        )
+
+    omitted = run_diagnosis(
+        workspace, FixedProvider(out({"note": "x"})), model="m",
+        run_id=projection.run_id,
+    )
+    assert omitted.ok
+    assert omitted.proposals == []
+    assert "must set a param referencing Job" in omitted.rejected[0][
+        "reason"
+    ]
+
+    anchored = run_diagnosis(
+        workspace,
+        FixedProvider(out({"note": "x", "related_entity": "A01"})),
+        model="m",
+        run_id=projection.run_id,
+    )
+    assert [p.action for p in anchored.proposals] == ["NoteCandidate"]
+
+
+def test_frozen_run_subject_mismatch_is_rejected(tmp_path: Path) -> None:
+    """A run frozen under a different projection subject must not be
+    reused — its candidates would attach to the wrong entity type."""
+    workspace, run_id = make_frozen_run(tmp_path)
+    docs = support.base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"][
+        "subject"
+    ] = "Person"
+    ws_dir = support.make_workspace(tmp_path / "other", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok
+
+    result = run_diagnosis(
+        loaded.workspace, FixedProvider(GOOD_OUTPUT), model="m",
+        run_id=run_id,
+        store=SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR),
+    )
+    assert not result.ok
+    assert "DIAGNOSIS.RUN_MISMATCH" in {
+        d.code for d in result.diagnostics
+    }
+    assert not result.recorded
+
+
+def test_datetime_param_requires_time_and_offset(tmp_path: Path) -> None:
+    """date params are strict YYYY-MM-DD; datetime params need a time
+    and an explicit offset — like the projection as_of contract."""
+    docs = support.base_docs()
+    docs["agent"]["agent"]["permitted_actions"]["ScheduleCheck"] = {
+        "params": {
+            "when": {"type": "datetime", "required": True},
+            "related_entity": {"type": "ref", "ref": "Job", "required": True},
+        }
+    }
+    ws_dir = support.make_workspace(tmp_path / "ws", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok
+    workspace = loaded.workspace
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+    projection = run_projection(
+        workspace, "CompletedButNotInvoiced", as_of=AS_OF
+    )
+
+    def out(when):
+        return json.dumps(
+            {
+                "explanation": "x",
+                "hypotheses": [],
+                "follow_up_questions": [],
+                "action_proposals": [
+                    {
+                        "action": "ScheduleCheck",
+                        "params": {"when": when, "related_entity": "A01"},
+                    }
+                ],
+            }
+        )
+
+    for bad_when in ("2026-10-05", "2026-10-05T12:00:00"):
+        bad = run_diagnosis(
+            workspace, FixedProvider(out(bad_when)), model="m",
+            run_id=projection.run_id,
+        )
+        assert bad.ok, bad_when
+        assert bad.proposals == []
+        assert "must be datetime" in bad.rejected[0]["reason"], bad_when
+
+    good = run_diagnosis(
+        workspace, FixedProvider(out("2026-10-05T12:00:00Z")), model="m",
+        run_id=projection.run_id,
+    )
+    assert [p.action for p in good.proposals] == ["ScheduleCheck"]
+
+
+def test_unexpected_provider_exception_message_is_dropped(
+    tmp_path: Path,
+) -> None:
+    """An unexpected adapter exception may embed request details —
+    including credentials — in its message. Only the exception class is
+    recorded; the raw message never reaches diagnostics or the record."""
+    workspace, run_id = make_frozen_run(tmp_path)
+
+    class LeakyProvider:
+        name = "leaky"
+
+        def complete(self, request: ProviderRequest) -> str:
+            raise RuntimeError("401 unauthorized: Bearer sk-secret-value")
+
+    result = run_diagnosis(
+        workspace, LeakyProvider(), model="m", run_id=run_id
+    )
+    assert not result.ok
+    messages = " ".join(d.message for d in result.diagnostics)
+    assert "sk-secret-value" not in messages
+    assert "unexpected RuntimeError" in messages
+
+    record = get_diagnosis_run(workspace, result.run_id)
+    assert record is not None
+    assert "sk-secret-value" not in json.dumps(record["diagnostics"])

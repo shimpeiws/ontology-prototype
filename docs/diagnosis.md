@@ -21,8 +21,12 @@ ontology diagnose <workspace> --inspect dgx-20261005T103533689309Z-27db70b1
 ontology diagnose <workspace> --as-of 2026-10-05T00:00:00Z --provider stub
 ```
 
-`--as-of` and `--run` are mutually exclusive candidate sources. `--inspect`
-reads a recorded run and combines with neither.
+`--as-of` and `--run` are mutually exclusive candidate sources — passing
+both is `DIAGNOSIS.CONFLICTING_ARGS`. `--inspect` reads a recorded run and
+combines with neither. Reusing a frozen run also verifies its projection
+name *and* subject entity against the current definition: a run frozen
+under a different projection or subject is `DIAGNOSIS.RUN_MISMATCH`, since
+its candidates would attach proposals to the wrong entity.
 
 ## Provider and model selection
 
@@ -79,21 +83,26 @@ The core validates before anything is recorded as a proposal:
   params, scalar types checked.
 - A `ref` param must resolve to an existing canonical entity; a ref to the
   projection's subject entity must cite one of the diagnosed candidates.
-- An action with no param referencing the projection's subject entity cannot
-  produce a proposal — it would be ungrounded in the candidate set.
+- A proposal must actually *set* a param referencing the projection's
+  subject entity — an action that declares such a ref only optionally, or
+  not at all, cannot produce a proposal unless the model supplies it.
 - Hypothesis evidence ids are checked against the candidate's own evidence
   links and the canonical event log; ids that resolve nowhere are kept but
   flagged `unverified_evidence` with a `DIAGNOSIS.UNVERIFIED_EVIDENCE`
   warning.
-- Scalar params are type-checked; `date`/`datetime` params must parse as
-  ISO 8601.
+- Scalar params are type-checked; `date` params are strict `YYYY-MM-DD`
+  and `datetime` params require a time with an explicit offset, matching
+  the projection as-of contract.
 
 Failures split two ways: contract-level failures (unparseable output,
 mis-typed deliverables) fail the whole run with `DIAGNOSIS.INVALID_OUTPUT` —
 no proposal from that output may reach the validated list; per-item failures
 reject only that proposal and are kept in `rejected` with a reason. Rejected
 proposals are never executable. A provider failure becomes
-`DIAGNOSIS.PROVIDER_ERROR` — never a traceback.
+`DIAGNOSIS.PROVIDER_ERROR` — never a traceback. Adapters report failures
+through `ProviderError` with sanitized messages; an unexpected adapter
+exception is recorded by class name only, since its message may embed
+request details such as credentials.
 
 A run caps at 50 candidates (`DIAGNOSIS.TOO_MANY_CANDIDATES`); one provider
 call carries the whole candidate set, and an unbounded set would exceed

@@ -540,7 +540,15 @@ def _cmd_diagnose(
         return EXIT_OK
 
     # Validate the candidate source before touching the provider so a
-    # missing --run/--as-of is not masked by a credential error.
+    # missing/conflicting --run/--as-of is not masked by a credential error.
+    if run_id is not None and as_of is not None:
+        _emit_error(
+            workspace,
+            as_json,
+            "DIAGNOSIS.CONFLICTING_ARGS",
+            "a diagnosis run takes either --run or --as-of, not both",
+        )
+        return EXIT_INVALID
     if run_id is None and as_of is None:
         _emit_error(
             workspace,
