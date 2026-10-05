@@ -18,10 +18,12 @@ from ontology_core import __version__ as core_version
 from ontology_core import (
     Diagnostic,
     ProviderError,
+    decide,
     get_diagnosis_run,
     get_projection_run,
     ingest_snapshot,
     load_workspace,
+    proposal_view,
     run_diagnosis,
     run_projection,
 )
@@ -40,10 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
             "FDE operational loop CLI. Implemented: 'check' (workspace "
             "validation), 'ingest' (CSV/JSON snapshots into observation "
             "evidence and canonical state), 'project' (deterministic "
-            "projection over canonical events), and 'diagnose' "
-            "(model-backed diagnosis with validated action proposals). "
-            "Approvals, write-back, and evaluation are planned "
-            "capabilities, not yet commands."
+            "projection over canonical events), 'diagnose' "
+            "(model-backed diagnosis with validated action proposals), "
+            "and 'proposals'/'decide' (proposal inspection and human "
+            "approve/reject decisions). Write-back and evaluation are "
+            "planned capabilities, not yet commands."
         ),
     )
     parser.add_argument(
@@ -159,6 +162,64 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the diagnosis result as JSON",
     )
+
+    proposals = commands.add_parser(
+        "proposals",
+        help="list persisted action proposals or inspect one",
+    )
+    proposals.add_argument(
+        "workspace",
+        type=Path,
+        help="directory containing domain.yaml, mapping.yaml, evaluation.yaml, agent.yaml",
+    )
+    proposals.add_argument(
+        "--show",
+        metavar="PROPOSAL_ID",
+        help="inspect one proposal and its decision history",
+    )
+    proposals.add_argument(
+        "--json",
+        action="store_true",
+        help="print the proposal list or detail as JSON",
+    )
+
+    decide_parser = commands.add_parser(
+        "decide",
+        help="record a human approve/reject decision on a proposal",
+    )
+    decide_parser.add_argument(
+        "workspace",
+        type=Path,
+        help="directory containing domain.yaml, mapping.yaml, evaluation.yaml, agent.yaml",
+    )
+    decide_parser.add_argument(
+        "proposal",
+        metavar="PROPOSAL_ID",
+        help="the persisted proposal to decide on",
+    )
+    decision_group = decide_parser.add_mutually_exclusive_group(required=True)
+    decision_group.add_argument(
+        "--approve", action="store_true", help="approve the proposal"
+    )
+    decision_group.add_argument(
+        "--reject", action="store_true", help="reject the proposal"
+    )
+    decide_parser.add_argument(
+        "--reviewer",
+        metavar="NAME",
+        required=True,
+        help="explicit reviewer identity recorded with the decision",
+    )
+    decide_parser.add_argument(
+        "--reason",
+        metavar="TEXT",
+        help="optional reason recorded with the decision",
+    )
+    decide_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the decision result as JSON",
+    )
     return parser
 
 
@@ -184,6 +245,19 @@ def main(argv: list[str] | None = None) -> int:
             as_of=args.as_of,
             provider_name=args.provider,
             model=args.model,
+            as_json=args.json,
+        )
+    if args.command == "proposals":
+        return _cmd_proposals(
+            args.workspace, show_id=args.show, as_json=args.json
+        )
+    if args.command == "decide":
+        return _cmd_decide(
+            args.workspace,
+            args.proposal,
+            decision="approved" if args.approve else "rejected",
+            reviewer=args.reviewer,
+            reason=args.reason,
             as_json=args.json,
         )
     return EXIT_INVALID  # pragma: no cover - argparse enforces the subcommand
@@ -657,6 +731,179 @@ def _print_run_record(record: dict) -> None:
     for diagnostic in record["diagnostics"]:
         if diagnostic["severity"] == "error":
             print(f"  error: {diagnostic['code']} {diagnostic['message']}")
+
+
+def _cmd_proposals(
+    workspace: Path, *, show_id: str | None, as_json: bool
+) -> int:
+    loaded = load_workspace(workspace)
+    if not loaded.ok:
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "ok": False,
+                        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in loaded.diagnostics:
+                print(diagnostic.format())
+        return EXIT_INVALID
+
+    try:
+        views = proposal_view(loaded.workspace)
+    except Exception as exc:
+        _emit_error(
+            workspace,
+            as_json,
+            "DECISION.STORE_ERROR",
+            f"cannot read canonical store: {exc}",
+        )
+        return EXIT_INVALID
+
+    if show_id is not None:
+        view = next((v for v in views if v["proposal_id"] == show_id), None)
+        if view is None:
+            _emit_error(
+                workspace,
+                as_json,
+                "DECISION.UNKNOWN_PROPOSAL",
+                f"no persisted proposal {show_id!r}",
+                hint="run 'ontology proposals <workspace>' to list "
+                "persisted proposals",
+            )
+            return EXIT_INVALID
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "ok": True,
+                        "proposal": view,
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            _print_proposal(view, verbose=True)
+        return EXIT_OK
+
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "workspace": str(workspace),
+                    "ok": True,
+                    "proposals": views,
+                },
+                indent=2,
+            )
+        )
+    else:
+        if not views:
+            print("no persisted proposals")
+        for view in views:
+            _print_proposal(view, verbose=False)
+    return EXIT_OK
+
+
+def _print_proposal(view: dict, *, verbose: bool) -> None:
+    subject = (
+        f"{view['subject_entity']}/{view['subject_id']}"
+        if view["subject_id"]
+        else "-"
+    )
+    print(
+        f"{view['proposal_id']}: {view['action']} on {subject} "
+        f"— {view['status']}"
+    )
+    latest = view["latest_decision"]
+    if latest:
+        print(f"  by {latest['reviewer']} at {latest['decided_at']}")
+    if verbose:
+        print(f"  run: {view['diagnosis_run_id']}")
+        print(f"  digest: {view['payload_digest']}")
+        print(f"  params: {json.dumps(view['params'], sort_keys=True)}")
+        if view["reason"]:
+            print(f"  reason: {view['reason']}")
+        for related in view["related_entities"]:
+            print(
+                f"  related: {related['param']} -> "
+                f"{related['entity']}/{related['id']}"
+            )
+        for key, value in view["evidence"].items():
+            print(f"  evidence.{key}: {value}")
+        for past in view["decisions"]:
+            print(
+                f"  decision: {past['decision']} by {past['reviewer']} "
+                f"at {past['decided_at']}"
+                + (f" — {past['reason']}" if past["reason"] else "")
+            )
+
+
+def _cmd_decide(
+    workspace: Path,
+    proposal_id: str,
+    *,
+    decision: str,
+    reviewer: str,
+    reason: str | None,
+    as_json: bool,
+) -> int:
+    loaded = load_workspace(workspace)
+    if not loaded.ok:
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "ok": False,
+                        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in loaded.diagnostics:
+                print(diagnostic.format())
+        return EXIT_INVALID
+
+    result = decide(
+        loaded.workspace,
+        proposal_id,
+        decision,
+        reviewer=reviewer,
+        reason=reason,
+    )
+
+    if as_json:
+        print(
+            json.dumps(
+                {
+                    "workspace": str(workspace),
+                    "ok": result.ok,
+                    "decision_id": result.decision_id,
+                    "proposal_id": result.proposal_id,
+                    "decision": result.decision,
+                    "recorded": result.recorded,
+                    "diagnostics": [d.to_dict() for d in result.diagnostics],
+                },
+                indent=2,
+            )
+        )
+    else:
+        for diagnostic in result.diagnostics:
+            print(diagnostic.format())
+        if result.recorded:
+            print(
+                f"{result.decision}: {result.proposal_id} "
+                f"(decision {result.decision_id})"
+            )
+    return EXIT_OK if result.ok else EXIT_INVALID
 
 
 if __name__ == "__main__":

@@ -6,7 +6,9 @@ any app. Validation builds them only when the corresponding file is error free.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -199,3 +201,47 @@ class Workspace:
     mapping: MappingDefinition
     evaluation: EvaluationDefinition
     agent: AgentDefinition
+
+
+def param_type_error(value: Any, spec: PropertySpec) -> str | None:
+    """A rejection reason when ``value`` does not satisfy ``spec``."""
+    if spec.type == "ref":
+        if isinstance(value, str) and value:
+            return None
+        return f"must be {spec.type} (a {spec.ref} id string)"
+    if spec.type == "string":
+        return None if isinstance(value, str) else "must be string"
+    if spec.type == "integer":
+        if isinstance(value, int) and not isinstance(value, bool):
+            return None
+        return "must be integer"
+    if spec.type == "number":
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return None
+        return "must be number"
+    if spec.type == "boolean":
+        return None if isinstance(value, bool) else "must be boolean"
+    if spec.type == "date":
+        # Strict date-only: datetimes must not validate as dates.
+        if isinstance(value, str) and re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", value
+        ):
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                pass
+            else:
+                return None
+        return "must be date (YYYY-MM-DD)"
+    if spec.type == "datetime":
+        # Datetimes carry an explicit offset, like the projection as_of.
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value)
+            except ValueError:
+                pass
+            else:
+                if parsed.tzinfo is not None:
+                    return None
+        return "must be datetime (ISO 8601 with an offset)"
+    return f"unsupported param type {spec.type!r}"

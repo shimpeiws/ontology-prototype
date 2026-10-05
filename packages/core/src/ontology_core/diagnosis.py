@@ -17,8 +17,9 @@ failures never produce an executable proposal: they become diagnostics
 and ``rejected`` entries. Every run — including failed ones — is recorded
 append-only in ``diagnosis_runs`` with the provider/model identity, prompt
 version, candidate input digest, raw output, and validation result, so a
-run is inspectable after the fact. Diagnosis reads canonical state but
-never mutates it, and it neither approves nor executes proposals — those
+run is inspectable after the fact. Diagnosis reads canonical state for
+validation and appends only run/proposal records — it never rewrites
+canonical history, and it neither approves nor executes proposals: those
 are separate stages owned by later issues.
 """
 
@@ -35,9 +36,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .canonical import CanonicalStore, SqliteCanonicalStore
+from .decisions import build_proposal_rows
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
-from .model import PropertySpec, Workspace
+from .model import PropertySpec, Workspace, param_type_error
 from .projections import run_projection
 from .trace import JsonlTraceSink, TraceSink
 
@@ -90,14 +92,27 @@ class DiagnosisProvider(Protocol):
 
 @dataclass(frozen=True)
 class ActionProposal:
-    """One validated action proposal — never executed at this stage."""
+    """One validated action proposal — never executed at this stage.
+
+    ``index`` is the proposal's position in the model's raw
+    ``action_proposals`` list, so a persisted proposal stays traceable to
+    the recorded output it came from.
+    """
 
     action: str
     params: dict[str, Any]
     reason: str | None
+    index: int = -1
 
     def to_dict(self) -> dict[str, Any]:
-        return {"action": self.action, "params": self.params, "reason": self.reason}
+        # ``index`` travels with the recorded proposal so a later repair
+        # can rebuild its ``-pN`` id without the raw output.
+        return {
+            "action": self.action,
+            "params": self.params,
+            "reason": self.reason,
+            "index": self.index,
+        }
 
 
 @dataclass
@@ -304,6 +319,24 @@ def run_diagnosis(
 
     result.status = "failed" if diag.has_errors else "ok"
 
+    # Proposal rows are built outside the store call: a row-construction
+    # fault must not cost the run record — the run still carries the full
+    # proposal payloads, only the review-side index rows would be lost.
+    try:
+        proposal_rows = build_proposal_rows(
+            workspace,
+            result.run_id,
+            result.proposals,
+            candidates,
+            created_at,
+        )
+    except Exception as exc:
+        diag.warning(
+            "DIAGNOSIS.PROPOSAL_ROWS_ERROR",
+            f"cannot index proposals for review: {exc}",
+        )
+        proposal_rows = []
+
     try:
         store.record_diagnosis_run(
             {
@@ -322,7 +355,8 @@ def run_diagnosis(
                 "rejected": result.rejected,
                 "diagnostics": [d.to_dict() for d in diag.items],
                 "created_at": created_at,
-            }
+            },
+            proposal_rows=proposal_rows,
         )
         result.recorded = True
     except Exception as exc:
@@ -759,7 +793,7 @@ def _check_proposal(
                 reject(f"missing required param {pname!r}")
                 return
             continue
-        type_error = _param_error(value, pspec)
+        type_error = param_type_error(value, pspec)
         if type_error is not None:
             reject(f"param {pname!r}: {type_error}")
             return
@@ -784,52 +818,10 @@ def _check_proposal(
         )
         return
     result.proposals.append(
-        ActionProposal(action=action, params=params, reason=reason)
+        ActionProposal(
+            action=action, params=params, reason=reason, index=index
+        )
     )
-
-
-def _param_error(value: Any, spec: PropertySpec) -> str | None:
-    """A rejection reason when ``value`` does not satisfy ``spec``."""
-    if spec.type == "ref":
-        if isinstance(value, str) and value:
-            return None
-        return f"must be {spec.type} (a {spec.ref} id string)"
-    if spec.type == "string":
-        return None if isinstance(value, str) else "must be string"
-    if spec.type == "integer":
-        if isinstance(value, int) and not isinstance(value, bool):
-            return None
-        return "must be integer"
-    if spec.type == "number":
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return None
-        return "must be number"
-    if spec.type == "boolean":
-        return None if isinstance(value, bool) else "must be boolean"
-    if spec.type == "date":
-        # Strict date-only: datetimes must not validate as dates.
-        if isinstance(value, str) and re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}", value
-        ):
-            try:
-                datetime.strptime(value, "%Y-%m-%d")
-            except ValueError:
-                pass
-            else:
-                return None
-        return "must be date (YYYY-MM-DD)"
-    if spec.type == "datetime":
-        # Datetimes carry an explicit offset, like the projection as_of.
-        if isinstance(value, str):
-            try:
-                parsed = datetime.fromisoformat(value)
-            except ValueError:
-                pass
-            else:
-                if parsed.tzinfo is not None:
-                    return None
-        return "must be datetime (ISO 8601 with an offset)"
-    return f"unsupported param type {spec.type!r}"
 
 
 def _check_ref(
