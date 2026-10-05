@@ -35,11 +35,12 @@ persisted proposal. Per call it:
    adapter key (the adapter's `name`, plus its `destination` when it
    exposes one — for the CSV adapter, the output path; the two fields
    are encoded unambiguously, so no pair of values can collide). Every
-   call for
-   the same approved payload and destination converges on one
+   call for the same approved payload and destination converges on one
    execution; a different destination is a *different* execution with
    its own attempt history, so a receipt is never replayed for a file
-   it did not write.
+   it did not write. The encoding is versioned (`v1` digest prefix) —
+   a post-release format change is a key rotation and must come with a
+   migration or legacy-key lookup for existing workspaces.
 3. Checks the execution's latest recorded row:
    - `succeeded` → replays the persisted receipt
      (`execution.replayed` trace event); the adapter is never invoked,
