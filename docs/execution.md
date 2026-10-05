@@ -115,8 +115,11 @@ characters) are written with a leading `'` to keep them inert.
 ## What write-back never does
 
 - It never mutates canonical entities, events, projection or diagnosis
-  runs, proposals, or decisions — the only writes are `executions`
-  rows, the trace, and the adapter's own output file.
+  runs, decisions, or the *content* of existing proposal rows — the
+  only new writes are `executions` rows, the trace, and the adapter's
+  own output file. The only exception is step 1: the same backfill
+  repair `decide`/`proposals` run may add a missing `proposals` index
+  row for a run recorded before the table existed.
 - It never fabricates business outcomes: writing a reminder does not
   create an `InvoiceIssued` event or touch the source data. The loop is
   closed by re-observing the real source, not by faking the result.

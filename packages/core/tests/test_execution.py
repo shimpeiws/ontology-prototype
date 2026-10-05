@@ -652,8 +652,10 @@ def test_unrecorded_outcome_blocks_blind_retry(tmp_path: Path) -> None:
     adapter = NonIdempotentCsv(csv_adapter(workspace))
 
     first = execute(workspace, pid, adapter, store=store)
-    assert first.status == "succeeded"
-    assert not first.ok  # the unpersisted outcome is an error
+    # The adapter wrote, but the outcome row did not: report uncertain —
+    # claiming success would hide an effect with no receipt on record.
+    assert first.status == "uncertain"
+    assert not first.ok
     assert "EXECUTION.STORE_ERROR" in {
         d.code for d in first.diagnostics
     }
@@ -816,6 +818,32 @@ def test_csv_adapter_neutralizes_spreadsheet_formulas(
     assert row["related_entity"] == "'-2+3"
     assert row["reason"].startswith("'")
 
+    # A leading space is inert to the prefix check but spreadsheets
+    # still evaluate the cell — it is neutralized too.
+    adapter2 = CsvReminderAdapter(tmp_path / "reminders2.csv")
+    adapter2.deliver(
+        AdapterRequest(
+            execution_id="exe-y",
+            idempotency_key="idem-y",
+            attempt=1,
+            proposal_id="p",
+            action="SendReminder",
+            params={
+                "target": " =cmd|'/c calc'!A0",
+                "related_entity": "A01",
+                "reason": "x",
+            },
+            payload_digest="sha256:y",
+            subject_entity="Job",
+            subject_id="A01",
+            related_entities=[],
+            reason="x",
+        )
+    )
+    with adapter2.path.open("r", newline="", encoding="utf-8") as f:
+        row = list(csv.DictReader(f))[0]
+    assert row["target"] == "' =cmd|'/c calc'!A0"
+
 
 def test_execute_refused_when_contract_changed(tmp_path: Path) -> None:
     """Approving then dropping the action from the contract fails the
@@ -892,3 +920,138 @@ def test_execute_backfills_legacy_proposal(tmp_path: Path) -> None:
     result = execute(workspace, "dgx-legacy-p0", csv_adapter(workspace))
     assert result.ok, [d.format() for d in result.diagnostics]
     assert len(read_reminders(workspace)) == 1
+
+
+def test_csv_adapter_does_not_dedupe_a_truncated_row(
+    tmp_path: Path,
+) -> None:
+    """A torn write (row truncated after the key column) must not dedupe
+    as delivered, and must not be blindly appended either."""
+    path = tmp_path / "reminders.csv"
+    adapter = CsvReminderAdapter(path)
+    request = AdapterRequest(
+        execution_id="exe-x",
+        idempotency_key="idem-x",
+        attempt=1,
+        proposal_id="p",
+        action="SendReminder",
+        params={
+            "target": "taro",
+            "related_entity": "A01",
+            "reason": "x",
+        },
+        payload_digest="sha256:x",
+        subject_entity="Job",
+        subject_id="A01",
+        related_entities=[],
+        reason="x",
+    )
+    adapter.deliver(request)
+    # Simulate the interruption mid-write: truncate the last row after
+    # the idempotency_key column (reminder_id/proposal_id/execution_id/
+    # key present, the rest missing).
+    lines = path.read_text().splitlines()
+    head = lines[0].split(",")
+    key_col = head.index("idempotency_key")
+    lines[-1] = ",".join(lines[-1].split(",")[: key_col + 1])
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.raises(AdapterFailed):
+        adapter.deliver(request)
+
+
+def test_execution_latest_row_ignores_created_at_clock_rewind(
+    tmp_path: Path,
+) -> None:
+    """Derived state follows insertion order, never wall-clock
+    created_at — a rewound timestamp must not resurrect an old status."""
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    pid = proposal["proposal_id"]
+    exe_id, key = execution_identity(pid, proposal["payload_digest"])
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    base = {
+        "execution_id": exe_id,
+        "idempotency_key": key,
+        "proposal_id": pid,
+        "action": "SendReminder",
+        "adapter": "csv-reminders",
+    }
+    store.record_execution(
+        {
+            **base,
+            "attempt": 1,
+            "status": "attempting",
+            "receipt": None,
+            "error": None,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    store.record_execution(
+        {
+            **base,
+            "attempt": 1,
+            "status": "uncertain",
+            "receipt": None,
+            # Rewound clock: earlier than the intent row. Latest-state
+            # derivation must still pick this row by insertion order.
+            "error": "unexpected RuntimeError",
+            "created_at": datetime(2000, 1, 1, tzinfo=timezone.utc),
+        }
+    )
+
+    # The rewound uncertain row is still the latest — with a
+    # non-idempotent adapter this refuses instead of proceeding.
+    adapter = NonIdempotentCsv(csv_adapter(workspace))
+    result = execute(workspace, pid, adapter, store=store)
+    assert result.status == "refused"
+    assert "EXECUTION.UNCERTAIN" in {
+        d.code for d in result.diagnostics
+    }
+    assert adapter.calls == 0
+    assert read_reminders(workspace) == []
+
+
+def test_execute_failed_attempt_emits_trace_event(tmp_path: Path) -> None:
+    """execution.failed is traceable like the other outcomes."""
+
+    class CleanFail:
+        name = "clean-fail"
+
+        def deliver(self, request):
+            raise AdapterFailed("destination unavailable")
+
+    workspace, proposal = make_proposal(tmp_path)
+    approve(workspace, proposal)
+    trace_path = tmp_path / "trace.jsonl"
+    sink = JsonlTraceSink(trace_path)
+    result = execute(
+        workspace, proposal["proposal_id"], CleanFail(), trace=sink
+    )
+    assert result.status == "failed"
+    events = [
+        json.loads(line)
+        for line in trace_path.read_text().splitlines()
+    ]
+    assert [e["kind"] for e in events] == ["execution.failed"]
+    assert events[0]["data"]["status"] == "failed"
+
+
+def test_executions_table_created_on_existing_db(tmp_path: Path) -> None:
+    """A canon.db created before the executions table gains it on the
+    next store open — the CREATE TABLE IF NOT EXISTS migration path."""
+    workspace = make_ws(tmp_path)
+    snapshot = tmp_path / "jobs.csv"
+    snapshot.write_text(CSV_SAMPLE, encoding="utf-8")
+    ingest_snapshot(workspace, snapshot, observed_at=FIXED_NOW)
+
+    db = Path(workspace.path) / RUNTIME_DIR / "canon.db"
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TRIGGER IF EXISTS executions_no_update")
+    conn.execute("DROP TRIGGER IF EXISTS executions_no_delete")
+    conn.execute("DROP TABLE IF EXISTS executions")
+    conn.commit()
+    conn.close()
+
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    assert store.executions_for_key("idem-none") == []

@@ -248,8 +248,19 @@ class CsvReminderAdapter:
         try:
             with self.path.open("r", newline="", encoding="utf-8") as f:
                 for row in csv.DictReader(f):
-                    if row.get("idempotency_key") == idempotency_key:
-                        return row
+                    if row.get("idempotency_key") != idempotency_key:
+                        continue
+                    # A row matching the key but missing required cells
+                    # is a torn write — a reminder may be half-there, so
+                    # neither dedupe nor a blind append is honest.
+                    if not all(row.get(c) for c in REMINDER_COLUMNS):
+                        raise AdapterFailed(
+                            f"existing {self.path} has an incomplete "
+                            f"row for idempotency key "
+                            f"{idempotency_key!r}: a partial reminder "
+                            "may already exist — reconcile manually"
+                        )
+                    return row
         except (OSError, UnicodeDecodeError, csv.Error) as exc:
             # Cannot prove the key is absent; appending could duplicate.
             raise AdapterFailed(
@@ -258,7 +269,7 @@ class CsvReminderAdapter:
         return None
 
 
-_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", " ", "\t", "\r", "\n")
 
 
 def _csv_safe(value: str) -> str:
@@ -508,9 +519,14 @@ def execute(
     else:
         result.status = "succeeded"
 
-    _record_row(
+    if not _record_row(
         store, request, result, result.status, receipt, error, diag
-    )
+    ):
+        # The adapter outcome stands but its evidence could not be
+        # persisted: report uncertain, not succeeded — the stranded
+        # intent row already blocks the next run, and claiming success
+        # would hide an effect with no receipt on record.
+        result.status = "uncertain"
     result.receipt = receipt
     kind = {
         "succeeded": "execution.succeeded",
