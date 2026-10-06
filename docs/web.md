@@ -25,13 +25,25 @@ The Web app is presentation only:
   baseline, and invalidates any displayed draft-validation result.
   "Validate draft" posts the whole bundle to `/api/v1/workspaces/drafts/validate`.
   Saving to disk is not implemented here (#19).
+- The Domain page offers structured authoring on top of the raw editor: a
+  visual graph of entities/events/projections, an inspectable list, and
+  per-concept forms that mutate the draft `domain.yaml` through the
+  `yaml` CST-preserving document API — comments, key order, and unmodeled
+  sections survive edits. Rename/remove goes through a reference-impact
+  panel that scans all four draft files at the positions the core
+  validators dereference (`app/lib/references.ts`); the FDE chooses
+  whether references are retargeted. Property types come from
+  `GET /api/v1/contract`, never a hardcoded client copy. Projections can
+  be renamed, removed, and re-subjected but not created — projection
+  authoring is an unassigned gap in authoring-flow.md.
 - Draft edits are made in two equivalent views: a raw-text editor and
   structured per-definition forms (evaluation and agent task from #18;
-  domain/mapping forms belong to #16/#17). The forms mutate the same draft
-  YAML text via the `yaml` Document API, so unexposed fields, comments,
-  and ordering are preserved; a draft that does not parse degrades the
-  form to a notice and leaves the raw editor usable. Select options come
-  from `GET /api/v1/contract`; entity/event/projection suggestions come
+  the domain form is part of the Domain editor above, and the mapping
+  form belongs to #17). The forms mutate the same draft YAML text via
+  the `yaml` Document API, so unexposed fields, comments, and ordering
+  are preserved; a draft that does not parse degrades the form to a
+  notice and leaves the raw editor usable. Select options come from
+  `GET /api/v1/contract`; entity/event/projection suggestions come
   from the domain draft — the core remains the only validator.
 
 ## Development

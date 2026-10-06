@@ -362,3 +362,205 @@ code {
   gap: 0.25rem;
   font-size: 0.85em;
 }
+
+.field-diagnostics.stale {
+  opacity: 0.6;
+}
+
+/* Domain editor */
+.field {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0.25rem 1rem 0.25rem 0;
+}
+
+.field-label {
+  font-weight: 600;
+  font-size: 0.9em;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: #0969da;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.domain-meta {
+  margin-bottom: 1rem;
+}
+
+/* Domain graph */
+.graph-canvas {
+  position: relative;
+  overflow-x: auto;
+  padding: 0.25rem;
+}
+
+.graph-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.graph-edge {
+  stroke: #6e7781;
+  stroke-width: 1.5;
+}
+
+.graph-edge-subject {
+  stroke-dasharray: 5 3;
+}
+
+.graph-arrowhead {
+  fill: #6e7781;
+}
+
+.graph-edge-label {
+  font-size: 0.7rem;
+  fill: #57606a;
+  paint-order: stroke;
+  stroke: light-dark(#fff, #1a1a1a);
+  stroke-width: 3px;
+}
+
+.graph-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  position: relative;
+}
+
+.graph-row-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+  margin-top: 0.75rem;
+  display: inline-block;
+}
+
+.graph-card {
+  border: 1px solid light-dark(rgba(0, 0, 0, 0.3), rgba(255, 255, 255, 0.35));
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  min-width: 9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  background: light-dark(#fff, #24292f);
+  cursor: pointer;
+  position: relative;
+}
+
+.graph-card:focus-visible {
+  outline: 2px solid #0969da;
+}
+
+.graph-card.selected {
+  outline: 2px solid #0969da;
+}
+
+.graph-card-event {
+  border-style: dashed;
+}
+
+.graph-card-projection {
+  border-style: dotted;
+}
+
+.graph-card-missing {
+  border-style: dashed;
+  border-color: #b3261e;
+  opacity: 0.8;
+  cursor: default;
+}
+
+.graph-card-title {
+  font-size: 0.85rem;
+}
+
+.graph-prop {
+  font-size: 0.75rem;
+  font-family: ui-monospace, monospace;
+  opacity: 0.85;
+}
+
+/* Property table + concept form */
+.property-table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.9em;
+}
+
+.property-table th,
+.property-table td {
+  border: 1px solid
+    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.prop-actions {
+  white-space: nowrap;
+}
+
+.prop-actions button + button,
+.rename-control button + button {
+  margin-left: 0.4rem;
+}
+
+.add-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.concept-form {
+  border: 1px solid
+    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.concept-form-head {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Impact panel */
+.impact-panel {
+  border: 1px solid #9a6700;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  background: light-dark(#fffbe5, #2a2300);
+}
+
+.impact-list {
+  font-size: 0.85em;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.impact-option {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+}
+
+.impact-actions {
+  display: flex;
+  gap: 0.5rem;
+}

@@ -16,8 +16,14 @@ import type { OpenResponse, WorkspaceFileName } from "../lib/types";
 import { DraftEditor } from "../components/DraftEditor";
 import { EvaluationForm } from "../components/EvaluationForm";
 import { AgentForm } from "../components/AgentForm";
+import { FieldDiagnostics, TextField } from "../components/FormControls";
+import {
+  initialWorkspaceState,
+  workspaceReducer,
+} from "../workspace/store";
 import {
   SYNTHETIC_CONTRACT_RESPONSE,
+  SYNTHETIC_DIAGNOSTIC,
   SYNTHETIC_FORM_OPEN_RESPONSE,
 } from "./fixtures";
 
@@ -361,6 +367,79 @@ describe("EvaluationForm", () => {
     expect(screen.getByLabelText("Name")).toBeInTheDocument();
   });
 
+  it("editing under a scalar section repairs the draft instead of crashing", async () => {
+    const response: OpenResponse = {
+      ...SYNTHETIC_FORM_OPEN_RESPONSE,
+      files: {
+        ...SYNTHETIC_FORM_OPEN_RESPONSE.files,
+        // Malformed draft: a scalar where the form expects a mapping.
+        "evaluation.yaml":
+          "schema_version: 1\nkind: evaluation\nevaluation:\n  name: x\n  baseline: 9\n",
+      },
+    };
+    const user = userEvent.setup();
+    renderForm(<EvaluationForm />, response);
+
+    const input = screen.getByLabelText("Baseline value");
+    await user.type(input, "5");
+    await waitFor(() => expect(draftText()).toContain("value: 5"));
+    expect(draftText()).toContain("baseline:");
+  });
+
+  it("a draft edit marks validation diagnostics stale, not invalid", () => {
+    const opened = workspaceReducer(initialWorkspaceState, {
+      type: "opened",
+      requestedPath: "x",
+      response: SYNTHETIC_FORM_OPEN_RESPONSE,
+    });
+    const validated = workspaceReducer(opened, {
+      type: "validationFinished",
+      requestId: 0,
+      revision: 0,
+      valid: false,
+      digest: "d",
+      diagnostics: [SYNTHETIC_DIAGNOSTIC],
+    });
+    const edited = workspaceReducer(validated, {
+      type: "edited",
+      file: "evaluation.yaml",
+      text: "changed",
+    });
+    const { unmount } = render(
+      <WorkspaceProvider initial={edited}>
+        <TextField
+          label="F"
+          value=""
+          commit={(t) => t}
+          diagnostics={[SYNTHETIC_DIAGNOSTIC]}
+          path="domain.entities.Job"
+        />
+        <FieldDiagnostics
+          diagnostics={[SYNTHETIC_DIAGNOSTIC]}
+          path="domain.entities.Job"
+        />
+      </WorkspaceProvider>,
+    );
+    expect(screen.getByLabelText("F")).not.toHaveAttribute("aria-invalid");
+    expect(
+      screen.getAllByText("(stale)").length,
+    ).toBeGreaterThan(0);
+    unmount();
+
+    render(
+      <WorkspaceProvider initial={validated}>
+        <TextField
+          label="F"
+          value=""
+          commit={(t) => t}
+          diagnostics={[SYNTHETIC_DIAGNOSTIC]}
+          path="domain.entities.Job"
+        />
+      </WorkspaceProvider>,
+    );
+    expect(screen.getByLabelText("F")).toHaveAttribute("aria-invalid", "true");
+  });
+
   it("contract fetch failure degrades selects to usable text inputs", async () => {
     contractMock.mockRejectedValue(
       new ApiError("WEB.API_UNREACHABLE", "down", null, true),
@@ -427,6 +506,34 @@ describe("AgentForm", () => {
       const label = el.closest(".form-field")?.textContent ?? "";
       expect(label).not.toMatch(/credential|api.?key|token|password|secret/i);
     }
+  });
+
+  it("contract failure keeps deliverables editable as free text", async () => {
+    contractMock.mockRejectedValue(
+      new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+    );
+    const user = userEvent.setup();
+    renderAgent();
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/Contract vocabulary unavailable/).length,
+      ).toBeGreaterThan(0),
+    );
+
+    await user.type(
+      screen.getByLabelText("New deliverable name"),
+      "trace_report",
+    );
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() =>
+      expect(draftText("agent.yaml")).toContain("trace_report"),
+    );
+
+    const removes = screen.getAllByRole("button", { name: "Remove" });
+    await user.click(removes[0]);
+    await waitFor(() =>
+      expect(draftText("agent.yaml")).not.toContain("explanation"),
+    );
   });
 
   it("toggling a deliverable edits the draft list", async () => {

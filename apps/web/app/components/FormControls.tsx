@@ -14,6 +14,7 @@ import type { ReactNode } from "react";
 import type { Document } from "yaml";
 
 import { useWorkspace } from "../workspace/context";
+import { isValidationStale } from "../workspace/store";
 import type { Diagnostic, WorkspaceFileName } from "../lib/types";
 import {
   domainReferenceNames,
@@ -71,6 +72,17 @@ export function useFileDiagnostics(file: WorkspaceFileName): Diagnostic[] {
   return all.filter((d) => d.file === file);
 }
 
+/**
+ * True while the shown diagnostics describe an older draft revision —
+ * after any draft edit until validation runs again. Field markers gate
+ * on this so a stale result never asserts `aria-invalid`, and the
+ * diagnostics list shows a stale marker.
+ */
+export function useDiagnosticsStale(): boolean {
+  const { state } = useWorkspace();
+  return state.validation !== null && isValidationStale(state);
+}
+
 /** Entity/event/projection names for reference suggestions (see draftDoc). */
 export function useDomainReferences(): DomainReferences {
   const { state } = useWorkspace();
@@ -99,14 +111,16 @@ export function FieldDiagnostics({
         d.path !== null &&
         (d.path.startsWith(`${path}.`) || d.path.startsWith(`${path}[`))),
   );
+  const stale = useDiagnosticsStale();
   if (items.length === 0) return null;
   return (
-    <ul className="field-diagnostics">
+    <ul className={stale ? "field-diagnostics stale" : "field-diagnostics"}>
       {items.map((d, i) => (
         <li key={i} className={`diagnostic severity-${d.severity}`}>
           <code className="diagnostic-code">{d.code}</code>{" "}
           <span className="diagnostic-message">{d.message}</span>
           {d.hint ? <span className="diagnostic-hint">{d.hint}</span> : null}
+          {stale ? <span className="hint"> (stale)</span> : null}
         </li>
       ))}
     </ul>
@@ -143,6 +157,7 @@ export function TextField({
   inputMode?: "decimal";
 }) {
   const id = useId();
+  const stale = useDiagnosticsStale();
   const [text, setText] = useState(value);
   const lastSync = useRef(value);
   if (value !== lastSync.current) {
@@ -158,7 +173,7 @@ export function TextField({
         value={text}
         inputMode={inputMode}
         list={datalist?.id}
-        aria-invalid={hasErrorAt(diagnostics, path) || undefined}
+        aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
         onChange={(e) => {
           setText(e.target.value);
           lastSync.current = commit(e.target.value);
@@ -197,6 +212,7 @@ export function SelectField({
   path: string;
 }) {
   const id = useId();
+  const stale = useDiagnosticsStale();
   // An empty option list is indistinguishable from a missing contract key —
   // degrade to free text instead of a select that can only unset the value.
   const unavailable = options === null || options.length === 0;
@@ -209,14 +225,14 @@ export function SelectField({
           id={id}
           type="text"
           value={value}
-          aria-invalid={hasErrorAt(diagnostics, path) || undefined}
+          aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
           onChange={(e) => commit(e.target.value)}
         />
       ) : (
         <select
           id={id}
           value={value}
-          aria-invalid={hasErrorAt(diagnostics, path) || undefined}
+          aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
           onChange={(e) => commit(e.target.value)}
         >
           <option value="">(unset)</option>
@@ -252,13 +268,14 @@ export function CheckField({
   path: string;
 }) {
   const id = useId();
+  const stale = useDiagnosticsStale();
   return (
     <div className="form-field form-field-check">
       <input
         id={id}
         type="checkbox"
         checked={checked}
-        aria-invalid={hasErrorAt(diagnostics, path) || undefined}
+        aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
         onChange={(e) => onChange(e.target.checked)}
       />
       <label htmlFor={id}>{label}</label>

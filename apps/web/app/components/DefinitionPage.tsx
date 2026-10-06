@@ -16,6 +16,7 @@ export function DefinitionPage({
   file,
   children,
   form,
+  requireDefinitions = true,
 }: {
   title: string;
   file: WorkspaceFileName;
@@ -27,9 +28,16 @@ export function DefinitionPage({
    * so it stays usable while fixing an invalid file).
    */
   form?: ReactNode;
+  /**
+   * Pages whose children read the *draft* (not the active definitions) —
+   * like the domain editor — pass false so they stay usable while the
+   * active bundle has errors.
+   */
+  requireDefinitions?: boolean;
 }) {
   const { state } = useWorkspace();
-  const hasDefinitions = state.workspace?.definitions != null;
+  const hasDefinitions =
+    !requireDefinitions || state.workspace?.definitions != null;
 
   return (
     <div className="definition-page">

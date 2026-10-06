@@ -12,7 +12,7 @@
  */
 
 import { Document, isMap, isScalar, isSeq, parseDocument, Scalar } from "yaml";
-import type { YAMLMap, YAMLSeq } from "yaml";
+import { YAMLMap, YAMLSeq } from "yaml";
 import type { DomainDefinition } from "./types";
 
 export type DraftDocState =
@@ -73,6 +73,27 @@ export function scalarText(value: unknown): string {
 }
 
 /**
+ * Repair intermediate nodes on `path` so writes never throw on a malformed
+ * draft: a scalar where a mapping/sequence belongs (e.g. `baseline: 9`
+ * under an edit of `baseline.value`) is replaced by an empty collection
+ * instead of crashing `setIn`/`deleteIn`.
+ */
+export function ensureContainerPath(
+  host: NodeHost,
+  path: readonly (string | number)[],
+): void {
+  for (let i = 1; i < path.length; i += 1) {
+    const parent = path.slice(0, i);
+    const wantSeq = typeof path[i] === "number";
+    const node = host.getIn(parent, true);
+    if (wantSeq ? isSeq(node) : isMap(node)) continue;
+    // setIn stores plain objects verbatim — a real collection node is
+    // required for the next level of traversal to land.
+    host.setIn(parent, wantSeq ? new YAMLSeq() : new YAMLMap());
+  }
+}
+
+/**
  * Write a free-text field: an empty value deletes the key (the core reports
  * missing fields at the same path); otherwise the text is stored verbatim.
  * Returns the value's display text after the write.
@@ -82,6 +103,7 @@ export function commitText(
   path: readonly (string | number)[],
   text: string,
 ): string {
+  ensureContainerPath(host, path);
   if (text === "") host.deleteIn(path);
   else host.setIn(path, text);
   return scalarText(host.getIn(path));
@@ -98,6 +120,7 @@ export function commitNumber(
   text: string,
 ): string {
   const trimmed = text.trim();
+  ensureContainerPath(host, path);
   if (trimmed === "") {
     host.deleteIn(path);
   } else {
@@ -113,6 +136,7 @@ export function commitBool(
   path: readonly (string | number)[],
   checked: boolean,
 ): void {
+  ensureContainerPath(host, path);
   if (checked) host.setIn(path, true);
   else host.deleteIn(path);
 }

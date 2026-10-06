@@ -9,6 +9,7 @@
  * domain draft. The core stays authoritative for every rule.
  */
 
+import { useState } from "react";
 import { isMap } from "yaml";
 import type { YAMLMap } from "yaml";
 
@@ -80,6 +81,20 @@ export function AgentForm() {
   const knownDeliverables = vocabulary?.deliverables ?? null;
   const actions = mapAt(doc, ACTIONS);
   const entityList = { id: "agent-domain-entities", options: refs.entities };
+  const [newDeliverable, setNewDeliverable] = useState("");
+
+  function addDeliverable(name: string) {
+    const trimmed = name.trim();
+    if (trimmed === "") return;
+    update((d) => {
+      const seq = ensureSeq(d, [ROOT, "task", "deliverables"]);
+      const present = seq.items.some(
+        (item) => scalarText(item) === trimmed,
+      );
+      if (!present) seq.add(d.createNode(trimmed));
+    });
+    setNewDeliverable("");
+  }
 
   function toggleDeliverable(name: string, checked: boolean) {
     update((d) => {
@@ -149,15 +164,40 @@ export function AgentForm() {
           {knownDeliverables === null ? (
             <>
               <p className="hint">
-                Contract vocabulary unavailable — deliverables in the draft:
+                Contract vocabulary unavailable — deliverables are free
+                text until the contract loads.
               </p>
-              <ul>
-                {deliverableValues.map((v) => (
-                  <li key={v}>
-                    <code>{v}</code>
-                  </li>
-                ))}
-              </ul>
+              {(deliverables?.items ?? []).map((item, i) => (
+                <div key={`${scalarText(item)}-${i}`} className="form-field">
+                  <code>{scalarText(item)}</code>{" "}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      update((d) => {
+                        const seq = seqAt(d, [ROOT, "task", "deliverables"]);
+                        const idx = seq ? seq.items.indexOf(item) : -1;
+                        if (idx >= 0) seq?.items.splice(idx, 1);
+                      })
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+              <div className="add-row">
+                <input
+                  type="text"
+                  aria-label="New deliverable name"
+                  value={newDeliverable}
+                  onChange={(e) => setNewDeliverable(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => addDeliverable(newDeliverable)}
+                >
+                  Add
+                </button>
+              </div>
             </>
           ) : (
             <>
