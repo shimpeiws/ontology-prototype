@@ -26,8 +26,10 @@ recorded, never fabricated.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -42,6 +44,7 @@ from .diagnosis_eval import (
     DATASET_CLEAN,
     DEFAULT_BUDGET,
     EVAL_VERSION,
+    CountingProvider,
     EvalError,
     PreparedEval,
     RunBudget,
@@ -69,11 +72,19 @@ class SubjectSpec:
 
 @dataclass
 class UnavailableSubject:
-    """A spec that never reached evaluation — recorded, not fabricated."""
+    """A spec that never produced a comparable result — recorded, not
+    fabricated.
+
+    ``provider_requests``/``run_ids`` carry whatever a mid-evaluation
+    fault had already consumed and persisted, so the report never
+    under-counts live calls or loses run evidence.
+    """
 
     provider: str
     model: str
     reason: str
+    provider_requests: int = 0
+    run_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +92,8 @@ class UnavailableSubject:
             "model": self.model,
             "status": "unavailable",
             "reason": self.reason,
+            "provider_requests": self.provider_requests,
+            "run_ids": self.run_ids,
         }
 
 
@@ -138,7 +151,8 @@ class ComparisonReport:
     all evaluated subjects saw identical input: the flag is true only
     when every resolved subject has a non-null digest and they all
     agree. ``unavailable`` is the explicit slot for candidates that
-    could not be evaluated at all.
+    could not be evaluated at all; requests a faulted attempt already
+    burned still fold into ``provider_requests``.
     """
 
     eval_version: str
@@ -188,6 +202,31 @@ def _subject_status(report: SubjectReport) -> str:
     return "failed"
 
 
+def _persisted_run_ids(prepared: PreparedEval) -> list[str]:
+    """Run ids the shared store has recorded — best effort, since the
+    store itself may be what faulted."""
+    try:
+        return [
+            row["run_id"] for row in prepared.store.diagnosis_runs()
+        ]
+    except Exception:
+        return []
+
+
+def _fault_run_ids(
+    collected: list[str], prepared: PreparedEval, known: set[str]
+) -> list[str]:
+    """Run ids a faulted subject produced: the ones already collected
+    from its report plus any new records in the shared store."""
+    ids = list(collected)
+    ids.extend(
+        run_id
+        for run_id in _persisted_run_ids(prepared)
+        if run_id not in known and run_id not in ids
+    )
+    return ids
+
+
 def compare_subjects(
     prepared: PreparedEval,
     specs: Sequence[SubjectSpec],
@@ -203,7 +242,10 @@ def compare_subjects(
     artifact shows exactly which candidates produced evidence. Every
     evaluated subject goes through ``evaluate_prepared`` — identical
     candidates, identical input digest, identical deterministic
-    scoring — and its per-run checks are embedded in the report.
+    scoring — and its per-run checks are embedded in the report. A
+    subject whose evaluation faults mid-run still contributes the
+    provider requests it consumed and the run ids it recorded to the
+    artifact — a live call is never under-counted.
     """
     subjects: list[ComparedSubject] = []
     unavailable: list[UnavailableSubject] = []
@@ -228,17 +270,22 @@ def compare_subjects(
                 )
             )
             continue
+        # The counter is owned here, not inside evaluate_prepared, so a
+        # mid-evaluation fault cannot take the subject's request count
+        # down with it.
+        counting = CountingProvider(adapter)
+        known_run_ids = set(_persisted_run_ids(prepared))
         started = time.monotonic()
+        digests: list[str | None] = []
+        run_ids: list[str] = []
         try:
             report = evaluate_prepared(
                 prepared,
-                adapter,
+                counting,
                 model=spec.model,
                 repeats=repeats,
                 budget=budget,
             )
-            digests: list[str | None] = []
-            run_ids: list[str] = []
             for run in report.runs:
                 if run.run_id is None:
                     continue
@@ -253,7 +300,13 @@ def compare_subjects(
             # Trusted, sanitized messages (same rule as resolution).
             unavailable.append(
                 UnavailableSubject(
-                    spec.provider, spec.model, f"evaluation failed: {exc}"
+                    spec.provider,
+                    spec.model,
+                    f"evaluation failed: {exc}",
+                    provider_requests=len(counting.requests),
+                    run_ids=_fault_run_ids(
+                        run_ids, prepared, known_run_ids
+                    ),
                 )
             )
             continue
@@ -265,6 +318,10 @@ def compare_subjects(
                     spec.provider,
                     spec.model,
                     f"evaluation failed: unexpected {type(exc).__name__}",
+                    provider_requests=len(counting.requests),
+                    run_ids=_fault_run_ids(
+                        run_ids, prepared, known_run_ids
+                    ),
                 )
             )
             continue
@@ -315,7 +372,10 @@ def compare_subjects(
         input_identical=input_identical,
         repeats_requested=repeats,
         budget=budget,
-        provider_requests=sum(s.provider_requests for s in subjects),
+        provider_requests=(
+            sum(s.provider_requests for s in subjects)
+            + sum(u.provider_requests for u in unavailable)
+        ),
         subjects=subjects,
         unavailable=unavailable,
     )
@@ -336,10 +396,15 @@ def run_comparison(
     The single ``prepare`` call means identical input across subjects is
     structural — this runner cannot re-materialize a workspace per
     subject even by accident. ``report_path`` writes the JSON artifact;
-    pass ``None`` to get the in-memory report only.
+    pass ``None`` to get the in-memory report only. An existing
+    ``report_path`` is rejected up front — before preparation or any
+    provider call — since live requests cannot be un-spent when the
+    write would fail anyway.
     """
     if not specs:
         raise EvalError("a comparison needs at least one subject spec")
+    if report_path is not None and os.path.lexists(report_path):
+        raise _existing_report_error(Path(report_path))
     prepared = prepare(Path(scratch_dir) / "shared", dataset=dataset)
     report = compare_subjects(
         prepared, specs, resolve, repeats=repeats, budget=budget
@@ -349,24 +414,40 @@ def run_comparison(
     return report
 
 
+def _existing_report_error(dest: Path) -> EvalError:
+    return EvalError(
+        f"comparison report {dest} already exists; "
+        "pass a fresh artifact path"
+    )
+
+
 def write_comparison_report(
     report: ComparisonReport, path: str | Path
 ) -> Path:
     """Write the comparison artifact as JSON; never overwrites.
 
     A comparison report is evidence — silently replacing one would
-    destroy the record a previous run produced. The file is created
-    exclusively (``"x"``), so a concurrent write to the same path fails
-    instead of racing a check-then-create. Pass a fresh path.
+    destroy the record a previous run produced. The payload is
+    serialized first and written to a temporary file in the
+    destination directory, then published with a hard link: an
+    interrupted write can strand only a cleaned-up temp file, never a
+    partial report at the final path, and a concurrent write to the
+    same path still fails instead of racing a check-then-create. Pass
+    a fresh path.
     """
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(report.to_dict(), indent=2) + "\n"
+    fd, tmp_name = tempfile.mkstemp(
+        dir=dest.parent, prefix=f"{dest.name}.", suffix=".tmp"
+    )
+    tmp = Path(tmp_name)
     try:
-        with dest.open("x", encoding="utf-8") as fh:
-            fh.write(json.dumps(report.to_dict(), indent=2) + "\n")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(payload)
+        os.link(tmp, dest)
     except FileExistsError:
-        raise EvalError(
-            f"comparison report {dest} already exists; "
-            "pass a fresh artifact path"
-        ) from None
+        raise _existing_report_error(dest) from None
+    finally:
+        tmp.unlink(missing_ok=True)
     return dest

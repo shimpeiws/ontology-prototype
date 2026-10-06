@@ -10,6 +10,7 @@ reasons stay sanitized, and that the JSON artifact never overwrites.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -197,6 +198,54 @@ def test_evaluation_error_recorded_not_raised(
     assert "evaluation failed: unexpected RuntimeError" in artifact
 
 
+def test_evaluation_fault_preserves_requests_and_run_ids(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A fault after a provider call must not drop the request count or
+    the run ids the subject already recorded — live calls happened, and
+    the report total must reflect them."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    resolve = _resolver(
+        **{
+            "double-a": ScriptedProvider("double-a", golden),
+            "double-b": ScriptedProvider("double-b", golden),
+        }
+    )
+    real_evaluate = diagnosis_compare.evaluate_prepared
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            # The provider call and the run record already happened;
+            # only the report handoff faults.
+            real_evaluate(*args, **kwargs)
+            raise RuntimeError("post-eval fault")
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(diagnosis_compare, "evaluate_prepared", flaky)
+    out = tmp_path / "comparison.json"
+    report = run_comparison(
+        tmp_path / "scratch",
+        _specs(("double-a", "eval/a"), ("double-b", "eval/b")),
+        resolve,
+        report_path=out,
+    )
+
+    assert [s.model for s in report.subjects] == ["eval/a"]
+    un = report.unavailable
+    assert [(u.provider, u.model) for u in un] == [("double-b", "eval/b")]
+    assert un[0].provider_requests == 1
+    assert len(un[0].run_ids) == 1
+    # Both provider calls count toward the total, not just the
+    # successful subject's.
+    assert report.provider_requests == 2
+    entry = json.loads(out.read_text())["unavailable"][0]
+    assert entry["provider_requests"] == 1
+    assert entry["run_ids"] == un[0].run_ids
+
+
 def test_artifact_records_workspace_path(tmp_path: Path) -> None:
     """FIND-003: the artifact names the materialized workspace whose
     .ontology store holds every recorded run for audit."""
@@ -232,6 +281,65 @@ def test_report_artifact_never_overwrites(tmp_path: Path) -> None:
     write_comparison_report(report, out)
     with pytest.raises(EvalError, match="already exists"):
         write_comparison_report(report, out)
+
+
+def test_existing_report_path_rejected_before_provider_calls(
+    tmp_path: Path,
+) -> None:
+    """An existing artifact path is rejected before preparation or any
+    provider call — a repeated command burns no live requests."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    out = tmp_path / "report.json"
+    out.write_text("{}", encoding="utf-8")
+    calls: list[str] = []
+
+    def resolve(name: str):
+        calls.append(name)
+        return ScriptedProvider(name, golden)
+
+    with pytest.raises(EvalError, match="already exists"):
+        run_comparison(
+            tmp_path / "scratch",
+            _specs(("double-a", "eval/a")),
+            resolve,
+            report_path=out,
+        )
+    assert calls == []
+    assert not (tmp_path / "scratch").exists()
+    assert out.read_text(encoding="utf-8") == "{}"
+
+
+def test_interrupted_write_leaves_no_stranded_artifact(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A failure publishing the artifact leaves nothing at the final
+    path and no temp file behind, so a retry with the same ``--out`` is
+    not rejected."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    report = run_comparison(
+        tmp_path / "scratch",
+        _specs(("double-a", "eval/a")),
+        _resolver(**{"double-a": ScriptedProvider("double-a", golden)}),
+    )
+    out = tmp_path / "report.json"
+    real_link = os.link
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "link", boom)
+    with pytest.raises(OSError):
+        write_comparison_report(report, out)
+    assert not out.exists()
+    assert not list(tmp_path.glob("report.json.*.tmp"))
+
+    monkeypatch.setattr(os, "link", real_link)
+    write_comparison_report(report, out)
+    assert json.loads(out.read_text())["eval_version"] == (
+        report.eval_version
+    )
 
 
 def test_run_comparison_requires_a_subject(tmp_path: Path) -> None:

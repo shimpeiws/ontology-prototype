@@ -181,10 +181,13 @@ Artifact shape (`comparison-report.json`):
 | `input_digest`, `input_identical` | proof of identical input: the digest recorded on each subject's run records, and a flag that is true only when all evaluated subjects agree |
 | `budget`, `repeats_requested`, `provider_requests` | the run budget and total provider invocations |
 | `subjects[]` | per subject: `provider`, `model`, `status` (`ok`/`failed`/`skipped`), `passed`, `provider_requests`, `latency_seconds` (subject wall time), `repeats_*`, `within_budget`, `projection_run_id`, `input_digest`, `run_ids`, and `runs[]` with the same per-check results as a `SubjectReport` |
-| `unavailable[]` | specs that produced no comparable result — resolution failure or an unexpected mid-evaluation error: `provider`, `model`, `reason` — recorded, never fabricated |
+| `unavailable[]` | specs that produced no comparable result — resolution failure or an unexpected mid-evaluation error: `provider`, `model`, `reason`, plus the `provider_requests` already consumed and the `run_ids` already recorded before the fault — recorded, never fabricated |
 
 The artifact is written once and never overwritten — pass a fresh `--out`
-per run. To turn it into the committed human-readable report, copy
+per run. An existing output path is rejected before any provider call,
+and the write publishes through a temporary file, so an interrupted run
+cannot strand a partial artifact at the final path. To turn the artifact
+into the committed human-readable report, copy
 [diagnosis-comparison-report.md](diagnosis-comparison-report.md) and fill
 in every section (quality findings, structural failures, latency,
 usage/cost evidence or its absence, dated price assumptions, setup
