@@ -33,7 +33,7 @@ jobs:
           app = create_app(ApiConfig(workspace_roots=("examples",)))
           client = TestClient(app)
           response = client.post(
-              "/api/v1/workspaces/open", json={"path": "examples/job-invoicing"}
+              "/api/v1/workspaces/open", json={"path": "job-invoicing"}
           )
           assert response.status_code == 200, response.text
           assert response.json()["valid"] is True, response.json()

@@ -11,6 +11,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+API_VERSION = "v1"
+API_PREFIX = f"/api/{API_VERSION}"
+
 
 class DiagnosticOut(BaseModel):
     """One core diagnostic: severity, stable code, file, dotted path, hint."""
@@ -43,8 +46,12 @@ class DraftValidateRequest(BaseModel):
 
 
 class WorkspaceRef(BaseModel):
+    """``digest`` is null when the on-disk bundle could not be fully
+    represented in ``files`` (e.g. a symlink escaping the roots), so the
+    field never reports a hash over a silent subset."""
+
     path: str
-    digest: str
+    digest: str | None
 
 
 class OpenResponse(BaseModel):

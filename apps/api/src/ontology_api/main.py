@@ -8,13 +8,19 @@ inject a config or a stub service directly.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
 from .config import ApiConfig
 from .schemas import (
+    API_PREFIX,
+    API_VERSION,
     ContractResponse,
     DiagnosticOut,
     DraftValidateRequest,
@@ -31,8 +37,13 @@ from .service import (
     contract_metadata,
 )
 
-API_VERSION = "v1"
-API_PREFIX = f"/api/{API_VERSION}"
+# The API serves a local single-user authoring UI: dev servers run on
+# loopback with arbitrary ports, so cross-origin requests are allowed
+# from localhost/127.0.0.1 origins only — never credentials, and the
+# Vite dev proxy remains the primary path.
+LOCAL_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+logger = logging.getLogger("ontology_api")
 
 
 def create_app(
@@ -54,6 +65,12 @@ def create_app(
         ),
     )
     app.state.service = service
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=LOCAL_ORIGIN_REGEX,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     def get_service(request: Request) -> WorkspaceService:
         return request.app.state.service
@@ -80,6 +97,34 @@ def create_app(
                     "code": "API.MALFORMED_REQUEST",
                     "message": "request failed contract validation",
                     "detail": detail,
+                }
+            },
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        code = {
+            404: "API.NOT_FOUND",
+            405: "API.METHOD_NOT_ALLOWED",
+        }.get(exc.status_code, "API.HTTP_ERROR")
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {"code": code, "message": str(exc.detail or exc)}
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:
+        logger.exception("unhandled error in %s", request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "API.INTERNAL_ERROR",
+                    "message": "internal server error",
                 }
             },
         )

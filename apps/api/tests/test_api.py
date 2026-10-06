@@ -181,6 +181,32 @@ class TestOpen:
         assert response.status_code == 403
         assert response.json()["error"]["code"] == "API.PATH_OUTSIDE_ROOTS"
 
+    def test_open_digest_is_byte_exact(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        # CRLF bytes must survive: the returned files and the digest are
+        # computed over the exact bytes on disk, not a newline-normalized
+        # form — otherwise a draft digest could never match an open one.
+        domain = workspace / "domain.yaml"
+        domain.write_bytes(domain.read_bytes().replace(b"\n", b"\r\n"))
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/open", json={"path": str(workspace)}
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert "\r\n" in body["files"]["domain.yaml"]
+        disk_texts = {
+            name: (workspace / name).read_bytes().decode("utf-8")
+            for name in (
+                "domain.yaml",
+                "mapping.yaml",
+                "evaluation.yaml",
+                "agent.yaml",
+            )
+        }
+        assert body["workspace"]["digest"] == bundle_digest(disk_texts)
+
     def test_open_does_not_disclose_file_symlinked_outside_root(
         self, roots: Path, workspace: Path, tmp_path: Path
     ) -> None:
@@ -195,6 +221,33 @@ class TestOpen:
         assert response.status_code == 200
         body = response.json()
         assert "agent.yaml" not in body["files"]
+        # Part of the on-disk bundle was withheld, so no digest that
+        # claims to represent it can be returned.
+        assert body["workspace"]["digest"] is None
+
+    def test_open_relative_path_resolves_against_root(
+        self, roots: Path, workspace: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        # Client paths are resolved against the configured roots, never
+        # against the server's working directory.
+        monkeypatch.chdir(tmp_path)
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/open", json={"path": workspace.name}
+        )
+        assert response.status_code == 200
+        assert response.json()["workspace"]["path"] == str(workspace.resolve())
+
+    def test_open_missing_relative_path_is_not_found(
+        self, roots: Path, tmp_path: Path, monkeypatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/open", json={"path": "nope"}
+        )
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "API.WORKSPACE_NOT_FOUND"
 
     def test_open_malformed_requests(self, roots: Path) -> None:
         client = make_client(roots)
@@ -305,6 +358,15 @@ class TestDraftValidate:
         assert response.status_code == 403
         assert response.json()["error"]["code"] == "API.PATH_OUTSIDE_ROOTS"
 
+    def test_validate_draft_no_roots(self, workspace: Path) -> None:
+        client = make_client()
+        response = client.post(
+            "/api/v1/workspaces/drafts/validate",
+            json={"path": "anything", "files": {}},
+        )
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "API.ROOTS_UNCONFIGURED"
+
     def test_validate_draft_malformed_request(self, roots: Path) -> None:
         client = make_client(roots)
         bad_payloads = [
@@ -413,6 +475,70 @@ class TestServiceInjection:
         assert (
             response.json()["error"]["code"] == "API.ROOTS_UNCONFIGURED"
         )
+
+
+class TestTransport:
+    def test_cors_preflight_allowed_from_localhost(
+        self, roots: Path
+    ) -> None:
+        client = make_client(roots)
+        response = client.options(
+            "/api/v1/workspaces/open",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert response.status_code == 200
+        assert (
+            response.headers["access-control-allow-origin"]
+            == "http://localhost:5173"
+        )
+
+    def test_cors_preflight_rejected_from_foreign_origin(
+        self, roots: Path
+    ) -> None:
+        client = make_client(roots)
+        response = client.options(
+            "/api/v1/workspaces/open",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert "access-control-allow-origin" not in response.headers
+
+    def test_unexpected_service_failure_returns_structured_500(
+        self,
+    ) -> None:
+        class BoomService:
+            def open(self, path: str) -> OpenResult:
+                raise RuntimeError("boom")
+
+            def validate_draft(
+                self, path: str, files: dict[str, str]
+            ) -> DraftResult:
+                raise RuntimeError("boom")
+
+        client = TestClient(
+            create_app(
+                ApiConfig(workspace_roots=()), service=BoomService()
+            ),
+            raise_server_exceptions=False,
+        )
+        response = client.post(
+            "/api/v1/workspaces/open", json={"path": "/x"}
+        )
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "API.INTERNAL_ERROR"
+
+    def test_unknown_route_returns_structured_error(
+        self, roots: Path
+    ) -> None:
+        client = make_client(roots)
+        response = client.get("/api/v1/nope")
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "API.NOT_FOUND"
 
 
 class TestBoundaries:

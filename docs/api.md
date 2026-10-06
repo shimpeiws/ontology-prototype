@@ -29,12 +29,26 @@ on a network interface.
 
 ### Workspace roots
 
-Every path in a request is resolved (symlinks followed, `..` collapsed)
-and must land inside one of the configured roots — a workspace reachable
-only through a symlink escape, a `..` traversal, or a lookalike prefix is
-rejected before any file is read. Individual definition files that are
-themselves symlinks escaping every root are validated by the core (same
-as the CLI) but their contents are never returned to the client.
+Request paths may be absolute or relative. A relative path is resolved
+against the configured roots — the first root containing it wins, and
+when no root contains it, it resolves under the first root (so a draft's
+not-yet-created identity path still stays in bounds). Client paths never
+resolve against the server's working directory. Every path in a request
+is resolved (symlinks followed, `..` collapsed) and must land inside one
+of the configured roots — a workspace reachable only through a symlink
+escape, a `..` traversal, or a lookalike prefix is rejected before any
+file is read. Individual definition files that are themselves symlinks
+escaping every root are validated by the core (same as the CLI) but
+their contents are never returned to the client.
+
+### CORS
+
+The API serves a browser UI, so `OPTIONS` preflights are answered for
+loopback origins only — `http(s)://localhost:<port>` and
+`http(s)://127.0.0.1:<port>` — with no credentials. Any other origin is
+rejected. The Vite dev proxy remains the primary development path (see
+ADR 0001); CORS exists so direct cross-origin calls from a local dev
+server also work.
 
 ## Endpoints
 
@@ -55,7 +69,7 @@ evaluation metrics/aggregations/units/comparators, deliverables).
 Load and inspect a workspace directory.
 
 ```json
-{ "path": "examples/job-invoicing" }
+{ "path": "job-invoicing" }
 ```
 
 Response `200`:
@@ -71,12 +85,15 @@ Response `200`:
 }
 ```
 
-- `files` holds the UTF-8 text of each readable definition file — the
-  draft baseline the UI edits.
+- `files` holds the byte-exact UTF-8 text of each definition file — the
+  draft baseline the UI edits (no newline normalization).
 - `definitions` is the parsed typed workspace (entities, bindings,
   contract, agent task); `null` when the workspace has errors.
 - `workspace.digest` is `bundle_digest` over the four files — the active
-  digest the save flow (#19) checks drafts against.
+  digest the save flow (#19) checks drafts against. It is `null` when
+  any file present on disk could not be returned (oversized,
+  undecodable, or an escaping symlink), because a hash over a silent
+  subset would misrepresent the bundle it claims to describe.
 - `diagnostics` are the core's own diagnostics (`severity`, `code`,
   `message`, `file`, `path`, `line`, `hint`) — identical to what
   `ontology check` reports for the same directory.
@@ -92,7 +109,7 @@ files are reported as `WORKSPACE.MISSING_FILE`.
 
 ```json
 {
-  "path": "examples/job-invoicing",
+  "path": "job-invoicing",
   "files": { "domain.yaml": "…", "mapping.yaml": "…", "evaluation.yaml": "…", "agent.yaml": "…" }
 }
 ```
@@ -118,8 +135,14 @@ never masquerade as a validation result.
 | 400 | `API.UNKNOWN_WORKSPACE_FILE` | Draft `files` contained a name outside the four definitions |
 | 403 | `API.PATH_OUTSIDE_ROOTS` | Resolved path escapes every configured root |
 | 404 | `API.WORKSPACE_NOT_FOUND` | Resolved path is not a directory |
+| 404 | `API.NOT_FOUND` | Unknown route |
+| 405 | `API.METHOD_NOT_ALLOWED` | Method not allowed on a known route |
 | 422 | `API.MALFORMED_REQUEST` | Body failed request schema validation |
+| 500 | `API.INTERNAL_ERROR` | Unexpected server failure (details stay server-side) |
 | 503 | `API.ROOTS_UNCONFIGURED` | No workspace roots configured |
+
+Every HTTP failure — including unknown routes and unhandled exceptions —
+uses the same `{ "error": { "code", "message" } }` shape.
 
 ## Ownership
 

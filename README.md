@@ -92,7 +92,7 @@ The same core is exposed over HTTP for the authoring UI. Start it with an explic
 
 ```bash
 ontology-api --root examples
-# POST /api/v1/workspaces/open        {"path": "examples/job-invoicing"}
+# POST /api/v1/workspaces/open        {"path": "job-invoicing"}  (paths resolve against the configured roots)
 # POST /api/v1/workspaces/drafts/validate  {"path": "...", "files": {...}}
 # GET  /api/v1/contract               versioned contract/schema metadata
 ```

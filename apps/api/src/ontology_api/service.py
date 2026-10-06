@@ -37,6 +37,8 @@ from ontology_core.model import CAST_TYPES, PROPERTY_TYPES, SCALAR_TYPES
 from ontology_core.workspace import SUPPORTED_SCHEMA_VERSION
 from ontology_core.yamlio import MAX_FILE_BYTES
 
+from .schemas import API_VERSION
+
 
 class ApiError(Exception):
     """A transport-level failure: HTTP status plus a stable code.
@@ -61,7 +63,7 @@ class OpenResult:
     valid: bool
     diagnostics: list[Diagnostic]
     files: dict[str, str]
-    digest: str
+    digest: str | None
     definitions: dict[str, Any] | None
 
 
@@ -109,13 +111,18 @@ class CoreWorkspaceService:
                 f"no workspace directory at {path!r} (resolved: {resolved})",
             )
         result = load_workspace(resolved)
-        files = self._read_files(resolved)
+        files, omitted = self._read_files(resolved)
         return OpenResult(
             path=resolved,
             valid=result.ok,
             diagnostics=result.diagnostics,
             files=files,
-            digest=bundle_digest(files),
+            # The digest must describe the on-disk bundle the client is
+            # about to edit; when part of it cannot be returned (an
+            # escaping symlink, undecodable or oversized file) there is
+            # no honest digest, so the field is null instead of a hash
+            # over a silent subset.
+            digest=bundle_digest(files) if not omitted else None,
             definitions=_definitions(result.workspace),
         )
 
@@ -153,16 +160,31 @@ class CoreWorkspaceService:
                 "--root or the ONTOLOGY_API_ROOTS environment variable",
             )
         candidate = Path(raw_path).expanduser()
-        if not candidate.is_absolute():
-            candidate = Path.cwd() / candidate
-        try:
-            resolved = candidate.resolve()
-        except (OSError, RuntimeError, ValueError) as exc:
+        if candidate.is_absolute():
+            resolved = _resolve(candidate)
+        else:
+            # Relative paths resolve against the configured roots, never
+            # against the server's cwd: the first root containing the
+            # path wins, and when no root contains it the first root is
+            # used so draft identities still resolve inside a root.
+            resolved = None
+            for root in self._roots:
+                probe = _resolve(root / candidate)
+                if (
+                    probe is not None
+                    and probe.is_dir()
+                    and any(probe.is_relative_to(r) for r in self._roots)
+                ):
+                    resolved = probe
+                    break
+            if resolved is None:
+                resolved = _resolve(self._roots[0] / candidate)
+        if resolved is None:
             raise ApiError(
                 400,
                 "API.INVALID_PATH",
-                f"cannot resolve workspace path {raw_path!r}: {exc}",
-            ) from exc
+                f"cannot resolve workspace path {raw_path!r}",
+            )
         if not any(resolved.is_relative_to(root) for root in self._roots):
             raise ApiError(
                 403,
@@ -171,28 +193,41 @@ class CoreWorkspaceService:
             )
         return resolved
 
-    def _read_files(self, root: Path) -> dict[str, str]:
+    def _read_files(self, root: Path) -> tuple[dict[str, str], list[str]]:
         """Read workspace files for the inspect payload.
 
-        Only UTF-8-decodable files within the size cap are returned — the
-        core diagnostics already report the rest. A file that is itself a
-        symlink escaping every configured root is never disclosed.
+        Returns ``(files, omitted)``: ``files`` holds the byte-exact
+        UTF-8 text of each on-disk workspace file (same
+        ``read_bytes().decode`` recipe as ``load_yaml_file``, so digests
+        computed from it match digests over the draft bundle), and
+        ``omitted`` names every file present on disk that could not be
+        returned — oversized, undecodable, or a symlink escaping every
+        configured root, which is never disclosed.
         """
         files: dict[str, str] = {}
+        omitted: list[str] = []
         for filename in WORKSPACE_FILES.values():
             file_path = root / filename
             try:
+                if not file_path.is_file():
+                    continue
                 resolved_file = file_path.resolve()
                 if not any(
                     resolved_file.is_relative_to(root_) for root_ in self._roots
-                ):
+                ) or resolved_file.stat().st_size > MAX_FILE_BYTES:
+                    omitted.append(filename)
                     continue
-                if resolved_file.stat().st_size > MAX_FILE_BYTES:
-                    continue
-                files[filename] = resolved_file.read_text(encoding="utf-8")
+                files[filename] = resolved_file.read_bytes().decode("utf-8")
             except (OSError, UnicodeDecodeError):
-                continue
-        return files
+                omitted.append(filename)
+        return files, omitted
+
+
+def _resolve(candidate: Path) -> Path | None:
+    try:
+        return candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
 
 
 def _definitions(workspace: Workspace | None) -> dict[str, Any] | None:
@@ -213,7 +248,7 @@ def contract_metadata() -> dict[str, Any]:
     frontend contract can never drift from what validation accepts.
     """
     return {
-        "api_version": "v1",
+        "api_version": API_VERSION,
         "core_version": ontology_core.__version__,
         "schema_version": SUPPORTED_SCHEMA_VERSION,
         "workspace_files": dict(WORKSPACE_FILES),
@@ -227,8 +262,8 @@ def contract_metadata() -> dict[str, Any]:
             "hint",
         ],
         "operations": {
-            "open": "POST /api/v1/workspaces/open",
-            "validate_draft": "POST /api/v1/workspaces/drafts/validate",
+            "open": f"POST /api/{API_VERSION}/workspaces/open",
+            "validate_draft": f"POST /api/{API_VERSION}/workspaces/drafts/validate",
         },
         "contract": {
             "property_types": list(PROPERTY_TYPES),
