@@ -8,10 +8,11 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 | `packages/core/` | `ontology-core`: workspace contracts, loading, and validation shared by every app |
 | `apps/cli/` | `ontology-cli`: the `ontology` command-line app over the shared core |
 | `apps/api/` | `ontology-api`: local FastAPI app over the shared core — workspace open/inspect, draft validation, contract metadata |
+| `apps/web/` | `ontology-web`: local React Router SPA — the FDE authoring UI over the API |
 | `examples/` | Portable workspace definitions and synthetic source data |
 | `docs/` | Product plan, release criteria, and architecture decisions |
 
-`apps/api/` landed with v0.2 (see [docs/api.md](docs/api.md)); `apps/web/` remains a documented v0.2 destination (see [docs/monorepo.md](docs/monorepo.md)) and is intentionally not implemented yet. The framework-neutral authoring-flow and UI-state contract they implement is specified in [docs/authoring-flow.md](docs/authoring-flow.md).
+`apps/api/` and `apps/web/` landed with v0.2 (see [docs/api.md](docs/api.md) and [docs/web.md](docs/web.md)). The framework-neutral authoring-flow and UI-state contract they implement is specified in [docs/authoring-flow.md](docs/authoring-flow.md).
 
 ## Documentation
 
@@ -31,6 +32,7 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 | [docs/evaluation.md](docs/evaluation.md) | Outcome evaluation, cohorts, and guardrails |
 | [docs/authoring-flow.md](docs/authoring-flow.md) | v0.2 authoring flow and UI state contract |
 | [docs/api.md](docs/api.md) | Local API: startup, endpoints, error model, and root enforcement |
+| [docs/web.md](docs/web.md) | Local Web app: development workflow, boundaries, and testing notes |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 
 ## Install
@@ -98,6 +100,17 @@ ontology-api --root examples
 ```
 
 See [docs/api.md](docs/api.md) for startup configuration, the endpoint contract, the error model, and root enforcement.
+
+### Local Web app
+
+The authoring UI runs against the API. With `ontology-api --root examples` running:
+
+```bash
+npm --prefix apps/web ci
+npm --prefix apps/web run dev   # http://127.0.0.1:5173, /api proxied to the API
+```
+
+Open the app, enter `job-invoicing`, and navigate the workspace overview plus the domain/mapping/evaluation/agent-task definitions with draft/active status. See [docs/web.md](docs/web.md) for the full workflow and checks (`npm --prefix apps/web run typecheck|test|build`).
 
 Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology trace`, `ontology diagnose-compare`.
 

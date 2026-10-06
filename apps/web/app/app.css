@@ -1,0 +1,295 @@
+:root {
+  color-scheme: light dark;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.hint {
+  opacity: 0.75;
+  font-size: 0.9em;
+}
+
+.field-error {
+  color: #b3261e;
+}
+
+/* Shared states */
+.state-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.spinner {
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.state-error {
+  border: 1px solid #b3261e;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+}
+
+.state-empty {
+  opacity: 0.8;
+  font-style: italic;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 0.1em 0.5em;
+  border-radius: 999px;
+  font-size: 0.8em;
+  border: 1px solid currentColor;
+}
+
+.badge-active {
+  color: #1a7f37;
+}
+
+.badge-draft,
+.badge-stale {
+  color: #9a6700;
+}
+
+.badge-invalid,
+.badge-error,
+.badge-missing {
+  color: #b3261e;
+}
+
+.badge-valid {
+  color: #1a7f37;
+}
+
+.badge-validating {
+  color: #0969da;
+}
+
+/* Layout */
+.home {
+  max-width: 42rem;
+  margin: 3rem auto;
+  padding: 0 1rem;
+}
+
+.open-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 24rem;
+}
+
+.workspace-layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.workspace-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid
+    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+}
+
+.workspace-identity {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-identity .digest {
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+
+.workspace-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.draft-status {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.workspace-nav ul {
+  display: flex;
+  gap: 0.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid
+    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+}
+
+.workspace-nav a {
+  display: inline-block;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.workspace-nav a.active {
+  font-weight: 600;
+  outline: 2px solid #0969da;
+  outline-offset: -2px;
+}
+
+.workspace-main {
+  flex: 1;
+  padding: 1rem;
+  max-width: 64rem;
+  width: 100%;
+}
+
+/* Diagnostics */
+.diagnostics-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.diagnostic {
+  border-left: 3px solid #9a6700;
+  padding: 0.25rem 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.diagnostic.severity-error {
+  border-left-color: #b3261e;
+}
+
+.diagnostic-location,
+.diagnostic-hint {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+/* Definition pages */
+.bundle-status,
+.definition-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+}
+
+.bundle-status dt,
+.definition-facts dt {
+  font-weight: 600;
+}
+
+.bundle-status dd,
+.definition-facts dd {
+  margin: 0;
+}
+
+.file-status-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 1rem;
+}
+
+.definition-list ul {
+  margin-top: 0.25rem;
+}
+
+.deliverable {
+  margin-right: 0.4rem;
+}
+
+/* Draft editor */
+.draft-editor {
+  margin-top: 1.5rem;
+  border-top: 1px solid
+    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+  padding-top: 1rem;
+}
+
+.draft-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.draft-editor-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.draft-editor-textarea {
+  width: 100%;
+  min-height: 16rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  box-sizing: border-box;
+}
+
+.blocker-dialog {
+  position: fixed;
+  inset: auto 1rem 1rem 1rem;
+  max-width: 32rem;
+  margin: 0 auto;
+  padding: 1rem;
+  border: 1px solid #9a6700;
+  border-radius: 8px;
+  background: light-dark(#fff, #1a1a1a);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.blocker-dialog p {
+  flex-basis: 100%;
+  margin: 0;
+}
