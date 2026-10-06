@@ -308,4 +308,51 @@ describe("hostile input (INV-007)", () => {
       setDomainMeta("no domain here\n", "name", "x"),
     ).toBeNull();
   });
+
+  it("non-string YAML keys are found by string-normalized lookup", () => {
+    // `123:` parses as a number key; the view shows "123" and mutations
+    // must still reach it (core flags the invalid name, we only edit).
+    const text = SYNTHETIC_DOMAIN_YAML.replace(
+      "    Person:",
+      "    123:\n      properties:\n        name: { type: string }\n    Person:",
+    );
+    const view = parseOk(text);
+    expect(view.entities.map((e) => e.name)).toContain("123");
+
+    const removed = removeConcept(text, { kind: "entity", name: "123" })!;
+    expect(parseOk(removed).entities.map((e) => e.name)).toEqual([
+      "Job",
+      "Person",
+    ]);
+
+    const renamed = renameDeclaration(
+      text,
+      { kind: "entity", name: "123" },
+      "Person2",
+    )!;
+    expect(
+      parseOk(renamed).entities.map((e) => e.name),
+    ).toContain("Person2");
+  });
+
+  it("mutators fail loudly (null) when the target is absent", () => {
+    expect(
+      removeConcept(SYNTHETIC_DOMAIN_YAML, {
+        kind: "entity",
+        name: "Nope",
+      }),
+    ).toBeNull();
+    expect(
+      setSubject(SYNTHETIC_DOMAIN_YAML, "events", "Nope", "Job"),
+    ).toBeNull();
+    expect(
+      setPropertyField(
+        SYNTHETIC_DOMAIN_YAML,
+        { kind: "entities", name: "Job" },
+        "nope",
+        "type",
+        "string",
+      ),
+    ).toBeNull();
+  });
 });

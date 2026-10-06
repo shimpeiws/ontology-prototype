@@ -67,6 +67,12 @@ export interface DomainEditorProps {
   editFiles: (files: Partial<Record<WorkspaceFileName, string>>) => void;
 }
 
+/** Slug for id/htmlFor attributes — concept names are user input and
+ *  may contain characters invalid in HTML ids. */
+function slug(s: string): string {
+  return s.replaceAll(/[^A-Za-z0-9_-]/g, "_");
+}
+
 function conceptLabel(concept: Concept): string {
   return concept.kind === "property"
     ? `property ${concept.owner}.${concept.name}`
@@ -176,7 +182,7 @@ function RenameControl({
 }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(currentName);
-  const inputId = `rename-${what}-${currentName.replaceAll(/[^A-Za-z0-9_]/g, "_")}`;
+  const inputId = `rename-${what}-${slug(currentName)}`;
   const trimmed = value.trim();
   const collides =
     trimmed !== currentName && existing.includes(trimmed);
@@ -522,7 +528,7 @@ function EntityForm({
         </button>
       </p>
       <DescriptionInput
-        id={`entity-${entity.name}-desc`}
+        id={`entity-${slug(entity.name)}-desc`}
         label="description"
         value={entity.description}
         onCommit={(v) =>
@@ -565,7 +571,7 @@ function EventForm({
 }) {
   const concept: Concept = { kind: "event", name: event.name };
   const prefix = `domain.events.${event.name}`;
-  const subjectId = `event-${event.name}-subject`;
+  const subjectId = `event-${slug(event.name)}-subject`;
   const entityNames = view.entities.map((e) => e.name);
   return (
     <div className="concept-form">
@@ -610,7 +616,7 @@ function EventForm({
         </select>
       </label>
       <DescriptionInput
-        id={`event-${event.name}-desc`}
+        id={`event-${slug(event.name)}-desc`}
         label="description"
         value={event.description}
         onCommit={(v) =>
@@ -651,7 +657,7 @@ function ProjectionForm({
 }) {
   const concept: Concept = { kind: "projection", name: projection.name };
   const prefix = `domain.projections.${projection.name}`;
-  const subjectId = `projection-${projection.name}-subject`;
+  const subjectId = `projection-${slug(projection.name)}-subject`;
   const entityNames = view.entities.map((e) => e.name);
   return (
     <div className="concept-form">
@@ -699,7 +705,7 @@ function ProjectionForm({
         </select>
       </label>
       <DescriptionInput
-        id={`projection-${projection.name}-desc`}
+        id={`projection-${slug(projection.name)}-desc`}
         label="description"
         value={projection.description}
         onCommit={(v) =>

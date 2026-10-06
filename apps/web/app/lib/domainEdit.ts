@@ -17,7 +17,7 @@
  */
 
 import { isMap, isScalar, parseDocument } from "yaml";
-import type { Document, YAMLMap } from "yaml";
+import type { Document, Pair, YAMLMap } from "yaml";
 
 export type OwnerKind = "entities" | "events";
 
@@ -190,6 +190,43 @@ function applyEdit(text: string, fn: Mutator): string | null {
 }
 
 /**
+ * Find a map pair by key. The `yaml` parser types unquoted plain scalars
+ * (`123`, `true`) as number/boolean, while view names are always strings —
+ * compare `String(key.value)` so `123:` matches the name "123".
+ */
+export function findPair(
+  map: YAMLMap | undefined,
+  key: string,
+): Pair | undefined {
+  if (!map) return undefined;
+  return map.items.find(
+    (p) => isScalar(p.key) && String(p.key.value) === key,
+  );
+}
+
+/** Value node of a map pair addressed by a (possibly non-string) key. */
+export function mapValue(
+  map: YAMLMap | undefined,
+  key: string,
+): unknown {
+  return findPair(map, key)?.value;
+}
+
+/** Remove a pair by normalized key; false when absent. */
+export function deleteMapKey(
+  map: YAMLMap | undefined,
+  key: string,
+): boolean {
+  if (!map) return false;
+  const i = map.items.findIndex(
+    (p) => isScalar(p.key) && String(p.key.value) === key,
+  );
+  if (i < 0) return false;
+  map.items.splice(i, 1);
+  return true;
+}
+
+/**
  * Rename a key of a YAML map, preserving its value node and position.
  * Returns false when `oldKey` is absent; throws when `newKey` already
  * exists in the same map — a duplicate key would corrupt the draft and
@@ -201,14 +238,9 @@ export function renameMapKey(
   oldKey: string,
   newKey: string,
 ): boolean {
-  if (!map) return false;
-  const pair = map.items.find(
-    (p) => isScalar(p.key) && p.key.value === oldKey,
-  );
+  const pair = findPair(map, oldKey);
   if (!pair) return false;
-  if (
-    map.items.some((p) => isScalar(p.key) && p.key.value === newKey)
-  ) {
+  if (findPair(map, newKey)) {
     throw new Error(`'${newKey}' already exists in this scope`);
   }
   pair.key = doc.createNode(newKey);
@@ -254,30 +286,62 @@ export function addEvent(text: string, name: string): string | null {
   });
 }
 
+/**
+ * The YAMLMap spec node for a declared entity/event/projection — created
+ * when the declaration exists but its value is empty (`SomeEvent:`).
+ * Throws when the collection or the declaration itself is absent, so a
+ * mutator never silently produces unchanged text.
+ */
+function specMapFor(
+  doc: Document,
+  domain: YAMLMap,
+  kind: "entities" | "events" | "projections",
+  name: string,
+): YAMLMap {
+  const collection = mapValue(domain, kind);
+  if (!isMap(collection)) {
+    throw new Error(`'${kind}' is not a mapping`);
+  }
+  const pair = findPair(collection, name);
+  if (!pair) throw new Error(`'${name}' not found in ${kind}`);
+  if (!isMap(pair.value)) {
+    pair.value = doc.createNode({});
+  }
+  return pair.value as YAMLMap;
+}
+
 /** Remove a concept from domain.yaml only — references in other draft files
  *  are left dangling so the validator reports them (see references.ts for
  *  the blast-radius scan shown before this runs). */
 export function removeConcept(text: string, concept: Concept): string | null {
-  return applyEdit(text, (doc) => {
+  return applyEdit(text, (doc, domain) => {
     switch (concept.kind) {
       case "entity":
-        doc.deleteIn(["domain", "entities", concept.name]);
-        break;
       case "event":
-        doc.deleteIn(["domain", "events", concept.name]);
+      case "projection": {
+        const collection = mapValue(
+          domain,
+          concept.kind === "entity"
+            ? "entities"
+            : concept.kind === "event"
+              ? "events"
+              : "projections",
+        );
+        if (!deleteMapKey(isMap(collection) ? collection : undefined, concept.name)) {
+          throw new Error(`'${concept.name}' not found`);
+        }
         break;
-      case "projection":
-        doc.deleteIn(["domain", "projections", concept.name]);
+      }
+      case "property": {
+        const spec = specMapFor(doc, domain, concept.ownerKind, concept.owner);
+        const props = mapValue(spec, "properties");
+        if (
+          !deleteMapKey(isMap(props) ? props : undefined, concept.name)
+        ) {
+          throw new Error(`property '${concept.name}' not found`);
+        }
         break;
-      case "property":
-        doc.deleteIn([
-          "domain",
-          concept.ownerKind,
-          concept.owner,
-          "properties",
-          concept.name,
-        ]);
-        break;
+      }
     }
   });
 }
@@ -293,26 +357,36 @@ export function renameDeclaration(
   newName: string,
 ): string | null {
   return applyEdit(text, (doc, domain) => {
-    void domain;
     switch (concept.kind) {
       case "entity":
       case "event":
       case "projection": {
-        const collection =
+        const collection = mapValue(
+          domain,
           concept.kind === "entity"
             ? "entities"
             : concept.kind === "event"
               ? "events"
-              : "projections";
-        const map = doc.getIn(["domain", collection]);
-        if (isMap(map)) renameMapKey(doc, map, concept.name, newName);
+              : "projections",
+        );
+        if (!renameMapKey(doc, isMap(collection) ? collection : undefined, concept.name, newName)) {
+          throw new Error(`'${concept.name}' not found`);
+        }
         break;
       }
       case "property": {
-        const spec = doc.getIn(["domain", concept.ownerKind, concept.owner]);
-        if (!isMap(spec)) return;
-        const props = spec.get("properties");
-        if (isMap(props)) renameMapKey(doc, props, concept.name, newName);
+        const spec = specMapFor(doc, domain, concept.ownerKind, concept.owner);
+        const props = mapValue(spec, "properties");
+        if (
+          !renameMapKey(
+            doc,
+            isMap(props) ? props : undefined,
+            concept.name,
+            newName,
+          )
+        ) {
+          throw new Error(`property '${concept.name}' not found`);
+        }
         break;
       }
     }
@@ -370,20 +444,28 @@ export function setPropertyField(
   field: PropertyField,
   value: string | boolean | null,
 ): string | null {
-  return applyEdit(text, (doc) => {
-    const specPath = ["domain", owner.kind, owner.name, "properties", propName];
-    let spec = doc.getIn(specPath);
-    if (!isMap(spec)) {
-      doc.setIn(specPath, doc.createNode({}));
-      spec = doc.getIn(specPath);
-      if (!isMap(spec)) return;
+  return applyEdit(text, (doc, domain) => {
+    const spec = specMapFor(doc, domain, owner.kind, owner.name);
+    let props = mapValue(spec, "properties");
+    if (!isMap(props)) {
+      const created = doc.createNode({});
+      spec.set("properties", created);
+      props = created;
     }
+    const propPair = findPair(props as YAMLMap, propName);
+    if (!propPair) {
+      throw new Error(`property '${propName}' not found`);
+    }
+    if (!isMap(propPair.value)) {
+      propPair.value = doc.createNode({});
+    }
+    const pspec = propPair.value as YAMLMap;
     if (field === "required") {
-      setOrDelete(spec, "required", value === true ? true : null);
+      setOrDelete(pspec, "required", value === true ? true : null);
       return;
     }
-    setOrDelete(spec, field, value === "" ? null : value);
-    if (field === "type" && value !== "ref") spec.delete("ref");
+    setOrDelete(pspec, field, value === "" ? null : value);
+    if (field === "type" && value !== "ref") pspec.delete("ref");
   });
 }
 
@@ -394,9 +476,8 @@ export function setSubject(
   name: string,
   subject: string | null,
 ): string | null {
-  return applyEdit(text, (doc) => {
-    const spec = doc.getIn(["domain", kind, name]);
-    if (!isMap(spec)) return;
+  return applyEdit(text, (doc, domain) => {
+    const spec = specMapFor(doc, domain, kind, name);
     setOrDelete(spec, "subject", subject);
   });
 }
@@ -407,9 +488,8 @@ export function setSpecDescription(
   name: string,
   description: string,
 ): string | null {
-  return applyEdit(text, (doc) => {
-    const spec = doc.getIn(["domain", kind, name]);
-    if (!isMap(spec)) return;
+  return applyEdit(text, (doc, domain) => {
+    const spec = specMapFor(doc, domain, kind, name);
     setOrDelete(spec, "description", description === "" ? null : description);
   });
 }

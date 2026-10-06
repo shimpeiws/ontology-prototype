@@ -23,7 +23,7 @@ import { isMap, isSeq, parseDocument } from "yaml";
 import type { Document, YAMLMap } from "yaml";
 
 import type { Concept } from "./domainEdit";
-import { renameMapKey } from "./domainEdit";
+import { mapValue, renameMapKey } from "./domainEdit";
 import { WORKSPACE_FILE_NAMES } from "./types";
 import type { WorkspaceFileName } from "./types";
 
@@ -45,6 +45,21 @@ type Drafts = Partial<Record<WorkspaceFileName, string | null>>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Compare a parsed scalar with an identifier name. YAML types unquoted
+ * `123`/`true` as number/boolean while concept names are strings, so
+ * `ref: 123` should still count as a reference to the entity shown as
+ * "123" (the core will flag it as an invalid name — we only navigate).
+ */
+function scalarEq(value: unknown, name: string): boolean {
+  return (
+    (typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean") &&
+    String(value) === name
+  );
 }
 
 /** Parse a draft file to plain JS; undefined when absent or broken. */
@@ -81,7 +96,7 @@ function scanDomain(
   if (concept.kind !== "entity") return;
   for (const [entity, spec] of entries(domain.entities)) {
     for (const [prop, pspec] of entries(spec.properties)) {
-      if (pspec.ref === concept.name) {
+      if (scalarEq(pspec.ref, concept.name)) {
         hits.push({
           file: "domain.yaml",
           path: `domain.entities.${entity}.properties.${prop}.ref`,
@@ -91,7 +106,7 @@ function scanDomain(
     }
   }
   for (const [event, spec] of entries(domain.events)) {
-    if (spec.subject === concept.name) {
+    if (scalarEq(spec.subject, concept.name)) {
       hits.push({
         file: "domain.yaml",
         path: `domain.events.${event}.subject`,
@@ -99,7 +114,7 @@ function scanDomain(
       });
     }
     for (const [prop, pspec] of entries(spec.properties)) {
-      if (pspec.ref === concept.name) {
+      if (scalarEq(pspec.ref, concept.name)) {
         hits.push({
           file: "domain.yaml",
           path: `domain.events.${event}.properties.${prop}.ref`,
@@ -109,7 +124,7 @@ function scanDomain(
     }
   }
   for (const [proj, spec] of entries(domain.projections)) {
-    if (spec.subject === concept.name) {
+    if (scalarEq(spec.subject, concept.name)) {
       hits.push({
         file: "domain.yaml",
         path: `domain.projections.${proj}.subject`,
@@ -126,7 +141,7 @@ function scanMapping(
 ): void {
   const mapping = isRecord(js) && isRecord(js.mapping) ? js.mapping : {};
   list(mapping.entities).forEach((binding, i) => {
-    if (concept.kind === "entity" && binding.entity === concept.name) {
+    if (concept.kind === "entity" && scalarEq(binding.entity, concept.name)) {
       hits.push({
         file: "mapping.yaml",
         path: `mapping.entities[${i}].entity`,
@@ -136,7 +151,7 @@ function scanMapping(
     if (
       concept.kind === "property" &&
       concept.ownerKind === "entities" &&
-      binding.entity === concept.owner &&
+      scalarEq(binding.entity, concept.owner) &&
       isRecord(binding.properties) &&
       concept.name in binding.properties
     ) {
@@ -148,7 +163,7 @@ function scanMapping(
     }
   });
   list(mapping.events).forEach((binding, i) => {
-    if (concept.kind === "event" && binding.event === concept.name) {
+    if (concept.kind === "event" && scalarEq(binding.event, concept.name)) {
       hits.push({
         file: "mapping.yaml",
         path: `mapping.events[${i}].event`,
@@ -158,7 +173,7 @@ function scanMapping(
     if (
       concept.kind === "entity" &&
       isRecord(binding.subject) &&
-      binding.subject.entity === concept.name
+      scalarEq(binding.subject.entity, concept.name)
     ) {
       hits.push({
         file: "mapping.yaml",
@@ -180,7 +195,7 @@ function scanEvaluation(
       ? js.evaluation.interval
       : {};
   for (const key of ["start_event", "end_event"] as const) {
-    if (interval[key] === concept.name) {
+    if (scalarEq(interval[key], concept.name)) {
       hits.push({
         file: "evaluation.yaml",
         path: `evaluation.interval.${key}`,
@@ -196,7 +211,7 @@ function scanAgent(
   hits: ReferenceHit[],
 ): void {
   const agent = isRecord(js) && isRecord(js.agent) ? js.agent : {};
-  if (concept.kind === "projection" && agent.projection === concept.name) {
+  if (concept.kind === "projection" && scalarEq(agent.projection, concept.name)) {
     hits.push({
       file: "agent.yaml",
       path: "agent.projection",
@@ -206,7 +221,7 @@ function scanAgent(
   if (concept.kind !== "entity") return;
   for (const [action, spec] of entries(agent.permitted_actions)) {
     for (const [param, pspec] of entries(spec.params)) {
-      if (pspec.ref === concept.name) {
+      if (scalarEq(pspec.ref, concept.name)) {
         hits.push({
           file: "agent.yaml",
           path: `agent.permitted_actions.${action}.params.${param}.ref`,
@@ -245,7 +260,7 @@ export function findReferences(drafts: Drafts, concept: Concept): ScanResult {
 /* ---- cross-file rename (YAML node edits) ---- */
 
 function scalarIs(map: YAMLMap, key: string, value: string): boolean {
-  return map.get(key) === value;
+  return scalarEq(map.get(key), value);
 }
 
 /** Iterate `[path, valueMap]` pairs of a map-valued node. */
@@ -296,12 +311,16 @@ function renameInDomain(
   const projections = domain.get("projections");
   let changed = false;
   if (concept.kind === "entity") {
-    if (isMap(entities)) {
-      changed = renameMapKey(doc, entities, concept.name, newName);
-      for (const [, spec] of specMaps(entities)) {
-        if (renamePropertyRefs(doc, spec, concept.name, newName))
-          changed = true;
-      }
+    // The declaration must be renamed first — a missing key means the
+    // file cannot carry this rename, so abort rather than retarget
+    // references to a name that is never declared.
+    if (!isMap(entities) || !renameMapKey(doc, entities, concept.name, newName)) {
+      throw new Error(`entity '${concept.name}' not found in domain.yaml`);
+    }
+    changed = true;
+    for (const [, spec] of specMaps(entities)) {
+      if (renamePropertyRefs(doc, spec, concept.name, newName))
+        changed = true;
     }
     if (isMap(events)) {
       for (const [, spec] of specMaps(events)) {
@@ -318,19 +337,34 @@ function renameInDomain(
       }
     }
   } else if (concept.kind === "event") {
-    if (isMap(events))
-      changed = renameMapKey(doc, events, concept.name, newName);
+    if (!isMap(events) || !renameMapKey(doc, events, concept.name, newName)) {
+      throw new Error(`event '${concept.name}' not found in domain.yaml`);
+    }
+    changed = true;
   } else if (concept.kind === "projection") {
-    if (isMap(projections))
-      changed = renameMapKey(doc, projections, concept.name, newName);
+    if (
+      !isMap(projections) ||
+      !renameMapKey(doc, projections, concept.name, newName)
+    ) {
+      throw new Error(`projection '${concept.name}' not found in domain.yaml`);
+    }
+    changed = true;
   } else if (concept.kind === "property") {
     const collection =
       concept.ownerKind === "entities" ? entities : events;
-    const spec = isMap(collection) ? collection.get(concept.owner) : undefined;
+    const spec = isMap(collection) ? mapValue(collection, concept.owner) : undefined;
     if (isMap(spec)) {
-      const props = spec.get("properties");
-      if (isMap(props))
-        changed = renameMapKey(doc, props, concept.name, newName);
+      const props = mapValue(spec, "properties");
+      if (!isMap(props) || !renameMapKey(doc, props, concept.name, newName)) {
+        throw new Error(
+          `property '${concept.name}' not found in domain.yaml`,
+        );
+      }
+      changed = true;
+    } else {
+      throw new Error(
+        `'${concept.owner}' not found in domain.yaml ${concept.ownerKind}`,
+      );
     }
   }
   return changed;
@@ -468,6 +502,10 @@ export function applyRename(
       if (RENAMERS[file](doc, concept, newName)) files[file] = doc.toString();
     } catch {
       skipped.push(file);
+      // domain.yaml holds every declaration — if it cannot carry the
+      // rename, retargeting other files would point references at a name
+      // that is never declared. Abort the whole rename instead.
+      if (file === "domain.yaml") break;
     }
   }
   return { files, skipped };
