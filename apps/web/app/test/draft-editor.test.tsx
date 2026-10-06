@@ -9,23 +9,33 @@ import { describe, expect, it } from "vitest";
 
 import { DraftEditor } from "../components/DraftEditor";
 import { useWorkspace, WorkspaceProvider } from "../workspace/context";
+import type { OpenResponse, WorkspaceFileName } from "../lib/types";
 import { SYNTHETIC_OPEN_RESPONSE } from "./fixtures";
 
-function Harness({ children }: { children: React.ReactNode }) {
+function Harness({
+  children,
+  response = SYNTHETIC_OPEN_RESPONSE,
+}: {
+  children: React.ReactNode;
+  response?: OpenResponse;
+}) {
   const { state, open } = useWorkspace();
   useEffect(() => {
-    open("job-invoicing", SYNTHETIC_OPEN_RESPONSE);
+    open("job-invoicing", response);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   if (!state.workspace) return null;
   return <>{children}</>;
 }
 
-function renderEditor() {
+function renderEditor(
+  file: WorkspaceFileName = "domain.yaml",
+  response?: OpenResponse,
+) {
   return render(
     <WorkspaceProvider>
-      <Harness>
-        <DraftEditor file="domain.yaml" />
+      <Harness response={response}>
+        <DraftEditor file={file} />
       </Harness>
     </WorkspaceProvider>,
   );
@@ -55,5 +65,28 @@ describe("DraftEditor", () => {
       SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"],
     );
     expect(screen.queryByText("unsaved")).toBeNull();
+  });
+
+  it("removing an on-disk file from the draft says 'removed from draft'", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await user.click(
+      screen.getByRole("button", { name: "Remove from draft" }),
+    );
+    expect(screen.getByText("removed from draft")).toBeInTheDocument();
+    expect(screen.queryByText("not on disk")).toBeNull();
+  });
+
+  it("a file absent on disk says 'not on disk'", () => {
+    const missingAgent: OpenResponse = {
+      ...SYNTHETIC_OPEN_RESPONSE,
+      files: { ...SYNTHETIC_OPEN_RESPONSE.files },
+    };
+    delete missingAgent.files["agent.yaml"];
+    renderEditor("agent.yaml", missingAgent);
+    expect(screen.getByText("not on disk")).toBeInTheDocument();
+    expect(
+      screen.queryByText("removed from draft"),
+    ).toBeNull();
   });
 });

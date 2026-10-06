@@ -33,8 +33,18 @@ export interface WorkspaceContextValue {
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
-export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
+export function WorkspaceProvider({
+  children,
+  initial,
+}: {
+  children: ReactNode;
+  /** Test hook: seed the reducer with a pre-built state. */
+  initial?: WorkspaceState;
+}) {
+  const [state, dispatch] = useReducer(
+    workspaceReducer,
+    initial ?? initialWorkspaceState,
+  );
   // Monotonic request id; a stale response (superseded by a later request)
   // is discarded by the reducer instead of overwriting newer state.
   const requestSeq = useRef(0);
@@ -64,7 +74,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!state.workspace || state.validating) return;
     const requestId = ++requestSeq.current;
     const revision = state.draftRevision;
-    const path = state.workspace.resolvedPath;
+    // Send the path exactly as the FDE requested it — resolution under the
+    // API's configured roots is the server's job on every call.
+    const path = state.workspace.requestedPath;
     const files = draftFilesForRequest(state.drafts);
     dispatch({ type: "validationStarted", requestId });
     try {

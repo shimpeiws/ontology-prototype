@@ -102,6 +102,37 @@ describe("api client", () => {
     expect((err as ApiError).retryable).toBe(true);
   });
 
+  it("error body detail is preserved on the ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        stubFetchJson(422, {
+          error: {
+            code: "API.MALFORMED_REQUEST",
+            message: "invalid body",
+            detail: { field: "path" },
+          },
+        }),
+      ),
+    );
+
+    const err = await api.openWorkspace("x").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).detail).toEqual({ field: "path" });
+  });
+
+  it("HTTP error without structured body keeps the raw payload as detail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(stubFetchJson(404, { detail: "not found" })),
+    );
+
+    const err = await api.openWorkspace("x").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).code).toBe("WEB.BAD_RESPONSE");
+    expect((err as ApiError).detail).toEqual({ detail: "not found" });
+  });
+
   it("HTTP error without structured body stays out of diagnostics shape", async () => {
     vi.stubGlobal(
       "fetch",

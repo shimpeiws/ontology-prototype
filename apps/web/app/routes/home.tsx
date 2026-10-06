@@ -18,13 +18,21 @@ export default function Home() {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
 
+  // The empty-path guard lives here (the single entry point for both the
+  // form submit and the error retry) so neither path can reach the API
+  // with an empty workspace path.
   async function doOpen(target: string) {
-    setPathError(null);
+    const trimmed = target.trim();
     setError(null);
+    if (!trimmed) {
+      setPathError("Enter a workspace path.");
+      return;
+    }
+    setPathError(null);
     setOpening(true);
     try {
-      const response = await api.openWorkspace(target);
-      open(target, response);
+      const response = await api.openWorkspace(trimmed);
+      open(trimmed, response);
       navigate("/workspace");
     } catch (err) {
       setError(
@@ -39,12 +47,7 @@ export default function Home() {
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const trimmed = path.trim();
-    if (!trimmed) {
-      setPathError("Enter a workspace path.");
-      return;
-    }
-    void doOpen(trimmed);
+    void doOpen(path);
   }
 
   return (
@@ -91,7 +94,7 @@ export default function Home() {
 
       {opening ? <LoadingState label="Opening workspace…" /> : null}
       {error ? (
-        <ErrorState error={error} onRetry={() => void doOpen(path.trim())} />
+        <ErrorState error={error} onRetry={() => void doOpen(path)} />
       ) : null}
     </main>
   );

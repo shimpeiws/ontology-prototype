@@ -44,8 +44,8 @@ export function DraftStatusBadge({ state }: { state: WorkspaceState }) {
         </span>
       ) : null}
       {state.validationError ? (
-        <span className="badge badge-error" role="alert">
-          {state.validationError.code}
+        <span className="badge badge-error" role="status">
+          validation failed
         </span>
       ) : null}
     </div>

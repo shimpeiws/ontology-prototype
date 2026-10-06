@@ -13,11 +13,15 @@ export function DiagnosticsList({
   file,
 }: {
   diagnostics: Diagnostic[];
-  /** When set, only diagnostics for this workspace file are shown. */
+  /**
+   * When set, diagnostics for this workspace file are shown together with
+   * bundle-level diagnostics (`file: null`, e.g. WORKSPACE.NOT_A_DIRECTORY),
+   * which must never be filtered out of view.
+   */
   file?: string;
 }) {
   const shown = file
-    ? diagnostics.filter((d) => d.file === file)
+    ? diagnostics.filter((d) => d.file === file || d.file === null)
     : diagnostics;
   if (shown.length === 0) {
     return <EmptyState title="No diagnostics." />;

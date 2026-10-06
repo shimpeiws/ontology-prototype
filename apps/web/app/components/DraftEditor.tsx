@@ -16,6 +16,9 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
   const { state, editFile, removeFile, revertFile } = useWorkspace();
   const draft = state.drafts[file] ?? null;
   const dirty = isFileDirty(state, file);
+  const onDisk =
+    state.workspace !== null &&
+    Object.hasOwn(state.workspace.activeFiles, file);
   const labelId = `draft-editor-${file}`;
 
   return (
@@ -27,7 +30,9 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
         <div className="draft-editor-actions">
           {dirty ? <span className="badge badge-draft">unsaved</span> : null}
           {draft === null ? (
-            <span className="badge badge-missing">not on disk</span>
+            <span className="badge badge-missing">
+              {onDisk ? "removed from draft" : "not on disk"}
+            </span>
           ) : null}
           {draft !== null ? (
             <button type="button" onClick={() => removeFile(file)}>
@@ -53,7 +58,9 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
         value={draft ?? ""}
         placeholder={
           draft === null
-            ? `${file} does not exist on disk — text entered here becomes a draft file.`
+            ? onDisk
+              ? `${file} was removed from the draft — the on-disk file still exists. Typing here starts a new draft.`
+              : `${file} does not exist on disk — text entered here becomes a draft file.`
             : undefined
         }
         onChange={(e) => editFile(file, e.target.value)}

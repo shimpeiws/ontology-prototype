@@ -25,18 +25,22 @@ export class ApiError extends Error {
   readonly status: number | null;
   /** True when retrying the same request could succeed (network, 5xx). */
   readonly retryable: boolean;
+  /** Optional structured detail carried by the API error body. */
+  readonly detail?: unknown;
 
   constructor(
     code: string,
     message: string,
     status: number | null,
     retryable: boolean,
+    detail?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
     this.status = status;
     this.retryable = retryable;
+    this.detail = detail;
   }
 }
 
@@ -85,14 +89,21 @@ async function post<T>(
 
   if (!response.ok) {
     if (isErrorBody(payload)) {
-      const { code, message } = payload.error;
-      throw new ApiError(code, message, response.status, response.status >= 500);
+      const { code, message, detail } = payload.error;
+      throw new ApiError(
+        code,
+        message,
+        response.status,
+        response.status >= 500,
+        detail,
+      );
     }
     throw new ApiError(
       "WEB.BAD_RESPONSE",
       `The API returned HTTP ${response.status} without a structured error.`,
       response.status,
       response.status >= 500,
+      payload,
     );
   }
   return payload as T;
@@ -124,14 +135,21 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
   }
   if (!response.ok) {
     if (isErrorBody(payload)) {
-      const { code, message } = payload.error;
-      throw new ApiError(code, message, response.status, response.status >= 500);
+      const { code, message, detail } = payload.error;
+      throw new ApiError(
+        code,
+        message,
+        response.status,
+        response.status >= 500,
+        detail,
+      );
     }
     throw new ApiError(
       "WEB.BAD_RESPONSE",
       `The API returned HTTP ${response.status} without a structured error.`,
       response.status,
       response.status >= 500,
+      payload,
     );
   }
   return payload as T;

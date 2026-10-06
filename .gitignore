@@ -11,3 +11,6 @@ dist/
 # Runtime artifacts: ingested snapshots, observation evidence, and traces
 # live under a workspace's .ontology/ directory and are never committed.
 .ontology/
+
+# graft's local index cache/graph — regenerated per machine, never committed.
+graft/

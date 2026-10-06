@@ -1,15 +1,10 @@
-import { useEffect, useState } from "react";
-import {
-  Navigate,
-  NavLink,
-  Outlet,
-  useBlocker,
-  useNavigate,
-} from "react-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Navigate, NavLink, Outlet, useBlocker } from "react-router";
 
 import { useWorkspace } from "../workspace/context";
 import { isDraftDirty } from "../workspace/store";
 import { DraftStatusBadge } from "../components/DraftStatus";
+import { ErrorState } from "../components/states";
 
 export function meta() {
   return [{ title: "ontology — workspace" }];
@@ -24,10 +19,15 @@ const NAV_ITEMS = [
 ] as const;
 
 export default function WorkspaceLayout() {
-  const { state, close, validateDraft } = useWorkspace();
-  const navigate = useNavigate();
+  const { state, close, revertAll, validateDraft } = useWorkspace();
   const dirty = isDraftDirty(state);
-  const blocker = useBlocker(dirty);
+  // The blocker must consult the latest render's state, not the closure it
+  // was registered with: React runs a descendant <Navigate>'s effect before
+  // this component's blocker re-registration, so a stale dirty=true would
+  // block the redirect that happens right after Close on a dirty draft.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const blocker = useBlocker(useCallback(() => dirtyRef.current, []));
   const [confirmingClose, setConfirmingClose] = useState(false);
 
   // Warn on tab close / reload with unsaved drafts — useBlocker only covers
@@ -41,6 +41,17 @@ export default function WorkspaceLayout() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
 
+  // Escape dismisses the leave-confirmation like "Stay". This is a plain
+  // alertdialog, not a modal — no focus trap or inert background is claimed.
+  useEffect(() => {
+    if (blocker.state !== "blocked") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") blocker.reset();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [blocker]);
+
   if (!state.workspace) {
     // In-memory state is gone (reload or direct visit) — back to open form.
     return <Navigate to="/" replace />;
@@ -52,8 +63,8 @@ export default function WorkspaceLayout() {
       return;
     }
     setConfirmingClose(false);
+    // After close, workspace is null and the layout redirects to "/".
     close();
-    navigate("/");
   }
 
   return (
@@ -74,11 +85,20 @@ export default function WorkspaceLayout() {
           >
             Validate draft
           </button>
+          <button type="button" onClick={revertAll} disabled={!dirty}>
+            Revert all
+          </button>
           <button type="button" onClick={closeWorkspace}>
             {confirmingClose ? "Discard draft and close" : "Close workspace"}
           </button>
         </div>
       </header>
+      {state.validationError ? (
+        <ErrorState
+          error={state.validationError}
+          onRetry={() => void validateDraft()}
+        />
+      ) : null}
       {confirmingClose ? (
         <p role="alert" className="state state-error">
           Unsaved draft changes will be discarded.
@@ -108,7 +128,6 @@ export default function WorkspaceLayout() {
         <div
           className="blocker-dialog"
           role="alertdialog"
-          aria-modal="true"
           aria-labelledby="blocker-title"
         >
           <p id="blocker-title">

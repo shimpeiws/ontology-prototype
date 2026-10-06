@@ -31,6 +31,9 @@ export function ErrorState({
         </strong>{" "}
         {error.message}
       </p>
+      {error instanceof ApiError && error.detail !== undefined ? (
+        <pre className="error-detail">{JSON.stringify(error.detail)}</pre>
+      ) : null}
       {onRetry && retryable ? (
         <button type="button" onClick={onRetry}>
           Retry

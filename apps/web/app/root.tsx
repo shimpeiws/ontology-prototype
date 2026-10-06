@@ -1,5 +1,6 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import type { LinksFunction } from "react-router";
+import type { ReactNode } from "react";
 
 import { WorkspaceProvider } from "./workspace/context";
 import stylesheet from "./app.css?url";
@@ -8,17 +9,7 @@ export const links: LinksFunction = () => [
   { rel: "stylesheet", href: stylesheet },
 ];
 
-// SPA mode (ssr:false) prerenders this shell into index.html; the
-// HydratedFallback is what renders before the client hydrates.
-export function HydratedFallback() {
-  return (
-    <p role="status" aria-live="polite">
-      Loading workspace UI…
-    </p>
-  );
-}
-
-export default function App() {
+export function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
@@ -28,12 +19,28 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <WorkspaceProvider>
-          <Outlet />
-        </WorkspaceProvider>
+        {children}
         <ScrollRestoration />
         <Scripts />
       </body>
     </html>
+  );
+}
+
+// SPA mode (ssr:false) prerenders this into index.html inside Layout;
+// it is what renders before the client hydrates.
+export function HydrateFallback() {
+  return (
+    <p role="status" aria-live="polite">
+      Loading workspace UI…
+    </p>
+  );
+}
+
+export default function App() {
+  return (
+    <WorkspaceProvider>
+      <Outlet />
+    </WorkspaceProvider>
   );
 }

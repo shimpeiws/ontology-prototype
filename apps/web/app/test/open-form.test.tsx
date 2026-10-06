@@ -103,6 +103,27 @@ describe("workspace open form", () => {
     );
   });
 
+  it("retry after clearing the input is blocked by the same path guard", async () => {
+    openWorkspace.mockRejectedValue(
+      new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+    );
+    const user = userEvent.setup();
+    renderHome();
+    await user.click(
+      screen.getByRole("button", { name: "Open workspace" }),
+    );
+    await screen.findByRole("button", { name: "Retry" });
+    expect(openWorkspace).toHaveBeenCalledTimes(1);
+
+    await user.clear(screen.getByLabelText("Workspace path"));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(openWorkspace).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByText("Enter a workspace path."),
+    ).toBeInTheDocument();
+  });
+
   it("404 is shown without implying retry fixes it", async () => {
     openWorkspace.mockRejectedValue(
       new ApiError("API.WORKSPACE_NOT_FOUND", "no such workspace", 404, false),

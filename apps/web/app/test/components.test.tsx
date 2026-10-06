@@ -85,6 +85,27 @@ describe("DiagnosticsList", () => {
     );
     expect(screen.getByText("No diagnostics.")).toBeInTheDocument();
   });
+
+  it("keeps bundle-level (file: null) diagnostics visible on file pages", () => {
+    const bundleLevel = {
+      ...SYNTHETIC_DIAGNOSTIC,
+      code: "WORKSPACE.NOT_A_DIRECTORY",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    };
+    render(
+      <DiagnosticsList
+        diagnostics={[SYNTHETIC_DIAGNOSTIC, bundleLevel]}
+        file="mapping.yaml"
+      />,
+    );
+    expect(
+      screen.getByText("WORKSPACE.NOT_A_DIRECTORY"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("WORKSPACE.EXAMPLE")).toBeNull();
+  });
 });
 
 describe("draft status", () => {

@@ -152,6 +152,29 @@ describe("workspace store", () => {
     expect(files["evaluation.yaml"]).toBe("");
   });
 
+  it("revertedAll restores every file to the exact active text", () => {
+    let state = opened();
+    state = workspaceReducer(state, {
+      type: "edited",
+      file: "domain.yaml",
+      text: "changed: true",
+    });
+    state = workspaceReducer(state, {
+      type: "fileRemoved",
+      file: "agent.yaml",
+    });
+    expect(isDraftDirty(state)).toBe(true);
+
+    state = workspaceReducer(state, { type: "revertedAll" });
+    expect(isDraftDirty(state)).toBe(false);
+    expect(state.drafts["domain.yaml"]).toBe(
+      SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"],
+    );
+    expect(state.drafts["agent.yaml"]).toBe(
+      SYNTHETIC_OPEN_RESPONSE.files["agent.yaml"],
+    );
+  });
+
   it("close returns to the initial state", () => {
     const state = workspaceReducer(opened(), { type: "closed" });
     expect(state.workspace).toBeNull();

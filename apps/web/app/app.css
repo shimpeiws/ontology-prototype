@@ -65,6 +65,13 @@ code {
   padding: 0.5rem 1rem;
 }
 
+.error-detail {
+  font-size: 0.8em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.25rem 0;
+}
+
 .state-empty {
   opacity: 0.8;
   font-style: italic;
