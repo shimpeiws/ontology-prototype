@@ -13,7 +13,7 @@
 
 import { Document, isMap, isScalar, isSeq, parseDocument, Scalar } from "yaml";
 import { YAMLMap, YAMLSeq } from "yaml";
-import type { DomainDefinition } from "./types";
+import type { DomainDefinition, MappingDefinition } from "./types";
 
 export type DraftDocState =
   /** The file is absent from the draft (removed, or not on disk). */
@@ -159,6 +159,9 @@ export function ensureMap(
   doc: Document,
   path: readonly (string | number)[],
 ): YAMLMap {
+  // A scalar intermediate (e.g. `mapping: null`) would make `setIn` throw
+  // before the leaf is ever reached — repair the chain first.
+  ensureContainerPath(doc, path);
   const existing = mapAt(doc, path);
   if (existing) return existing;
   const created = doc.createNode({});
@@ -180,6 +183,7 @@ export function ensureSeq(
   doc: Document,
   path: readonly (string | number)[],
 ): YAMLSeq {
+  ensureContainerPath(doc, path);
   const existing = seqAt(doc, path);
   if (existing) return existing;
   const created = doc.createNode([]);
@@ -206,7 +210,7 @@ export function renamePairKey(map: YAMLMap, index: number, name: string): void {
 }
 
 /** Minimal valid-shape skeleton for a definition file absent from the draft. */
-export function skeletonText(kind: "evaluation" | "agent"): string {
+export function skeletonText(kind: "evaluation" | "agent" | "mapping"): string {
   return `schema_version: 1\nkind: ${kind}\n${kind}: {}\n`;
 }
 
@@ -252,4 +256,70 @@ function childKeys(map: YAMLMap, key: string): string[] {
   const child = map.get(key, true);
   if (!isMap(child)) return [];
   return child.items.map((pair) => keyText(pair.key));
+}
+
+/**
+ * Property names declared for one entity — suggestions for the mapping
+ * form's property-assignment rows. Same draft-first rule as
+ * `domainReferenceNames`: suggestions only, the core validates.
+ */
+export function domainEntityProperties(
+  draftText: string | null,
+  fallback: DomainDefinition | null,
+  entityName: string,
+): string[] {
+  const parsed = draftText !== null ? parseDraftDoc(draftText) : null;
+  if (parsed?.status === "ready") {
+    const domain = mapAt(parsed.doc, ["domain"]);
+    const entities = domain ? mapAt(domain, ["entities"]) : null;
+    const spec = entities ? mapAt(entities, [entityName]) : null;
+    const props = spec ? mapAt(spec, ["properties"]) : null;
+    return props ? props.items.map((pair) => keyText(pair.key)) : [];
+  }
+  const spec = fallback?.entities[entityName];
+  return spec ? Object.keys(spec.properties) : [];
+}
+
+/** The draft mapping's declared source format — which parser a preview
+ *  sample goes through. Draft-first like `domainReferenceNames`. */
+export function draftSourceFormat(
+  draftText: string | null,
+  fallback: MappingDefinition | null,
+): string | null {
+  const parsed = draftText !== null ? parseDraftDoc(draftText) : null;
+  if (parsed?.status === "ready") {
+    const source = mapAt(parsed.doc, ["mapping", "source"]);
+    const format = source ? scalarText(source.get("format", true)) : "";
+    if (format) return format;
+  }
+  return fallback?.source.format ?? null;
+}
+
+/** Event-time field names pinned by the domain's explicit policy. The
+ *  mapping form writes event bindings under these keys; the defaults match
+ *  the core's OCCURRENCE_FIELD/OBSERVATION_FIELD. */
+export function domainEventTimeFields(
+  draftText: string | null,
+  fallback: DomainDefinition | null,
+): { occurrence: string; observation: string } {
+  const fallbackFields = {
+    occurrence:
+      fallback?.policies.event_times.occurrence_field ?? "occurred_at",
+    observation:
+      fallback?.policies.event_times.observation_field ?? "observed_at",
+  };
+  const parsed = draftText !== null ? parseDraftDoc(draftText) : null;
+  if (parsed?.status !== "ready") return fallbackFields;
+  const times = mapAt(parsed.doc, [
+    "domain",
+    "policies",
+    "event_times",
+  ]);
+  if (!times) return fallbackFields;
+  const occurrence = scalarText(times.get("occurrence_field", true));
+  const observation = scalarText(times.get("observation_field", true));
+  return {
+    occurrence: occurrence || fallbackFields.occurrence,
+    observation: observation || fallbackFields.observation,
+  };
 }

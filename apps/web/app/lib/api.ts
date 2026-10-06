@@ -12,6 +12,7 @@
 import type {
   ApiErrorBody,
   ContractResponse,
+  DraftPreviewResponse,
   DraftValidateResponse,
   OpenResponse,
 } from "./types";
@@ -168,6 +169,17 @@ export const api = {
     post<DraftValidateResponse>(
       "/workspaces/drafts/validate",
       { path, files },
+      signal,
+    ),
+  previewDraft: (
+    path: string,
+    files: Record<string, string>,
+    sample: { text: string },
+    signal?: AbortSignal,
+  ) =>
+    post<DraftPreviewResponse>(
+      "/workspaces/drafts/preview",
+      { path, files, sample },
       signal,
     ),
 };
