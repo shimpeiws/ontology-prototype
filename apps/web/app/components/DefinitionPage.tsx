@@ -15,12 +15,19 @@ export function DefinitionPage({
   title,
   file,
   children,
+  form,
   requireDefinitions = true,
 }: {
   title: string;
   file: WorkspaceFileName;
   /** Rendered only when parsed definitions are available. */
   children?: ReactNode;
+  /**
+   * Structured editor for the draft (renders regardless of whether the
+   * active bundle parsed — it edits draft text, not parsed definitions,
+   * so it stays usable while fixing an invalid file).
+   */
+  form?: ReactNode;
   /**
    * Pages whose children read the *draft* (not the active definitions) —
    * like the domain editor — pass false so they stay usable while the
@@ -43,6 +50,7 @@ export function DefinitionPage({
           and validate; diagnostics for <code>{file}</code> are listed below.
         </p>
       )}
+      {form}
       {state.validation && isValidationStale(state) ? (
         <p className="hint" role="status">
           The draft changed after validation ran — diagnostics below are

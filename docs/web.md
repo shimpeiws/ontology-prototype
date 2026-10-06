@@ -35,9 +35,16 @@ The Web app is presentation only:
   whether references are retargeted. Property types come from
   `GET /api/v1/contract`, never a hardcoded client copy. Projections can
   be renamed, removed, and re-subjected but not created — projection
-  authoring is an unassigned gap in authoring-flow.md. The Mapping /
-  Evaluation / Agent task pages still render read-only definitions next
-  to the raw editor; their forms belong to #17/#18.
+  authoring is an unassigned gap in authoring-flow.md.
+- Draft edits are made in two equivalent views: a raw-text editor and
+  structured per-definition forms (evaluation and agent task from #18;
+  the domain form is part of the Domain editor above, and the mapping
+  form belongs to #17). The forms mutate the same draft YAML text via
+  the `yaml` Document API, so unexposed fields, comments, and ordering
+  are preserved; a draft that does not parse degrades the form to a
+  notice and leaves the raw editor usable. Select options come from
+  `GET /api/v1/contract`; entity/event/projection suggestions come
+  from the domain draft — the core remains the only validator.
 
 ## Development
 

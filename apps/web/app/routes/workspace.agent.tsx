@@ -1,5 +1,6 @@
 import { useWorkspace } from "../workspace/context";
 import { DefinitionPage } from "../components/DefinitionPage";
+import { AgentForm } from "../components/AgentForm";
 import { EmptyState } from "../components/states";
 
 export function meta() {
@@ -10,11 +11,21 @@ export default function AgentPage() {
   const { state } = useWorkspace();
   const agent = state.workspace?.definitions?.agent;
   if (!agent) {
-    return <DefinitionPage title="Agent task" file="agent.yaml" />;
+    return (
+      <DefinitionPage
+        title="Agent task"
+        file="agent.yaml"
+        form={<AgentForm />}
+      />
+    );
   }
 
   return (
-    <DefinitionPage title="Agent task" file="agent.yaml">
+    <DefinitionPage
+      title="Agent task"
+      file="agent.yaml"
+      form={<AgentForm />}
+    >
       <p>
         <strong>{agent.name}</strong>
         {agent.description ? ` — ${agent.description}` : null}

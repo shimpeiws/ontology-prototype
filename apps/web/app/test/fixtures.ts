@@ -9,6 +9,7 @@
  */
 
 import type {
+  ContractResponse,
   Diagnostic,
   DraftValidateResponse,
   OpenResponse,
@@ -248,6 +249,128 @@ export const SYNTHETIC_CONTRACT = {
       "datetime",
       "ref",
     ],
+  },
+};
+
+/**
+ * SYNTHETIC FIXTURE — richer evaluation/agent texts so the structured
+ * forms (#18) have real content to hydrate, including a comment that
+ * proves form edits preserve untouched content.
+ */
+export const SYNTHETIC_FORM_EVALUATION_YAML = `schema_version: 1
+kind: evaluation
+# comment proving form edits preserve untouched content
+evaluation:
+  name: completion-to-invoice-latency
+  description: Days from JobCompleted to InvoiceIssued for the same job.
+  interval:
+    start_event: JobCompleted
+    end_event: InvoiceIssued
+  metric: duration
+  aggregation: median
+  unit: days
+  baseline:
+    value: 9
+    description: Baseline median completion-to-invoice latency.
+  target:
+    comparator: lt
+    value: 4
+    description: Strict target; a median of exactly 4 days is a miss.
+  guardrails:
+    - name: invoice-error-rate
+      metric: invoice_error_rate
+      comparator: not_increase
+      description: Invoice-error rate must not increase versus baseline.
+`;
+
+export const SYNTHETIC_FORM_AGENT_YAML = `schema_version: 1
+kind: agent
+agent:
+  name: billing-delay-diagnosis
+  description: Diagnose completed-but-uninvoiced jobs and propose a reminder.
+  projection: CompletedButNotInvoiced
+  task:
+    goal: Identify likely causes of delayed invoicing and suggest an intervention.
+    deliverables:
+      - explanation
+      - hypotheses
+      - follow_up_questions
+      - action_proposals
+  permitted_actions:
+    SendReminder:
+      description: Send a billing-readiness reminder to the assignee.
+      params:
+        target:
+          type: ref
+          ref: Person
+          required: true
+        reason:
+          type: string
+          required: true
+`;
+
+/** SYNTHETIC FIXTURE — mirrors service.contract_metadata() shape. */
+export const SYNTHETIC_CONTRACT_RESPONSE: ContractResponse = {
+  api_version: "v1",
+  core_version: "0.0.0-synthetic",
+  schema_version: 1,
+  workspace_files: {
+    domain: "domain.yaml",
+    mapping: "mapping.yaml",
+    evaluation: "evaluation.yaml",
+    agent: "agent.yaml",
+  },
+  diagnostic_fields: [
+    "severity",
+    "code",
+    "message",
+    "file",
+    "path",
+    "line",
+    "hint",
+  ],
+  operations: {},
+  contract: {
+    property_types: [
+      "string",
+      "integer",
+      "number",
+      "boolean",
+      "date",
+      "datetime",
+      "ref",
+    ],
+    scalar_types: ["string", "integer", "number", "boolean", "date", "datetime"],
+    cast_types: ["string", "integer", "number", "boolean", "date", "datetime"],
+    source_formats: ["csv", "json"],
+    condition_operators: {},
+    evaluation: {
+      metrics: ["duration"],
+      aggregations: ["median", "mean", "min", "max", "count"],
+      units: ["seconds", "minutes", "hours", "days"],
+      comparators: ["lt", "lte", "gt", "gte"],
+      guardrail_comparators: ["not_increase", "lt", "lte", "gt", "gte"],
+    },
+    deliverables: [
+      "explanation",
+      "hypotheses",
+      "follow_up_questions",
+      "action_proposals",
+    ],
+  },
+};
+
+/**
+ * SYNTHETIC FIXTURE — open response with the full example definition texts
+ * so the structured form tests exercise realistic YAML.
+ */
+export const SYNTHETIC_FORM_OPEN_RESPONSE: OpenResponse = {
+  ...SYNTHETIC_OPEN_RESPONSE,
+  files: {
+    "domain.yaml": SYNTHETIC_DOMAIN_YAML,
+    "mapping.yaml": SYNTHETIC_MAPPING_YAML,
+    "evaluation.yaml": SYNTHETIC_FORM_EVALUATION_YAML,
+    "agent.yaml": SYNTHETIC_FORM_AGENT_YAML,
   },
 };
 

@@ -1,11 +1,11 @@
 /**
  * Minimal raw-text draft editor for one workspace file.
  *
- * Structured per-definition forms belong to #16/#17/#18; this editor exists
- * so draft/active/unsaved state is real in #15: edits mark the file dirty,
- * "Revert to active" restores the exact on-disk text, and diagnostics for
- * the file sit beside it. It never validates locally — "Validate draft"
- * sends the whole bundle to the API.
+ * This is the free-form companion to the structured per-definition forms
+ * (#16/#17/#18) and remains the escape hatch for content the forms do not
+ * expose: edits mark the file dirty, "Revert to active" restores the exact
+ * on-disk text, and diagnostics for the file sit beside it. It never
+ * validates locally — "Validate draft" sends the whole bundle to the API.
  */
 
 import { useWorkspace } from "../workspace/context";

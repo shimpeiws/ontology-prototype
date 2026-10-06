@@ -1,5 +1,6 @@
 import { useWorkspace } from "../workspace/context";
 import { DefinitionPage } from "../components/DefinitionPage";
+import { EvaluationForm } from "../components/EvaluationForm";
 import { EmptyState } from "../components/states";
 
 export function meta() {
@@ -10,11 +11,21 @@ export default function EvaluationPage() {
   const { state } = useWorkspace();
   const evaluation = state.workspace?.definitions?.evaluation;
   if (!evaluation) {
-    return <DefinitionPage title="Evaluation" file="evaluation.yaml" />;
+    return (
+      <DefinitionPage
+        title="Evaluation"
+        file="evaluation.yaml"
+        form={<EvaluationForm />}
+      />
+    );
   }
 
   return (
-    <DefinitionPage title="Evaluation" file="evaluation.yaml">
+    <DefinitionPage
+      title="Evaluation"
+      file="evaluation.yaml"
+      form={<EvaluationForm />}
+    >
       <p>
         <strong>{evaluation.name}</strong>
         {evaluation.description ? ` — ${evaluation.description}` : null}
