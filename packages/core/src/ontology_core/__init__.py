@@ -128,7 +128,9 @@ from .workspace import (
     SUPPORTED_SCHEMA_VERSION,
     WORKSPACE_FILES,
     LoadResult,
+    bundle_digest,
     load_workspace,
+    load_workspace_texts,
 )
 
 __version__ = "0.0.1"
@@ -216,6 +218,7 @@ __all__ = [
     "Workspace",
     "__version__",
     "assemble_trace",
+    "bundle_digest",
     "check_approval",
     "compare_subjects",
     "decide",
@@ -230,6 +233,7 @@ __all__ = [
     "get_projection_run",
     "ingest_snapshot",
     "load_workspace",
+    "load_workspace_texts",
     "payload_digest",
     "prepare",
     "proposal_view",

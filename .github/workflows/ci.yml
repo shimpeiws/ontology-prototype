@@ -20,11 +20,24 @@ jobs:
       - name: Install packages
         run: |
           python -m pip install --upgrade pip
-          pip install -e "packages/core[test]" -e "apps/cli[test]"
+          pip install -e "packages/core[test]" -e "apps/cli[test]" -e "apps/api[test]"
       - name: Run tests
         run: python -m pytest -q
       - name: Check reference workspace through the CLI
         run: ontology check examples/job-invoicing
+      - name: API opens the reference workspace under a configured root
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from ontology_api import ApiConfig, create_app
+          app = create_app(ApiConfig(workspace_roots=("examples",)))
+          client = TestClient(app)
+          response = client.post(
+              "/api/v1/workspaces/open", json={"path": "job-invoicing"}
+          )
+          assert response.status_code == 200, response.text
+          assert response.json()["valid"] is True, response.json()
+          PY
 
   core-isolation:
     runs-on: ubuntu-latest
@@ -43,6 +56,8 @@ jobs:
           import sys
           import ontology_core
           assert "ontology_cli" not in sys.modules
+          assert "ontology_api" not in sys.modules
+          assert "fastapi" not in sys.modules
           print("ontology_core", ontology_core.__version__)
           PY
       - name: Run core tests

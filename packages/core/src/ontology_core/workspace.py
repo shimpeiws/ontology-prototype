@@ -7,6 +7,8 @@ data-only: no environment interpolation, no external includes, no execution.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,7 +18,7 @@ from .domain import validate_domain
 from .evaluation import validate_evaluation
 from .mapping import validate_mapping
 from .model import Workspace
-from .yamlio import load_yaml_file
+from .yamlio import load_yaml_file, load_yaml_text
 
 SUPPORTED_SCHEMA_VERSION = 1
 
@@ -93,6 +95,71 @@ def load_workspace(path: str | Path) -> LoadResult:
         if doc is not None and _check_header(doc, kind, filename, diag):
             docs[kind] = doc
 
+    return _validate_documents(docs, diag, root)
+
+
+def load_workspace_texts(
+    texts: Mapping[str, str], *, path: str | Path
+) -> LoadResult:
+    """Validate a workspace bundle supplied as in-memory YAML text.
+
+    ``texts`` maps workspace file names (``domain.yaml``, ``mapping.yaml``,
+    ``evaluation.yaml``, ``agent.yaml``) to their UTF-8 text, as a draft
+    held by an editor would supply them. A missing key reports the same
+    ``WORKSPACE.MISSING_FILE`` diagnostic as a file absent on disk; keys
+    outside the four workspace file names are ignored, mirroring how
+    ``load_workspace`` ignores extra files in a directory. Nothing is read
+    from or written to the filesystem: ``path`` only names the workspace
+    directory the bundle belongs to on the returned ``Workspace``.
+    """
+    diag = Diagnostics()
+
+    docs: dict[str, dict] = {}
+    for kind, filename in WORKSPACE_FILES.items():
+        text = texts.get(filename)
+        if text is None:
+            diag.error(
+                "WORKSPACE.MISSING_FILE",
+                f"missing required definition file {filename}",
+                file=filename,
+                hint="a workspace needs domain, mapping, evaluation, and agent files",
+            )
+            continue
+        doc = load_yaml_text(text, filename, diag)
+        if doc is not None and _check_header(doc, kind, filename, diag):
+            docs[kind] = doc
+
+    return _validate_documents(docs, diag, Path(path))
+
+
+def bundle_digest(texts: Mapping[str, str]) -> str:
+    """Content digest of a workspace bundle.
+
+    The digest covers exactly the four workspace file names present in
+    ``texts`` and is independent of how the text was obtained (disk read or
+    draft payload), so an active bundle and a draft can be compared. The
+    recipe is versioned: sha256 over ``ontology-workspace-bundle.v1`` then,
+    in ``WORKSPACE_FILES`` order, each present file's name, UTF-8 byte
+    length, and content.
+    """
+    digest = hashlib.sha256()
+    digest.update(b"ontology-workspace-bundle.v1\n")
+    for filename in WORKSPACE_FILES.values():
+        text = texts.get(filename)
+        if text is None:
+            continue
+        data = text.encode("utf-8", errors="surrogatepass")
+        digest.update(filename.encode("utf-8"))
+        digest.update(b"\n")
+        digest.update(str(len(data)).encode("ascii"))
+        digest.update(b"\n")
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def _validate_documents(
+    docs: dict[str, dict], diag: Diagnostics, root: Path
+) -> LoadResult:
     domain = None
     if "domain" in docs:
         domain = validate_domain(docs["domain"], diag, WORKSPACE_FILES["domain"])

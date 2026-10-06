@@ -7,10 +7,11 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 | --- | --- |
 | `packages/core/` | `ontology-core`: workspace contracts, loading, and validation shared by every app |
 | `apps/cli/` | `ontology-cli`: the `ontology` command-line app over the shared core |
+| `apps/api/` | `ontology-api`: local FastAPI app over the shared core — workspace open/inspect, draft validation, contract metadata |
 | `examples/` | Portable workspace definitions and synthetic source data |
 | `docs/` | Product plan, release criteria, and architecture decisions |
 
-`apps/api/` and `apps/web/` are documented v0.2 destinations (see [docs/monorepo.md](docs/monorepo.md)); they are intentionally not implemented in v0.1. The framework-neutral authoring-flow and UI-state contract they implement is specified in [docs/authoring-flow.md](docs/authoring-flow.md).
+`apps/api/` landed with v0.2 (see [docs/api.md](docs/api.md)); `apps/web/` remains a documented v0.2 destination (see [docs/monorepo.md](docs/monorepo.md)) and is intentionally not implemented yet. The framework-neutral authoring-flow and UI-state contract they implement is specified in [docs/authoring-flow.md](docs/authoring-flow.md).
 
 ## Documentation
 
@@ -29,6 +30,7 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 | [docs/execution.md](docs/execution.md) | Approved write-back, receipts, and retry behavior |
 | [docs/evaluation.md](docs/evaluation.md) | Outcome evaluation, cohorts, and guardrails |
 | [docs/authoring-flow.md](docs/authoring-flow.md) | v0.2 authoring flow and UI state contract |
+| [docs/api.md](docs/api.md) | Local API: startup, endpoints, error model, and root enforcement |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 
 ## Install
@@ -38,7 +40,7 @@ Requires Python 3.11+.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e "packages/core[test]" -e "apps/cli[test]"
+pip install -e "packages/core[test]" -e "apps/cli[test]" -e "apps/api[test]"
 ```
 
 ## Test
@@ -83,6 +85,19 @@ ontology diagnose-compare --subject openrouter:openai/gpt-4o-mini --subject open
 `ontology trace` reassembles everything a run left behind — observation evidence and snapshots, canonical entities and facts, frozen projection/diagnosis/evaluation runs, proposals with decisions and execution attempts, and the per-stage journal — into one linked, read-only view. Follow one subject through the loop with `--subject Job/101`, anchor on any artifact id with `--run`, or write a self-contained export bundle with `--export` (it embeds raw snapshot contents and never overwrites). Observed facts, AI proposals, human decisions, write-backs, and evaluated outcomes carry distinct nature labels, and dangling references surface as `TRACE.UNRESOLVED_LINK` instead of disappearing. See [docs/trace.md](docs/trace.md).
 
 `ontology diagnose-compare` runs the bounded live-model comparison: N `--subject PROVIDER:MODEL` pairs evaluated against one shared frozen fixture input through the same adapters as `diagnose`, producing a JSON report artifact that records identical-input proof (shared `input_digest`/`projection_run_id`), per-subject status/requests/latency/checks, and an explicit `unavailable` slot. See [docs/diagnosis-evaluation.md](docs/diagnosis-evaluation.md#live-model-comparison).
+
+### Local API
+
+The same core is exposed over HTTP for the authoring UI. Start it with an explicit workspace root and open/validate workspaces over `/api/v1`:
+
+```bash
+ontology-api --root examples
+# POST /api/v1/workspaces/open        {"path": "job-invoicing"}  (paths resolve against the configured roots)
+# POST /api/v1/workspaces/drafts/validate  {"path": "...", "files": {...}}
+# GET  /api/v1/contract               versioned contract/schema metadata
+```
+
+See [docs/api.md](docs/api.md) for startup configuration, the endpoint contract, the error model, and root enforcement.
 
 Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology trace`, `ontology diagnose-compare`.
 
