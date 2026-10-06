@@ -207,9 +207,10 @@ describe("workspace store", () => {
     let state = dirtyState();
     const sentFiles = draftFilesForRequest(state.drafts);
     const revision = state.draftRevision;
-    state = workspaceReducer(state, { type: "saveStarted" });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
     state = workspaceReducer(state, {
       type: "saveFinished",
+      requestId: 1,
       revision,
       files: sentFiles,
       response: saveResponse({}),
@@ -232,7 +233,7 @@ describe("workspace store", () => {
     let state = dirtyState();
     const sentFiles = draftFilesForRequest(state.drafts);
     const revision = state.draftRevision;
-    state = workspaceReducer(state, { type: "saveStarted" });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
     // The FDE keeps typing while the save request is in flight.
     state = workspaceReducer(state, {
       type: "edited",
@@ -241,6 +242,7 @@ describe("workspace store", () => {
     });
     state = workspaceReducer(state, {
       type: "saveFinished",
+      requestId: 1,
       revision,
       files: sentFiles,
       response: saveResponse({}),
@@ -258,9 +260,10 @@ describe("workspace store", () => {
   it("an invalid outcome surfaces the save's diagnostics as validation", () => {
     let state = dirtyState();
     const revision = state.draftRevision;
-    state = workspaceReducer(state, { type: "saveStarted" });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
     state = workspaceReducer(state, {
       type: "saveFinished",
+      requestId: 1,
       revision,
       files: draftFilesForRequest(state.drafts),
       response: saveResponse({
@@ -281,9 +284,10 @@ describe("workspace store", () => {
 
   it("a conflict keeps the draft and reports the live digest", () => {
     let state = dirtyState();
-    state = workspaceReducer(state, { type: "saveStarted" });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
     state = workspaceReducer(state, {
       type: "saveFinished",
+      requestId: 1,
       revision: state.draftRevision,
       files: draftFilesForRequest(state.drafts),
       response: saveResponse({
@@ -303,14 +307,17 @@ describe("workspace store", () => {
 
   it("reloading after a conflict re-bases the draft without losing it", () => {
     let state = dirtyState();
-    state = workspaceReducer(state, { type: "saveStarted" });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
     state = workspaceReducer(state, {
       type: "saveFinished",
+      requestId: 1,
       revision: state.draftRevision,
       files: draftFilesForRequest(state.drafts),
       response: saveResponse({ outcome: "conflict", digest: "d2" }),
     });
 
+    state = workspaceReducer(state, { type: "reloadStarted" });
+    expect(state.reloading).toBe(true);
     const reloadedResponse = {
       ...SYNTHETIC_OPEN_RESPONSE,
       workspace: { ...SYNTHETIC_OPEN_RESPONSE.workspace, digest: "d2" },
@@ -324,6 +331,7 @@ describe("workspace store", () => {
       response: reloadedResponse,
     });
 
+    expect(state.reloading).toBe(false);
     expect(state.workspace?.digest).toBe("d2");
     expect(state.workspace?.activeFiles["agent.yaml"]).toBe(
       "# edited outside the UI\n",
@@ -336,9 +344,10 @@ describe("workspace store", () => {
 
   it("a failed save is a retryable notice; transport errors stay out of diagnostics", () => {
     let state = dirtyState();
-    state = workspaceReducer(state, { type: "saveStarted" });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
     state = workspaceReducer(state, {
       type: "saveFinished",
+      requestId: 1,
       revision: state.draftRevision,
       files: draftFilesForRequest(state.drafts),
       response: saveResponse({
@@ -351,9 +360,10 @@ describe("workspace store", () => {
     expect(state.saveNotice?.message).toBe("disk full");
     expect(isDraftDirty(state)).toBe(true);
 
-    state = workspaceReducer(state, { type: "saveStarted" });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 2 });
     state = workspaceReducer(state, {
       type: "saveFailed",
+      requestId: 2,
       error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
     });
     expect(state.saving).toBe(false);
@@ -363,11 +373,61 @@ describe("workspace store", () => {
 
   it("a reload transport failure lands on the save error surface", () => {
     let state = dirtyState();
+    state = workspaceReducer(state, { type: "reloadStarted" });
     state = workspaceReducer(state, {
       type: "reloadFailed",
       error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
     });
+    expect(state.reloading).toBe(false);
     expect(state.saveError?.code).toBe("WEB.API_UNREACHABLE");
     expect(state.drafts["domain.yaml"]).toBe("changed: true");
+  });
+
+  it("a superseded save response cannot roll the active baseline back", () => {
+    let state = dirtyState();
+    const sentFiles = draftFilesForRequest(state.drafts);
+    const revision = state.draftRevision;
+    // A second save superseding the first (e.g. a retried request) makes
+    // the earlier response stale; it must be discarded, never applied.
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 2 });
+    state = workspaceReducer(state, {
+      type: "saveFinished",
+      requestId: 1,
+      revision,
+      files: sentFiles,
+      response: saveResponse({ digest: "stale-digest" }),
+    });
+
+    expect(state.saving).toBe(true);
+    expect(state.workspace?.digest).toBe("synthetic-digest");
+    expect(state.workspace?.activeFiles["domain.yaml"]).not.toBe(
+      "changed: true",
+    );
+    expect(state.saveNotice).toBeNull();
+
+    state = workspaceReducer(state, {
+      type: "saveFinished",
+      requestId: 2,
+      revision,
+      files: sentFiles,
+      response: saveResponse({}),
+    });
+    expect(state.workspace?.digest).toBe("saved-digest");
+    expect(state.saving).toBe(false);
+  });
+
+  it("a stale save transport failure is discarded too", () => {
+    let state = dirtyState();
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 2 });
+    state = workspaceReducer(state, {
+      type: "saveFailed",
+      requestId: 1,
+      error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+    });
+
+    expect(state.saving).toBe(true);
+    expect(state.saveError).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import ontology_core
 from ontology_core import (
@@ -88,7 +88,7 @@ class SaveOutcome:
     """
 
     path: Path
-    outcome: str
+    outcome: Literal["saved", "invalid", "conflict", "failed"]
     valid: bool
     diagnostics: list[Diagnostic]
     digest: str | None

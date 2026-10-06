@@ -30,8 +30,10 @@ The Web app is presentation only:
   sent files, `invalid` surfaces the core diagnostics the save ran,
   `conflict` offers an explicit reload that re-bases the draft without
   losing it, and `failed` offers retry. Save is disabled while the draft
-  is clean or the active digest is unavailable, because a baseless save
-  can never be conflict-checked.
+  is clean, while a save or reload is in flight, or the active digest is
+  unavailable, because a baseless save can never be conflict-checked.
+  Save and reload are mutually exclusive in flight — a late save response
+  is discarded rather than allowed to roll the reloaded baseline back.
 - The Domain page offers structured authoring on top of the raw editor: a
   visual graph of entities/events/projections, an inspectable list, and
   per-concept forms that mutate the draft `domain.yaml` through the

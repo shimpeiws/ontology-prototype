@@ -9,8 +9,10 @@
  * - `draftRevision` increments on every draft mutation; a validation result
  *   records the revision it describes, so a draft edit renders any shown
  *   validation stale instead of silently disagreeing with it.
- * - Validation requests are sequenced: a response for a superseded request
- *   is discarded, so stale async results are never shown as current.
+ * - Validation and save requests are sequenced: a response for a
+ *   superseded request is discarded, so stale async results are never
+ *   shown as current. Save and reload are mutually exclusive in flight —
+ *   a reload may only re-base the draft when no save can still land on it.
  */
 
 import type {
@@ -73,6 +75,8 @@ export interface WorkspaceState {
   validation: DraftValidation | null;
   validationError: ApiError | null;
   saving: boolean;
+  lastSaveRequestId: number;
+  reloading: boolean;
   saveNotice: SaveNotice | null;
   /** Transport-level save/reload failure — never a validation finding. */
   saveError: ApiError | null;
@@ -87,6 +91,8 @@ export const initialWorkspaceState: WorkspaceState = {
   validation: null,
   validationError: null,
   saving: false,
+  lastSaveRequestId: 0,
+  reloading: false,
   saveNotice: null,
   saveError: null,
 };
@@ -112,16 +118,18 @@ export type WorkspaceAction =
       diagnostics: Diagnostic[];
     }
   | { type: "validationFailed"; requestId: number; error: ApiError }
-  | { type: "saveStarted" }
+  | { type: "saveStarted"; requestId: number }
   | {
       type: "saveFinished";
+      requestId: number;
       /** Draft revision at the moment the save was submitted. */
       revision: number;
       /** The exact files that were written on a `saved` outcome. */
       files: Record<string, string>;
       response: SaveResponse;
     }
-  | { type: "saveFailed"; error: ApiError }
+  | { type: "saveFailed"; requestId: number; error: ApiError }
+  | { type: "reloadStarted" }
   | {
       type: "reloaded";
       response: OpenResponse;
@@ -222,10 +230,14 @@ export function workspaceReducer(
       return {
         ...state,
         saving: true,
+        lastSaveRequestId: action.requestId,
         saveNotice: null,
         saveError: null,
       };
     case "saveFinished": {
+      // A response for a superseded save is discarded, same rule as
+      // validation: it must never roll the active baseline back.
+      if (action.requestId !== state.lastSaveRequestId) return state;
       const { response } = action;
       const next: WorkspaceState = {
         ...state,
@@ -271,11 +283,19 @@ export function workspaceReducer(
       // preserved for the review/retry path.
       return next;
     }
-    case "saveFailed":
+    case "saveFailed": {
+      if (action.requestId !== state.lastSaveRequestId) return state;
       return {
         ...state,
         saving: false,
         saveError: action.error,
+      };
+    }
+    case "reloadStarted":
+      return {
+        ...state,
+        reloading: true,
+        saveError: null,
       };
     case "reloaded": {
       // The conflict path's "reload": the active baseline updates to what
@@ -286,6 +306,7 @@ export function workspaceReducer(
       if (!state.workspace) return state;
       return {
         ...state,
+        reloading: false,
         workspace: {
           requestedPath: state.workspace.requestedPath,
           resolvedPath: action.response.workspace.path,
@@ -302,6 +323,7 @@ export function workspaceReducer(
     case "reloadFailed":
       return {
         ...state,
+        reloading: false,
         saveError: action.error,
       };
   }

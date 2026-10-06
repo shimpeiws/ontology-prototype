@@ -204,16 +204,79 @@ def test_save_to_non_directory_fails(tmp_path: Path) -> None:
     assert not missing.exists()
 
 
-def test_save_preserves_file_mode(tmp_path: Path) -> None:
+def test_save_preserves_file_modes(tmp_path: Path) -> None:
     workspace = make_workspace(tmp_path)
-    domain = workspace / "domain.yaml"
-    domain.chmod(0o640)
+    modes = {
+        "domain.yaml": 0o640,
+        "mapping.yaml": 0o600,
+        "evaluation.yaml": 0o664,
+        "agent.yaml": 0o644,
+    }
+    for name, mode in modes.items():
+        (workspace / name).chmod(mode)
     texts = _texts(workspace)
 
     result = save_workspace(workspace, texts, base_digest=bundle_digest(texts))
 
     assert result.status == "saved"
-    assert stat.S_IMODE(domain.stat().st_mode) == 0o640
+    for name, mode in modes.items():
+        assert stat.S_IMODE((workspace / name).stat().st_mode) == mode
+
+
+def test_file_created_by_save_gets_default_mode(tmp_path: Path) -> None:
+    workspace = make_workspace(tmp_path)
+    texts = _texts(workspace)
+    (workspace / "agent.yaml").unlink()
+    # The base digest covers only the files present at open time — the
+    # same recipe the API uses when a definition is missing on disk.
+    base = bundle_digest({k: v for k, v in texts.items() if k != "agent.yaml"})
+
+    result = save_workspace(workspace, texts, base_digest=base)
+
+    assert result.status == "saved"
+    assert stat.S_IMODE((workspace / "agent.yaml").stat().st_mode) == 0o644
+
+
+def test_external_write_during_activation_conflicts_and_rolls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cross-process write landing between the digest check and a rename
+    stops the save as conflict instead of being silently overwritten."""
+    workspace = make_workspace(tmp_path)
+    texts = _texts(workspace)
+    base = bundle_digest(texts)
+    for name in FILES:
+        texts[f"{name}.yaml"] += "\n# draft\n"
+    before = _listing(workspace)
+
+    import ontology_core.workspace as ws_module
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def racing_replace(src, dst) -> None:
+        real_replace(src, dst)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # A CLI/editor write lands mid-commit, before agent.yaml's rename.
+            agent = workspace / "agent.yaml"
+            agent.write_text(agent.read_text() + "\n# external edit\n")
+
+    monkeypatch.setattr(ws_module.os, "replace", racing_replace)
+
+    result = save_workspace(workspace, texts, base_digest=base)
+
+    assert result.status == "conflict"
+    assert "agent.yaml" in (result.message or "")
+    # The external edit survived; already-activated files were rolled
+    # back to the pre-save bytes; no staging files remain.
+    after = _listing(workspace)
+    for name in ("domain.yaml", "mapping.yaml", "evaluation.yaml"):
+        assert after[name] == before[name]
+    assert after["agent.yaml"] == before["agent.yaml"] + b"\n# external edit\n"
+    assert set(after) == set(before)
+    assert result.digest == bundle_digest(_texts(workspace))
+    assert load_workspace(workspace).ok
 
 
 def test_extra_keys_in_texts_are_never_written(tmp_path: Path) -> None:

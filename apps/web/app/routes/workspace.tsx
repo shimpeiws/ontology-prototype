@@ -97,7 +97,10 @@ export default function WorkspaceLayout() {
             type="button"
             onClick={() => void saveDraft()}
             disabled={
-              state.saving || !dirty || state.workspace.digest === null
+              state.saving ||
+              state.reloading ||
+              !dirty ||
+              state.workspace.digest === null
             }
             title={
               state.workspace.digest === null

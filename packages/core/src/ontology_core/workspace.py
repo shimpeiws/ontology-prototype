@@ -22,6 +22,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from .agentdef import validate_agent
 from .diagnostics import Diagnostic, Diagnostics
@@ -168,6 +169,9 @@ def bundle_digest(texts: Mapping[str, str]) -> str:
     return digest.hexdigest()
 
 
+SaveStatus = Literal["saved", "invalid", "conflict", "failed"]
+"""The save outcome vocabulary — extended only with the contract."""
+
 @dataclass
 class SaveResult:
     """Outcome of ``save_workspace``.
@@ -184,7 +188,8 @@ class SaveResult:
       ``ontology check``. ``digest`` is the draft digest.
     - ``"conflict"`` — the on-disk bundle no longer matches
       ``base_digest`` (an external or CLI edit, or a file that appeared
-      or disappeared since the base was captured); nothing was written.
+      or disappeared since the base was captured — including a write
+      detected mid-activation); the pre-save state is left intact.
       ``digest`` is the current on-disk digest — the base a reloaded
       client must present to save.
     - ``"failed"`` — the workspace could not be persisted: not a
@@ -194,7 +199,7 @@ class SaveResult:
       the failure and says so explicitly when a rollback was incomplete.
     """
 
-    status: str
+    status: SaveStatus
     diagnostics: list[Diagnostic] = field(default_factory=list)
     digest: str | None = None
     workspace: Workspace | None = None
@@ -240,6 +245,12 @@ def save_workspace(
     check read. Only the four definition files are ever written — saving
     cannot touch canonical state, observations, traces, proposals, or any
     other file in the directory.
+
+    Just before each rename the target is re-verified against the bytes
+    the digest check recorded, so a cross-process write that lands between
+    the digest check and activation stops the save as ``"conflict"``
+    instead of being silently overwritten (a residual window between that
+    re-check and the rename itself remains; see docs/workspace.md).
     """
     root = Path(path)
     with _save_lock(root):
@@ -268,13 +279,47 @@ def _save_workspace(
     if not is_dir:
         return _save_failed(f"workspace path is not a directory: {root}")
 
-    # Read the on-disk bundle byte-exact — the same recipe the API's open
-    # response uses, so a digest captured at open compares equal here.
-    # Symlinked definition files are refused outright: activation must
-    # never write through a link, and hashing a link target that may live
-    # outside the workspace would grant a content-comparison oracle. The
-    # pre-save bytes are kept for rollback, so a failed commit restores
-    # exactly the state the digest check verified.
+    read = _read_disk_bundle(root)
+    if isinstance(read, SaveResult):
+        return read
+    disk_texts, disk_bytes, disk_modes = read
+
+    active_digest = bundle_digest(disk_texts)
+    if base_digest != active_digest:
+        return SaveResult(
+            status="conflict",
+            digest=active_digest,
+            message=(
+                "workspace files changed on disk since the base digest was "
+                "captured; reload the active bundle before saving"
+            ),
+        )
+
+    outcome = _activate_bundle(root, texts, disk_bytes, disk_modes)
+    if outcome is not None:
+        return outcome
+    return SaveResult(
+        status="saved",
+        diagnostics=result.diagnostics,
+        digest=draft_digest,
+        workspace=result.workspace,
+    )
+
+
+def _read_disk_bundle(
+    root: Path,
+) -> tuple[dict[str, str], dict[str, bytes], dict[str, int]] | SaveResult:
+    """Read the on-disk bundle byte-exact, keeping bytes for verification.
+
+    Returns ``(texts, bytes, modes)`` for the files present, or a
+    ``"failed"`` result when the state cannot be established honestly.
+    Symlinked definition files are refused outright: activation must
+    never write through a link, and hashing a link target that may live
+    outside the workspace would grant a content-comparison oracle. The
+    recorded bytes double as the activation-time re-check input and the
+    rollback source, so a failed commit restores exactly the state the
+    digest check verified.
+    """
     disk_texts: dict[str, str] = {}
     disk_bytes: dict[str, bytes] = {}
     disk_modes: dict[str, int] = {}
@@ -306,27 +351,37 @@ def _save_workspace(
             return _save_failed(f"cannot read {filename}: {exc}")
         disk_bytes[filename] = data
         disk_modes[filename] = stat.S_IMODE(file_stat.st_mode)
+    return disk_texts, disk_bytes, disk_modes
 
-    active_digest = bundle_digest(disk_texts)
-    if base_digest != active_digest:
-        return SaveResult(
-            status="conflict",
-            digest=active_digest,
-            message=(
-                "workspace files changed on disk since the base digest was "
-                "captured; reload the active bundle before saving"
-            ),
-        )
 
-    failure = _activate_bundle(root, texts, disk_bytes, disk_modes)
-    if failure is not None:
-        return _save_failed(failure)
-    return SaveResult(
-        status="saved",
-        diagnostics=result.diagnostics,
-        digest=draft_digest,
-        workspace=result.workspace,
-    )
+class _TargetChanged(Exception):
+    """A workspace file diverged from the recorded bytes mid-activation."""
+
+    def __init__(self, filename: str) -> None:
+        super().__init__(filename)
+        self.filename = filename
+
+
+def _target_matches_recorded(target: Path, expected: bytes | None) -> bool:
+    """Whether the target still holds the bytes the digest check read.
+
+    ``expected`` is None when the file was absent at check time — then it
+    must still be absent (``lexists`` also catches a freshly-placed
+    dangling symlink). For a present file, bytes are compared rather than
+    stat fields, so a same-content rewrite does not spuriously conflict.
+    """
+    if expected is None:
+        return not os.path.lexists(target)
+    try:
+        file_stat = os.lstat(target)
+    except OSError:
+        return False
+    if not stat.S_ISREG(file_stat.st_mode):
+        return False
+    try:
+        return target.read_bytes() == expected
+    except OSError:
+        return False
 
 
 def _save_failed(message: str) -> SaveResult:
@@ -338,17 +393,24 @@ def _activate_bundle(
     texts: Mapping[str, str],
     disk_bytes: dict[str, bytes],
     disk_modes: dict[str, int],
-) -> str | None:
-    """Stage then activate the four files; return a failure message or None.
+) -> SaveResult | None:
+    """Stage then activate the four files; None on success, else the outcome.
 
     Commit/rollback strategy: every new file is fully written and synced
     to a temporary name in the workspace directory *before* the first
     rename touches the active set, so a staging failure writes nothing.
     Activation then replaces each target in ``WORKSPACE_FILES`` order
     (``os.replace`` is per-file atomic and replaces — never writes
-    through — a symlink). A mid-commit failure restores each
-    already-activated file from the pre-save bytes held in memory, so a
-    failed save never leaves a mixed old/new bundle.
+    through — a symlink).
+
+    Just before each rename the target's bytes are re-verified against
+    what the digest check recorded: ``os.replace`` is a blind overwrite,
+    so a cross-process write landing between the digest check and the
+    rename would otherwise be silently lost. A diverging target stops the
+    activation as a ``conflict`` — after rolling back every already-
+    activated file — rather than clobbering the newer content. A residual
+    window remains between that re-check and the rename itself; it is
+    documented in docs/workspace.md and accepted for v0.2.
     """
     staged: dict[str, Path] = {}
     committed: list[str] = []
@@ -373,22 +435,54 @@ def _activate_bundle(
             staged[filename] = tmp_path
 
         for filename in WORKSPACE_FILES.values():
-            os.replace(staged[filename], root / filename)
+            target = root / filename
+            if not _target_matches_recorded(target, disk_bytes.get(filename)):
+                raise _TargetChanged(filename)
+            os.replace(staged[filename], target)
             committed.append(filename)
+    except _TargetChanged as changed:
+        problems = _rollback(root, committed, disk_bytes, disk_modes)
+        problems += _discard_staged(staged)
+        message = (
+            f"{changed.filename} changed on disk while the save was being "
+            "activated; the partially activated bundle was rolled back"
+        )
+        if problems:
+            return _save_failed(
+                message + "; rollback incomplete: " + "; ".join(problems)
+            )
+        reread = _read_disk_bundle(root)
+        if isinstance(reread, SaveResult):
+            return _save_failed(
+                message
+                + f"; the on-disk state could not be re-read: {reread.message}"
+            )
+        return SaveResult(
+            status="conflict",
+            digest=bundle_digest(reread[0]),
+            message=message,
+        )
     except OSError as exc:
         problems = _rollback(root, committed, disk_bytes, disk_modes)
-        for tmp_path in staged.values():
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                problems.append(f"leftover staging file {tmp_path.name}")
+        problems += _discard_staged(staged)
         message = f"failed to activate workspace: {exc.strerror or exc}"
         if problems:
             message += "; rollback incomplete: " + "; ".join(problems)
-        return message
+        return _save_failed(message)
 
     _fsync_dir(root)
     return None
+
+
+def _discard_staged(staged: dict[str, Path]) -> list[str]:
+    """Remove leftover staging files; returns per-file problems."""
+    problems: list[str] = []
+    for tmp_path in staged.values():
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            problems.append(f"leftover staging file {tmp_path.name}")
+    return problems
 
 
 def _rollback(

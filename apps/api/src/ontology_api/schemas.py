@@ -7,7 +7,7 @@ typed workspace model serialized field-for-field.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -99,7 +99,7 @@ class SaveResponse(BaseModel):
     """
 
     api_version: str
-    outcome: str
+    outcome: Literal["saved", "invalid", "conflict", "failed"]
     valid: bool
     digest: str | None
     definitions: dict[str, Any] | None
