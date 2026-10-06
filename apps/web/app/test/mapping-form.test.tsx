@@ -91,6 +91,21 @@ function EditProbe() {
   );
 }
 
+/** Reopens the provider on a different workspace — exercises revision
+ *  reset, which a preview result keyed only on revision would miss. */
+function SwitchProbe() {
+  const { open } = useWorkspace();
+  return (
+    <button
+      type="button"
+      data-testid="switch-workspace"
+      onClick={() =>
+        open("other-workspace", SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE)
+      }
+    />
+  );
+}
+
 function renderForm(
   children: React.ReactNode,
   response?: OpenResponse,
@@ -369,6 +384,24 @@ describe("MappingForm", () => {
     expect(other).not.toHaveTextContent("MAPPING.MISSING_FIELD");
   });
 
+  it("contract failure degrades cast controls to free text, not hidden", async () => {
+    contractMock.mockRejectedValue(
+      new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+    );
+    renderForm(<MappingForm />);
+    // Without a contract every select degrades to a text input that keeps
+    // the draft's value visible and editable.
+    const source = await screen.findByLabelText("Source format");
+    expect(source.tagName).toBe("INPUT");
+    expect(source).toHaveValue("csv");
+    expect(
+      screen.getByLabelText("Property status cast (as)"),
+    ).toHaveValue("string");
+    expect(
+      screen.getAllByLabelText("occurred_at (occurrence) cast (as)")[0],
+    ).toHaveValue("datetime");
+  });
+
   it("a file absent from the draft offers a skeleton", async () => {
     const response: OpenResponse = {
       ...SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
@@ -494,6 +527,29 @@ describe("PreviewPanel", () => {
       .toBeInTheDocument();
 
     fireEvent.change(textarea, { target: { value: "a,b,c" } });
+    expect(await screen.findByText("stale")).toBeInTheDocument();
+  });
+
+  it("marks the result stale when the workspace changes under it", async () => {
+    const user = userEvent.setup();
+    renderForm(
+      <>
+        <PreviewPanel />
+        <SwitchProbe />
+      </>,
+    );
+    await waitForContract();
+
+    await user.type(screen.getByLabelText(/Sample input/), "a,b");
+    await user.click(screen.getByRole("button", { name: "Run preview" }));
+    expect(await screen.findByText("prev-aaaabbbbcccc-dddd"))
+      .toBeInTheDocument();
+    expect(screen.queryByText("stale")).toBeNull();
+
+    // Opening another workspace resets draftRevision to 0 — the same
+    // value this run was keyed to — so the workspace identity, not the
+    // revision alone, must trip the stale marker.
+    await user.click(screen.getByTestId("switch-workspace"));
     expect(await screen.findByText("stale")).toBeInTheDocument();
   });
 

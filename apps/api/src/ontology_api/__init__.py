@@ -12,9 +12,9 @@ from .main import create_app
 from .service import (
     ApiError,
     CoreWorkspaceService,
+    DraftPreviewResult,
     DraftResult,
     OpenResult,
-    PreviewResult,
     WorkspaceService,
     contract_metadata,
 )
@@ -24,9 +24,9 @@ __all__ = [
     "ApiConfig",
     "ApiError",
     "CoreWorkspaceService",
+    "DraftPreviewResult",
     "DraftResult",
     "OpenResult",
-    "PreviewResult",
     "WorkspaceService",
     "__version__",
     "contract_metadata",

@@ -29,6 +29,8 @@ import { EmptyState, ErrorState, LoadingState } from "./states";
 
 /** One preview invocation and its outcome, keyed to what it ran against. */
 interface PreviewRun {
+  /** Workspace path the preview ran against — revisions reset per workspace. */
+  path: string;
   /** Draft revision captured when the request was sent. */
   revision: number;
   /** Sample text captured when the request was sent. */
@@ -220,26 +222,37 @@ export function PreviewPanel() {
 
   const runPreview = async () => {
     if (!state.workspace) return;
+    const path = state.workspace.requestedPath;
     const revision = state.draftRevision;
     const text = sample;
-    setRun({ status: "running", revision, sample: text });
+    setRun({ status: "running", path, revision, sample: text });
     try {
       const response = await api.previewDraft(
-        state.workspace.requestedPath,
+        path,
         draftFilesForRequest(state.drafts),
         { text },
       );
-      setRun({ status: "done", revision, sample: text, response });
+      setRun({ status: "done", path, revision, sample: text, response });
     } catch (err) {
-      setRun({ status: "failed", revision, sample: text, error: toError(err) });
+      setRun({
+        status: "failed",
+        path,
+        revision,
+        sample: text,
+        error: toError(err),
+      });
     }
   };
 
-  // A shown result describes exactly the draft revision and sample it ran
-  // against — any drift since means the display is stale, not current.
+  // A shown result describes exactly the workspace, draft revision, and
+  // sample it ran against — any drift since means the display is stale,
+  // not current. The path is part of the key because opening another
+  // workspace resets the draft revision, which could otherwise collide.
   const stale =
     run !== null &&
-    (run.revision !== state.draftRevision || run.sample !== sample);
+    (run.path !== (state.workspace?.requestedPath ?? null) ||
+      run.revision !== state.draftRevision ||
+      run.sample !== sample);
   const running = run?.status === "running";
 
   return (

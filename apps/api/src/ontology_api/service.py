@@ -85,7 +85,7 @@ class DraftResult:
 
 
 @dataclass
-class PreviewResult:
+class DraftPreviewResult:
     """Outcome of a draft preview — isolated, nothing persisted.
 
     ``preview`` carries the core's preview payload (input/mapping digests,
@@ -111,7 +111,7 @@ class WorkspaceService(Protocol):
 
     def preview_draft(
         self, path: str, files: Mapping[str, str], sample_text: str
-    ) -> PreviewResult: ...
+    ) -> DraftPreviewResult: ...
 
 
 class CoreWorkspaceService:
@@ -166,7 +166,7 @@ class CoreWorkspaceService:
 
     def preview_draft(
         self, path: str, files: Mapping[str, str], sample_text: str
-    ) -> PreviewResult:
+    ) -> DraftPreviewResult:
         """Resolve a draft mapping against an in-memory sample.
 
         The draft bundle is validated exactly like ``validate_draft``; only a
@@ -182,7 +182,7 @@ class CoreWorkspaceService:
             if result.workspace is not None
             else None
         )
-        return PreviewResult(
+        return DraftPreviewResult(
             path=resolved,
             valid=result.ok,
             diagnostics=result.diagnostics,

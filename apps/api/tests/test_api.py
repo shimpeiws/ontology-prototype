@@ -8,6 +8,7 @@ core calls.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import apisupport
@@ -67,6 +68,9 @@ class TestContract:
             "lte",
             "ne",
         ]
+        assert contract["time_casts"] == ["date", "datetime"]
+        assert contract["preview_limits"]["max_bytes"] > 0
+        assert contract["preview_limits"]["max_records"] == 500
 
     def test_contract_needs_no_roots(self) -> None:
         # Metadata is readable even with nothing configured.
@@ -498,6 +502,12 @@ class TestDraftPreview:
         assert [stable(o) for o in body["preview"]["observations"]] == [
             stable(o.to_dict()) for o in expected.observations
         ]
+        # Run-level diagnostics must match the core preview exactly — this
+        # pins preview to ingest semantics so a drift in the shared
+        # internals fails loudly instead of silently diverging.
+        assert body["preview"]["diagnostics"] == [
+            d.to_dict() for d in expected.diagnostics
+        ]
 
     def test_preview_uses_draft_not_disk(
         self, roots: Path, workspace: Path
@@ -595,6 +605,32 @@ class TestDraftPreview:
         preview = response.json()["preview"]
         assert "PREVIEW.SAMPLE_TOO_LARGE" in codes(preview["diagnostics"])
         assert preview["observations"] == []
+
+    def test_preview_lone_surrogate_is_a_diagnostic(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        # A stray surrogate in the JSON-decoded string encodes via
+        # surrogatepass, then fails the UTF-8 decode inside the preview —
+        # a diagnostic, never a crash. TestClient's request encoder refuses
+        # surrogates, so the body is pre-serialized with ensure_ascii; a
+        # real server's json.loads still yields the surrogate.
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        body = json.dumps(
+            {
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": "\ud800"},
+            }
+        )
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            content=body.encode("ascii"),
+            headers={"content-type": "application/json"},
+        )
+        assert response.status_code == 200
+        preview = response.json()["preview"]
+        assert "INGEST.ENCODING_ERROR" in codes(preview["diagnostics"])
 
     def test_preview_rejects_unknown_file(
         self, roots: Path, workspace: Path

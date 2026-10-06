@@ -500,7 +500,7 @@ function EntityBindingCard({
                 node={pair.value}
                 diagPath={`${base}.properties.${name}`}
                 diagnostics={diagnostics}
-                casts={vocabulary?.castTypes ?? null}
+                casts={vocabulary?.castTypes ?? []}
                 edit={(fn) =>
                   editItem(item, (m, d) => {
                     const live = mapAt(m, ["properties"]);
@@ -690,7 +690,7 @@ function EventBindingCard({
         node={map?.getIn([timeFields.occurrence], true)}
         diagPath={`${base}.${timeFields.occurrence}`}
         diagnostics={diagnostics}
-        casts={vocabulary?.timeCasts ?? ["date", "datetime"]}
+        casts={vocabulary?.timeCasts ?? []}
         edit={(fn) =>
           editItem(item, (m, d) =>
             fn(ensureAssignment(m, [timeFields.occurrence], d), d),
@@ -719,7 +719,7 @@ function EventBindingCard({
             node={observedNode}
             diagPath={`${base}.${timeFields.observation}`}
             diagnostics={diagnostics}
-            casts={vocabulary?.timeCasts ?? ["date", "datetime"]}
+            casts={vocabulary?.timeCasts ?? []}
             edit={(fn) =>
               editItem(item, (m, d) =>
                 fn(ensureAssignment(m, [timeFields.observation], d), d),

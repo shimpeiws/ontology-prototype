@@ -20,6 +20,15 @@ The differences from ingest are the point of the type:
 
 Never raises on bad input: encoding errors, parse failures, and malformed
 records all become diagnostics, same as ingest.
+
+This module deliberately reaches into ``ingest``'s private helpers
+(``_parse_csv``/``_parse_json``/``_process_record``/``_mapping_digest``)
+rather than reimplementing them: preview parity is guaranteed only if both
+call the same code. The helpers stay underscore-private — they are an
+intra-package seam, not a public API — so any change to their signature or
+semantics must be reviewed against ``preview_snapshot`` and the parity
+tests (``test_preview.py`` / ``test_preview_parity_with_core``), which pin
+field-for-field equality including run-level diagnostics.
 """
 
 from __future__ import annotations

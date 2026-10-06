@@ -399,7 +399,7 @@ mapping:
     - entity: Job
       id: { field: id }
       properties:
-        status: { field: status }
+        status: { field: status, as: string }
         assignee: { field: assignee }
     - entity: Person
       id: { field: assignee }

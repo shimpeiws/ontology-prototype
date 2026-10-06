@@ -61,8 +61,8 @@ Contract and schema metadata for the frontend, derived from the core's
 authoritative constants: API version, core version, supported
 `schema_version`, the four workspace file names, diagnostic field names,
 the operation list, and the vocabularies the editors need
-(`property_types`, `scalar_types`, `cast_types`, `source_formats`,
-condition operators, evaluation
+(`property_types`, `scalar_types`, `cast_types`, `time_casts`,
+`source_formats`, `preview_limits`, condition operators, evaluation
 metrics/aggregations/units/comparators, deliverables).
 
 ### `POST /api/v1/workspaces/open`
