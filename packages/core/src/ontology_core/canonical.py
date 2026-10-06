@@ -78,6 +78,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Protocol
+from urllib.parse import quote
 
 CANON_DB = "canon.db"
 
@@ -355,6 +356,15 @@ class CanonicalStore(Protocol):
         """Current properties and provenance for one entity, or None."""
         ...
 
+    def entities(self) -> list[dict[str, Any]]:
+        """All current entity states across types, ordered by type/id.
+
+        Trace assembly reads the whole mapped state; an implementation
+        predating it fails loudly as a store error rather than silently
+        reporting an empty world.
+        """
+        ...
+
     def entities_of_type(self, entity_type: str) -> list[dict[str, Any]]:
         """All current entity states of one type, ordered by entity id.
 
@@ -366,6 +376,10 @@ class CanonicalStore(Protocol):
 
     def subject_ids_with_event(self, event: str, subject_entity: str) -> list[str]:
         """Distinct subject ids having at least one event of ``event``."""
+        ...
+
+    def events(self) -> list[CanonicalEvent]:
+        """All recorded facts, ordered by occurred_at then fact_key."""
         ...
 
     def events_for_subject(
@@ -403,6 +417,10 @@ class CanonicalStore(Protocol):
 
     def projection_run(self, run_id: str) -> dict[str, Any] | None:
         """A frozen run record with parsed inputs/candidates, or None."""
+        ...
+
+    def projection_runs(self) -> list[dict[str, Any]]:
+        """All frozen projection runs, ordered by creation time."""
         ...
 
     def record_diagnosis_run(
@@ -488,21 +506,37 @@ class CanonicalStore(Protocol):
         """A frozen evaluation report with its parsed payload, or None."""
         ...
 
+    def evaluation_runs(self) -> list[dict[str, Any]]:
+        """All frozen evaluation reports, ordered by creation time."""
+        ...
+
 
 class SqliteCanonicalStore:
-    """SQLite canonical store rooted at a workspace runtime directory."""
+    """SQLite canonical store rooted at a workspace runtime directory.
 
-    def __init__(self, root: str | Path) -> None:
+    ``readonly=True`` opens the database through SQLite's read-only URI
+    mode and skips schema setup and migrations, for callers that promise
+    not to write to the runtime directory — even when the database was
+    created by an older schema revision.
+    """
+
+    def __init__(self, root: str | Path, *, readonly: bool = False) -> None:
         self.root = Path(root)
         self.db_path = self.root / CANON_DB
+        self.readonly = readonly
         self._conn: sqlite3.Connection | None = None
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
-            self.root.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self.db_path)
-            conn.executescript(_SCHEMA)
-            self._migrate(conn)
+            if self.readonly:
+                conn = sqlite3.connect(
+                    f"file:{quote(str(self.db_path))}?mode=ro", uri=True
+                )
+            else:
+                self.root.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(self.db_path)
+                conn.executescript(_SCHEMA)
+                self._migrate(conn)
             self._conn = conn
         return self._conn
 
@@ -707,6 +741,31 @@ class SqliteCanonicalStore:
             "updated_at": row[3],
         }
 
+    def entities(self) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT entity_type, entity_id, properties,
+                   first_observation_id, last_observation_id,
+                   last_ingest_id, updated_at, properties_changed_at
+            FROM entities ORDER BY entity_type, entity_id
+            """
+        ).fetchall()
+        return [
+            {
+                "entity_type": row[0],
+                "entity_id": row[1],
+                "properties": json.loads(row[2]),
+                "first_observation_id": row[3],
+                "last_observation_id": row[4],
+                "last_ingest_id": row[5],
+                "updated_at": row[6],
+                "properties_changed_at": row[7],
+            }
+            for row in rows
+        ]
+
     def entities_of_type(self, entity_type: str) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
@@ -741,6 +800,30 @@ class SqliteCanonicalStore:
             (event, subject_entity),
         ).fetchall()
         return [row[0] for row in rows]
+
+    def events(self) -> list[CanonicalEvent]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT fact_key, event, subject_entity, subject_id,
+                   occurred_at, observed_at, first_observation_id, ingest_id
+            FROM events ORDER BY occurred_at, fact_key
+            """
+        ).fetchall()
+        return [
+            CanonicalEvent(
+                fact_key=row[0],
+                event=row[1],
+                subject_entity=row[2],
+                subject_id=row[3],
+                occurred_at=datetime.fromisoformat(row[4]),
+                observed_at=datetime.fromisoformat(row[5]),
+                first_observation_id=row[6],
+                ingest_id=row[7],
+            )
+            for row in rows
+        ]
 
     def events_for_subject(
         self, subject_entity: str, subject_id: str
@@ -869,6 +952,30 @@ class SqliteCanonicalStore:
             "inputs": json.loads(row[5]),
             "candidates": json.loads(row[6]),
         }
+
+    def projection_runs(self) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT run_id, projection, subject, as_of, created_at,
+                   definition_digest, inputs, candidates
+            FROM projection_runs ORDER BY created_at, run_id
+            """
+        ).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "projection": row[1],
+                "subject": row[2],
+                "as_of": row[3],
+                "created_at": row[4],
+                "definition_digest": row[5],
+                "inputs": json.loads(row[6]),
+                "candidates": json.loads(row[7]),
+            }
+            for row in rows
+        ]
 
     def record_diagnosis_run(
         self,
@@ -1222,6 +1329,29 @@ class SqliteCanonicalStore:
             "contract_digest": row[4],
             "report": json.loads(row[5]),
         }
+
+    def evaluation_runs(self) -> list[dict[str, Any]]:
+        if not self._has_db():
+            return []
+        rows = self._connect().execute(
+            """
+            SELECT run_id, evaluation, as_of, boundary, created_at,
+                   contract_digest, report
+            FROM evaluation_runs ORDER BY created_at, run_id
+            """
+        ).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "evaluation": row[1],
+                "as_of": row[2],
+                "boundary": row[3],
+                "created_at": row[4],
+                "contract_digest": row[5],
+                "report": json.loads(row[6]),
+            }
+            for row in rows
+        ]
 
 
 def _link_new_fact(

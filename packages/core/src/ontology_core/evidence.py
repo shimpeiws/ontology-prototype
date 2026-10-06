@@ -83,6 +83,18 @@ class FileEvidenceStore:
         _atomic_write(path, text.encode("utf-8"))
         return path
 
+    def observation_files(self) -> list[Path]:
+        """Persisted observation files, each named ``<ingest_id>.jsonl``."""
+        if not self.observations_dir.is_dir():
+            return []
+        return sorted(self.observations_dir.glob("*.jsonl"))
+
+    def snapshot_files(self) -> list[Path]:
+        """Stored source snapshots, named ``sha256-<digest>.<format>``."""
+        if not self.snapshots_dir.is_dir():
+            return []
+        return sorted(self.snapshots_dir.iterdir())
+
     def trace_sink(self) -> TraceSink:
         return JsonlTraceSink(self.trace_path)
 

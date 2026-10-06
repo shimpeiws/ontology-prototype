@@ -24,6 +24,7 @@ from ontology_core import (
     ProviderError,
     RunBudget,
     SubjectSpec,
+    assemble_trace,
     decide,
     execute,
     get_diagnosis_run,
@@ -36,6 +37,10 @@ from ontology_core import (
     run_diagnosis,
     run_evaluation,
     run_projection,
+    trace_anchor,
+    trace_overview,
+    trace_subject,
+    write_export,
 )
 from ontology_core.evidence import RUNTIME_DIR
 
@@ -60,7 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
             "approved proposal through a local CSV adapter with "
             "receipts and retry protection), 'evaluate' "
             "(baseline/after outcome evaluation with a frozen report), "
-            "and 'diagnose-compare' (bounded provider/model comparison "
+            "'trace' (inspect or export the linked run trace), and "
+            "'diagnose-compare' (bounded provider/model comparison "
             "over one shared frozen eval input)."
         ),
     )
@@ -295,6 +301,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the evaluation result as JSON",
     )
 
+    trace_parser = commands.add_parser(
+        "trace",
+        help="inspect or export the linked trace across the loop",
+    )
+    trace_parser.add_argument(
+        "workspace",
+        type=Path,
+        help="workspace directory; trace reads only its .ontology runtime data",
+    )
+    trace_parser.add_argument(
+        "--run",
+        metavar="ID",
+        help="inspect one artifact and its links — a run id, proposal id, "
+        "decision id, execution id, fact key, observation id, ingest id, "
+        "or snapshot digest",
+    )
+    trace_parser.add_argument(
+        "--subject",
+        metavar="ENTITY/ID",
+        help="follow one subject (e.g. Job/101) from source observation "
+        "through the evaluation report",
+    )
+    trace_parser.add_argument(
+        "--export",
+        metavar="PATH",
+        help="write a self-contained JSON trace bundle to PATH "
+        "(an existing file is never overwritten)",
+    )
+    trace_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the trace view as JSON",
+    )
+
     compare_parser = commands.add_parser(
         "diagnose-compare",
         help="evaluate provider/model subjects against one shared frozen "
@@ -396,6 +436,14 @@ def main(argv: list[str] | None = None) -> int:
             boundary=args.boundary,
             as_of=args.as_of,
             run_id=args.run,
+            as_json=args.json,
+        )
+    if args.command == "trace":
+        return _cmd_trace(
+            args.workspace,
+            run_id=args.run,
+            subject=args.subject,
+            export=args.export,
             as_json=args.json,
         )
     if args.command == "diagnose-compare":
@@ -525,6 +573,454 @@ def _cmd_ingest(workspace: Path, snapshot: Path, *, as_json: bool) -> int:
                         )
 
     return EXIT_OK if result.ok else EXIT_INVALID
+
+
+def _cmd_trace(
+    workspace: Path,
+    *,
+    run_id: str | None,
+    subject: str | None,
+    export: str | None,
+    as_json: bool,
+) -> int:
+    if not workspace.is_dir():
+        _emit_error(
+            workspace,
+            as_json,
+            "TRACE.NO_WORKSPACE",
+            f"workspace directory does not exist: {workspace}",
+        )
+        return EXIT_INVALID
+    if export is not None and (run_id is not None or subject is not None):
+        _emit_error(
+            workspace,
+            as_json,
+            "TRACE.CONFLICTING_ARGS",
+            "--export writes the whole bundle and cannot be combined "
+            "with --run or --subject",
+        )
+        return EXIT_INVALID
+    if run_id is not None and subject is not None:
+        _emit_error(
+            workspace,
+            as_json,
+            "TRACE.CONFLICTING_ARGS",
+            "pass either --run or --subject, not both",
+        )
+        return EXIT_INVALID
+    entity = subject_id = None
+    if subject is not None:
+        entity, sep, subject_id = subject.partition("/")
+        if not sep or not entity or not subject_id:
+            _emit_error(
+                workspace,
+                as_json,
+                "TRACE.INVALID_SUBJECT",
+                f"invalid --subject {subject!r}: expected 'Entity/Id'",
+            )
+            return EXIT_INVALID
+
+    assembly = assemble_trace(workspace)
+
+    if export is not None:
+        try:
+            path = write_export(assembly, export)
+        except FileExistsError:
+            _emit_error(
+                workspace,
+                as_json,
+                "TRACE.EXPORT_EXISTS",
+                f"export target already exists: {export}",
+                hint="choose a new path — a trace export is point-in-time "
+                "evidence and is never overwritten",
+            )
+            return EXIT_INVALID
+        except OSError as exc:
+            _emit_error(
+                workspace,
+                as_json,
+                "TRACE.EXPORT_ERROR",
+                f"cannot write export: {exc.strerror or exc}",
+            )
+            return EXIT_INVALID
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "ok": assembly.ok,
+                        "export": str(path),
+                        "artifacts": {
+                            "journal_events": len(assembly.journal),
+                            "observations": sum(
+                                len(r)
+                                for r in assembly.observations.values()
+                            ),
+                            "projection_runs": len(assembly.projection_runs),
+                            "diagnosis_runs": len(assembly.diagnosis_runs),
+                            "proposals": len(assembly.proposals)
+                            + len(assembly.unindexed_proposals),
+                            "evaluation_runs": len(assembly.evaluation_runs),
+                            "links": len(assembly.links),
+                        },
+                        "diagnostics": [
+                            d.to_dict() for d in assembly.diagnostics
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in assembly.diagnostics:
+                print(diagnostic.format())
+            print(
+                f"trace exported to {path} "
+                f"({len(assembly.journal)} journal events, "
+                f"{len(assembly.links)} links, "
+                f"{len(assembly.unresolved)} unresolved)"
+            )
+        return EXIT_OK if assembly.ok else EXIT_INVALID
+
+    if subject is not None:
+        view = trace_subject(assembly, entity, subject_id)
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "ok": assembly.ok,
+                        "trace": view,
+                        "diagnostics": [
+                            d.to_dict() for d in assembly.diagnostics
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in assembly.diagnostics:
+                print(diagnostic.format())
+            _print_subject(view)
+        return EXIT_OK if assembly.ok else EXIT_INVALID
+
+    if run_id is not None:
+        view = trace_anchor(assembly, run_id)
+        if view is None:
+            _emit_error(
+                workspace,
+                as_json,
+                "TRACE.UNKNOWN_ID",
+                f"no trace artifact with id {run_id!r}",
+                hint="run 'ontology trace <workspace>' for the recorded runs",
+            )
+            return EXIT_INVALID
+        if as_json:
+            print(
+                json.dumps(
+                    {
+                        "workspace": str(workspace),
+                        "ok": assembly.ok,
+                        "trace": view,
+                        "diagnostics": [
+                            d.to_dict() for d in assembly.diagnostics
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            for diagnostic in assembly.diagnostics:
+                print(diagnostic.format())
+            _print_anchor(view)
+        return EXIT_OK if assembly.ok else EXIT_INVALID
+
+    view = trace_overview(assembly)
+    if as_json:
+        print(json.dumps(view, indent=2))
+    else:
+        for diagnostic in assembly.diagnostics:
+            print(diagnostic.format())
+        _print_overview(view)
+    return EXIT_OK if assembly.ok else EXIT_INVALID
+
+
+def _print_overview(view: dict) -> None:
+    journal = view["journal"]
+    print(f"trace: {view['workspace']}")
+    print(
+        f"  journal: {journal['events']} events, "
+        f"{journal['unreadable_lines']} unreadable, "
+        f"{journal['failed_events']} failed"
+    )
+    evidence = view["evidence"]
+    print(
+        f"  evidence: {len(evidence['ingest_runs'])} ingest runs, "
+        f"{evidence['observations']} observations, "
+        f"{evidence['snapshots']} snapshots"
+    )
+    canonical = view["canonical"]
+    print(
+        f"  canonical: {canonical['entities']} entities, "
+        f"{canonical['facts']} facts, {canonical['fact_links']} links"
+    )
+    for run in view["projection_runs"]:
+        print(
+            f"  projection {run['run_id']}: {run['projection']} "
+            f"as-of {run['as_of']} — {run['candidates']} candidate(s)"
+        )
+    for run in view["diagnosis_runs"]:
+        print(
+            f"  diagnosis {run['run_id']}: {run['provider']}/{run['model']} "
+            f"— {run['status']} (projection {run['projection_run_id']})"
+        )
+    proposals = view["proposals"]
+    by_status = ", ".join(
+        f"{count} {status}"
+        for status, count in sorted(proposals["by_status"].items())
+    )
+    print(
+        f"  proposals: {proposals['total']} ({by_status or 'none'})"
+        + (
+            f", {proposals['unindexed']} unindexed"
+            if proposals["unindexed"]
+            else ""
+        )
+    )
+    print(f"  decisions: {view['decisions']}")
+    executions = view["executions"]
+    attempts = ", ".join(
+        f"{count} {status}"
+        for status, count in sorted(executions["by_status"].items())
+    )
+    print(f"  executions: {executions['attempts']} ({attempts or 'none'})")
+    for run in view["evaluation_runs"]:
+        print(
+            f"  evaluation {run['run_id']}: {run['evaluation']} — "
+            f"overall {run['overall']}"
+        )
+    links = view["links"]
+    print(
+        f"  links: {links['total'] - links['unresolved']} resolved, "
+        f"{links['unresolved']} unresolved"
+    )
+
+
+def _print_subject(view: dict) -> None:
+    subject = view["subject"]
+    print(f"trace {subject['entity']}/{subject['id']}:")
+    entity = view["entity"]
+    if entity is None:
+        print("  [observed] no entity state")
+    else:
+        print(
+            f"  [observed] entity: "
+            f"{json.dumps(entity['properties'], sort_keys=True)} "
+            f"(updated {entity['updated_at']}, "
+            f"last obs {entity['last_observation_id']})"
+        )
+    for fact in view["facts"]:
+        print(
+            f"  [observed] fact {fact['event']} at {fact['occurred_at']} "
+            f"({fact['fact_key']}) — obs "
+            f"{', '.join(fact['observation_ids'])}, "
+            f"ingest {fact['ingest_id']}"
+        )
+        for link in fact["links"]:
+            print(f"    link {link['relation']} -> {link['target']}")
+    print(
+        f"  evidence: {len(view['observations'])} observation(s) in "
+        f"{len(view['ingests'])} ingest run(s); snapshots "
+        + (", ".join(view["snapshots"]) or "none")
+    )
+    for run in view["projections"]:
+        print(
+            f"  [derived] projection {run['run_id']}: {run['projection']} "
+            f"as-of {run['as_of']} — {run['role']}"
+        )
+    for run in view["diagnoses"]:
+        print(
+            f"  [ai] diagnosis {run['run_id']}: {run['provider']}/"
+            f"{run['model']} — {run['status']}"
+        )
+        for rejected in run["rejected"]:
+            print(
+                f"    rejected proposal[{rejected.get('index')}]: "
+                f"{rejected.get('reason')}"
+            )
+    for proposal in view["proposals"]:
+        line = (
+            f"  [ai] proposal {proposal['proposal_id']}: "
+            f"{proposal['action']} — {proposal['status']}"
+        )
+        if not proposal["indexed"]:
+            line += " (unindexed)"
+        print(line)
+        if proposal.get("reason"):
+            print(f"    reason: {proposal['reason']}")
+        for decision in proposal["decisions"]:
+            print(
+                f"    [human] decision {decision['decision_id']}: "
+                f"{decision['decision']} by {decision['reviewer']} "
+                f"at {decision['decided_at']}"
+            )
+        for attempt in proposal["executions"]:
+            print(
+                f"    [writeback] attempt {attempt['execution_id']}: "
+                f"{attempt['action']} via {attempt['adapter']} "
+                f"— {attempt['status']} at {attempt['created_at']} "
+                f"(receipt {attempt.get('receipt') or 'none'})"
+            )
+    for fact_key in view["correlated_facts"]:
+        print(f"  [writeback] correlated fact {fact_key}")
+    for run in view["evaluations"]:
+        outcome = run["subject"]
+        print(
+            f"  [evaluated] {run['run_id']} ({run['evaluation']}, "
+            f"as-of {run['as_of']}) — overall {run['overall']}, "
+            f"disposition {outcome.get('disposition')}, "
+            f"cohort {outcome.get('cohort')}"
+        )
+    print(
+        f"  journal: {len(view['journal'])} events; "
+        f"links: {len(view['links'])}, {len(view['unresolved'])} unresolved"
+    )
+
+
+def _print_anchor(view: dict) -> None:
+    print(f"{view['kind']} {view['id']} [{view['nature']}]")
+    _print_anchor_record(view["kind"], view["record"])
+    if view.get("subjects"):
+        print("  subjects: " + ", ".join(view["subjects"]))
+    if view["links"]:
+        print("  links:")
+        for link in view["links"]:
+            arrow = "->" if link["from"] == view["id"] else "<-"
+            other = link["to"] if arrow == "->" else link["from"]
+            mark = "" if link["resolved"] else " (unresolved)"
+            print(f"    {arrow} {other} via {link['via']}{mark}")
+    if view["journal"]:
+        print(f"  journal: {len(view['journal'])} events")
+
+
+def _print_anchor_record(kind: str, record: dict | None) -> None:
+    if record is None:
+        return
+    if kind == "observation":
+        print(
+            f"  ingest {record.get('ingest_id')}, {record.get('source')} "
+            f"row {record.get('row')} — {record.get('status')} "
+            f"(digest {record.get('content_digest')})"
+        )
+        for diagnostic in record.get("diagnostics") or []:
+            print(
+                f"    {diagnostic['severity']} {diagnostic['code']}: "
+                f"{diagnostic['message']}"
+            )
+        for entity in record.get("entities") or []:
+            print(f"    entity {entity['entity']}/{entity['id']}")
+    elif kind == "ingest_run":
+        print(
+            f"  {record['observations']} observations "
+            f"({record['accepted']} accepted, {record['rejected']} rejected); "
+            f"snapshots {', '.join(record['content_digests']) or 'none'}"
+        )
+    elif kind == "snapshot":
+        print(f"  {record.get('name')} ({record.get('size_bytes', '?')} bytes)")
+    elif kind == "entity":
+        print(f"  {json.dumps(record, sort_keys=True)}")
+    elif kind == "fact":
+        print(
+            f"  {record['event']} on {record['subject']['entity']}/"
+            f"{record['subject']['id']} at {record['occurred_at']} "
+            f"(observed {record['observed_at']})"
+        )
+        print(
+            f"  attributes "
+            f"{json.dumps(record['attributes'], sort_keys=True)}"
+        )
+    elif kind == "projection_run":
+        print(
+            f"  {record['projection']} as-of {record['as_of']} — "
+            f"{len(record['candidates'])} candidate(s), digest "
+            f"{record['definition_digest']}"
+        )
+    elif kind == "diagnosis_run":
+        print(
+            f"  {record['provider']}/{record['model']} — {record['status']}; "
+            f"provider_called {record['provider_called']}, prompt "
+            f"{record['prompt_version']}, input digest "
+            f"{record['input_digest']}"
+        )
+        for diagnostic in record.get("diagnostics") or []:
+            print(
+                f"  {diagnostic['severity']} {diagnostic['code']}: "
+                f"{diagnostic['message']}"
+            )
+        print(
+            f"  deliverables "
+            f"{json.dumps(record['deliverables'], sort_keys=True)}"
+        )
+        print(
+            f"  proposals {record['indexed_proposals'] or '[]'}"
+            + (
+                f", unindexed {record['unindexed_proposals']}"
+                if record["unindexed_proposals"]
+                else ""
+            )
+        )
+        for rejected in record["rejected"]:
+            print(
+                f"  rejected proposal[{rejected.get('index')}]: "
+                f"{rejected.get('reason')}"
+            )
+    elif kind == "proposal":
+        print(
+            f"  {record['action']} params "
+            f"{json.dumps(record.get('params'), sort_keys=True)} "
+            f"— {record['status']} (digest {record.get('payload_digest')})"
+        )
+        if record.get("reason"):
+            print(f"  reason: {record['reason']}")
+    elif kind == "decision":
+        print(
+            f"  {record['decision']} on {record['proposal_id']} by "
+            f"{record['reviewer']} at {record['decided_at']} "
+            f"(reason {record.get('reason') or 'none'})"
+        )
+    elif kind == "execution":
+        print(
+            f"  proposal {record.get('proposal_id')}, idempotency "
+            f"{record.get('idempotency_key')} — "
+            f"{len(record.get('attempts') or [])} attempt(s)"
+        )
+        for attempt in record.get("attempts") or []:
+            print(
+                f"    attempt {attempt['attempt']}: {attempt['action']} via "
+                f"{attempt['adapter']} — {attempt['status']} at "
+                f"{attempt['created_at']} (receipt "
+                f"{attempt.get('receipt') or 'none'})"
+            )
+            if attempt.get("error"):
+                print(
+                    f"      error "
+                    f"{json.dumps(attempt['error'], sort_keys=True)}"
+                )
+    elif kind == "evaluation_run":
+        report = record.get("report") or {}
+        print(
+            f"  {record['evaluation']} as-of {record['as_of']} — "
+            f"overall {(report.get('overall') or {}).get('status')} "
+            f"(digest {record.get('contract_digest')})"
+        )
+        print(f"  report {json.dumps(report, indent=2, sort_keys=True)}")
+    elif kind == "journal_only":
+        for event in record.get("journal_events") or []:
+            print(
+                f"  {event.get('ts')} {event.get('stage')} "
+                f"{event.get('kind')}"
+            )
+        if record.get("note"):
+            print(f"  {record['note']}")
 
 
 def _parse_as_of(text: str) -> datetime | None:

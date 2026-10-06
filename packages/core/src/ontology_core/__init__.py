@@ -115,6 +115,15 @@ from .projections import (
     run_projection,
 )
 from .trace import JsonlTraceSink, NullTraceSink, TraceSink
+from .traceview import (
+    TraceAssembly,
+    assemble_trace,
+    export_bundle,
+    trace_anchor,
+    trace_overview,
+    trace_subject,
+    write_export,
+)
 from .workspace import (
     SUPPORTED_SCHEMA_VERSION,
     WORKSPACE_FILES,
@@ -200,11 +209,13 @@ __all__ = [
     "SubjectSpec",
     "TargetSpec",
     "TaskSpec",
+    "TraceAssembly",
     "TraceSink",
     "UnavailableSubject",
     "WORKSPACE_FILES",
     "Workspace",
     "__version__",
+    "assemble_trace",
     "check_approval",
     "compare_subjects",
     "decide",
@@ -213,6 +224,7 @@ __all__ = [
     "event_fact_key",
     "execute",
     "execution_identity",
+    "export_bundle",
     "get_diagnosis_run",
     "get_evaluation_run",
     "get_projection_run",
@@ -228,5 +240,9 @@ __all__ = [
     "run_scenario",
     "run_suite",
     "score_run",
+    "trace_anchor",
+    "trace_overview",
+    "trace_subject",
     "write_comparison_report",
+    "write_export",
 ]

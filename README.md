@@ -12,6 +12,25 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 
 `apps/api/` and `apps/web/` are documented v0.2 destinations (see [docs/monorepo.md](docs/monorepo.md)); they are intentionally not implemented in v0.1. The framework-neutral authoring-flow and UI-state contract they implement is specified in [docs/authoring-flow.md](docs/authoring-flow.md).
 
+## Documentation
+
+| Document | Content |
+| --- | --- |
+| [docs/proposal.md](docs/proposal.md) | Product scope and the problem the operational loop solves |
+| [docs/v0.1.md](docs/v0.1.md) | v0.1 acceptance criteria and the demonstration workflow |
+| [docs/monorepo.md](docs/monorepo.md) | Repository boundaries and the shared-core rule |
+| [docs/workspace.md](docs/workspace.md) | Workspace definition format and validation rules |
+| [docs/ingestion.md](docs/ingestion.md) | CSV/JSON ingestion and immutable observation evidence |
+| [docs/canonical.md](docs/canonical.md) | Canonical entities, events, and the append-only rules |
+| [docs/projections.md](docs/projections.md) | Deterministic projections and frozen runs |
+| [docs/diagnosis.md](docs/diagnosis.md) | Model-backed diagnosis, provider adapters, and the default model |
+| [docs/diagnosis-evaluation.md](docs/diagnosis-evaluation.md) | Evaluation harness: fixtures, criteria, and run budget |
+| [docs/decisions.md](docs/decisions.md) | Proposal review and human approve/reject decisions |
+| [docs/execution.md](docs/execution.md) | Approved write-back, receipts, and retry behavior |
+| [docs/evaluation.md](docs/evaluation.md) | Outcome evaluation, cohorts, and guardrails |
+| [docs/authoring-flow.md](docs/authoring-flow.md) | v0.2 authoring flow and UI state contract |
+| [docs/adr/](docs/adr/) | Architecture decision records |
+
 ## Install
 
 Requires Python 3.11+.
@@ -41,6 +60,9 @@ ontology proposals examples/job-invoicing
 ontology decide examples/job-invoicing <proposal-id> --approve --reviewer fde-sato
 ontology execute examples/job-invoicing <proposal-id>
 ontology evaluate examples/job-invoicing --boundary 2026-10-05T00:00:00Z --as-of 2026-10-15T00:00:00Z
+ontology trace examples/job-invoicing
+ontology trace examples/job-invoicing --subject Job/101
+ontology trace examples/job-invoicing --export trace-export.json
 ontology diagnose-compare --subject openrouter:openai/gpt-4o-mini --subject openrouter:<model-b> --out comparison-report.json
 ```
 
@@ -58,9 +80,11 @@ ontology diagnose-compare --subject openrouter:openai/gpt-4o-mini --subject open
 
 `ontology evaluate` pairs the contract's interval events per canonical subject at an explicit `--as-of`, splits baseline/after cohorts at an explicit `--boundary`, and reports medians, pending/invalid/ambiguous counts, the strict target verdict, and guardrail verdicts from explicit evidence — then freezes the report append-only for `evaluate --run <id>`. Cohorts are time-based observations; the report never claims an intervention caused the change. See [docs/evaluation.md](docs/evaluation.md).
 
+`ontology trace` reassembles everything a run left behind — observation evidence and snapshots, canonical entities and facts, frozen projection/diagnosis/evaluation runs, proposals with decisions and execution attempts, and the per-stage journal — into one linked, read-only view. Follow one subject through the loop with `--subject Job/101`, anchor on any artifact id with `--run`, or write a self-contained export bundle with `--export` (it embeds raw snapshot contents and never overwrites). Observed facts, AI proposals, human decisions, write-backs, and evaluated outcomes carry distinct nature labels, and dangling references surface as `TRACE.UNRESOLVED_LINK` instead of disappearing. See [docs/trace.md](docs/trace.md).
+
 `ontology diagnose-compare` runs the bounded live-model comparison: N `--subject PROVIDER:MODEL` pairs evaluated against one shared frozen fixture input through the same adapters as `diagnose`, producing a JSON report artifact that records identical-input proof (shared `input_digest`/`projection_run_id`), per-subject status/requests/latency/checks, and an explicit `unavailable` slot. See [docs/diagnosis-evaluation.md](docs/diagnosis-evaluation.md#live-model-comparison).
 
-Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology diagnose-compare`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — trace inspection — are not commands yet; they will land as later issues on the same shared core.
+Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology trace`, `ontology diagnose-compare`.
 
 ## Library use
 

@@ -40,9 +40,12 @@ text. The CLI ships two adapters:
 | `stub` | Deterministic local double for tests and credential-free runs | none |
 
 The model is chosen by explicit configuration: `--model`, else
-`$ONTOLOGY_MODEL`, else the documented default `openai/gpt-4o-mini`. Swapping
-the model or adding a new adapter changes nothing in candidate selection,
-canonical state, proposal validation, approval, or write-back.
+`$ONTOLOGY_MODEL`, else the documented default `openai/gpt-4o-mini`. That
+default is provisional: it predates any model comparison, and
+[ADR 0002](adr/0002-default-diagnosis-model.md) records the comparison that
+will settle it. Swapping the model or adding a new adapter changes nothing in
+candidate selection, canonical state, proposal validation, approval, or
+write-back.
 
 ### OpenRouter credential setup
 
@@ -169,7 +172,7 @@ candidate Job/101 with an explanation, labeled hypotheses citing evidence ids,
 and follow-up questions. Earlier iterations that returned `ref` params as
 objects were correctly rejected by validation — the validator, not the model,
 decides what counts as a proposal. Final provider/model selection and
-comparative validation are tracked separately under issue #12.
+comparative validation are tracked separately under issue #33.
 
 ## Evaluation harness
 
