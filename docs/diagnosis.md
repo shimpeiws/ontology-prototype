@@ -51,6 +51,31 @@ canonical state, proposal validation, approval, or write-back.
 3. Never commit the key. It is sent only as an `Authorization` header and is
    never written to the workspace, the canonical store, or the trace.
 
+### Reproducible comparison run
+
+With the key exported, the bounded live-model comparison evaluates
+`--subject PROVIDER:MODEL` pairs against one shared frozen input — the
+committed job-invoicing fixture — and writes a JSON report artifact:
+
+```bash
+ontology diagnose-compare \
+  --subject openrouter:openai/gpt-4o-mini \
+  --subject openrouter:<second-model> \
+  --repeats 1 \
+  --out comparison-report.json
+```
+
+`--subject` splits on the first colon, so OpenRouter model-variant
+suffixes (`...:free`) parse correctly. Every subject sees identical
+candidates and the same input digest; a subject whose provider cannot be
+resolved (e.g. the key is unset) is recorded under `unavailable` in the
+artifact instead of aborting the run. The run stays inside the run budget:
+`--repeats` runs per subject, `--max-provider-requests` invocations each.
+Fill in the human report from
+[diagnosis-comparison-report.md](diagnosis-comparison-report.md); the
+artifact's fields are documented in
+[diagnosis-evaluation.md](diagnosis-evaluation.md#live-model-comparison).
+
 ## Output contract
 
 The prompt (`PROMPT_VERSION = "diagnosis.v1"`) carries the agent's goal, the

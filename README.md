@@ -41,6 +41,7 @@ ontology proposals examples/job-invoicing
 ontology decide examples/job-invoicing <proposal-id> --approve --reviewer fde-sato
 ontology execute examples/job-invoicing <proposal-id>
 ontology evaluate examples/job-invoicing --boundary 2026-10-05T00:00:00Z --as-of 2026-10-15T00:00:00Z
+ontology diagnose-compare --subject openrouter:openai/gpt-4o-mini --subject openrouter:<model-b> --out comparison-report.json
 ```
 
 `ontology check` loads a workspace directory (the four files `domain.yaml`, `mapping.yaml`, `evaluation.yaml`, `agent.yaml`), prints structured diagnostics, and exits `0` when the workspace is valid, `1` otherwise. See [docs/workspace.md](docs/workspace.md) for the definition format and validation rules.
@@ -57,7 +58,9 @@ ontology evaluate examples/job-invoicing --boundary 2026-10-05T00:00:00Z --as-of
 
 `ontology evaluate` pairs the contract's interval events per canonical subject at an explicit `--as-of`, splits baseline/after cohorts at an explicit `--boundary`, and reports medians, pending/invalid/ambiguous counts, the strict target verdict, and guardrail verdicts from explicit evidence — then freezes the report append-only for `evaluate --run <id>`. Cohorts are time-based observations; the report never claims an intervention caused the change. See [docs/evaluation.md](docs/evaluation.md).
 
-Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — trace inspection — are not commands yet; they will land as later issues on the same shared core.
+`ontology diagnose-compare` runs the bounded live-model comparison: N `--subject PROVIDER:MODEL` pairs evaluated against one shared frozen fixture input through the same adapters as `diagnose`, producing a JSON report artifact that records identical-input proof (shared `input_digest`/`projection_run_id`), per-subject status/requests/latency/checks, and an explicit `unavailable` slot. See [docs/diagnosis-evaluation.md](docs/diagnosis-evaluation.md#live-model-comparison).
+
+Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology diagnose-compare`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — trace inspection — are not commands yet; they will land as later issues on the same shared core.
 
 ## Library use
 

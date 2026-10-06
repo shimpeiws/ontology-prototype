@@ -145,6 +145,46 @@ suite, so controlled and live results are directly comparable. The scratch
 directory retains the full `.ontology/` store — every run record,
 including raw model output, for audit.
 
+## Live-model comparison
+
+`ontology diagnose-compare` (core: `ontology_core.diagnosis_compare`) is
+the comparison runner: one command evaluates N provider/model subjects
+against **one shared `PreparedEval`** — prepared once, never re-prepared
+per subject — and writes a JSON report artifact:
+
+```bash
+ontology diagnose-compare \
+  --subject openrouter:openai/gpt-4o-mini \
+  --subject openrouter:anthropic/claude-haiku-4.5 \
+  --repeats 1 --out comparison-report.json
+```
+
+Credential setup and the full procedure live in
+[diagnosis.md](diagnosis.md#openrouter-credential-setup). Each `--subject
+PROVIDER:MODEL` is resolved through the same adapter registry as
+`diagnose`; a provider that cannot be constructed (missing key, unknown
+name) lands in the artifact's `unavailable` slot with a sanitized reason
+instead of aborting the run. The command exits non-zero when nothing was
+evaluated or the evaluated subjects did not share one input digest.
+
+Artifact shape (`comparison-report.json`):
+
+| field | meaning |
+| --- | --- |
+| `eval_version`, `prompt_version`, `dataset` | harness/prompt pinning, same as the suite |
+| `projection_run_id`, `candidate_ids` | the one frozen input every subject ran against |
+| `input_digest`, `input_identical` | proof of identical input: the digest recorded on each subject's run records, and a flag that is true only when all evaluated subjects agree |
+| `budget`, `repeats_requested`, `provider_requests` | the run budget and total provider invocations |
+| `subjects[]` | per subject: `provider`, `model`, `status` (`ok`/`failed`/`skipped`), `passed`, `provider_requests`, `latency_seconds` (subject wall time), `repeats_*`, `within_budget`, `projection_run_id`, `input_digest`, `run_ids`, and `runs[]` with the same per-check results as a `SubjectReport` |
+| `unavailable[]` | specs that never reached evaluation: `provider`, `model`, `reason` — recorded, never fabricated |
+
+The artifact is written once and never overwritten — pass a fresh `--out`
+per run. To turn it into the committed human-readable report, copy
+[diagnosis-comparison-report.md](diagnosis-comparison-report.md) and fill
+in every section (quality findings, structural failures, latency,
+usage/cost evidence or its absence, dated price assumptions, setup
+tradeoffs).
+
 ## What substitution proves
 
 The `provider-substitution` scenario proves that swapping adapter identity

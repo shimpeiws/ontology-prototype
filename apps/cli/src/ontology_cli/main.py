@@ -11,14 +11,19 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 from ontology_core import __version__ as core_version
 from ontology_core import (
+    DEFAULT_BUDGET,
     CsvReminderAdapter,
     Diagnostic,
+    EvalError,
     ProviderError,
+    RunBudget,
+    SubjectSpec,
     decide,
     execute,
     get_diagnosis_run,
@@ -27,6 +32,7 @@ from ontology_core import (
     ingest_snapshot,
     load_workspace,
     proposal_view,
+    run_comparison,
     run_diagnosis,
     run_evaluation,
     run_projection,
@@ -52,8 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
             "'proposals'/'decide' (proposal inspection and human "
             "approve/reject decisions), 'execute' (write-back of an "
             "approved proposal through a local CSV adapter with "
-            "receipts and retry protection), and 'evaluate' "
-            "(baseline/after outcome evaluation with a frozen report)."
+            "receipts and retry protection), 'evaluate' "
+            "(baseline/after outcome evaluation with a frozen report), "
+            "and 'diagnose-compare' (bounded provider/model comparison "
+            "over one shared frozen eval input)."
         ),
     )
     parser.add_argument(
@@ -286,6 +294,55 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the evaluation result as JSON",
     )
+
+    compare_parser = commands.add_parser(
+        "diagnose-compare",
+        help="evaluate provider/model subjects against one shared frozen "
+        "eval input and write a JSON comparison report artifact",
+    )
+    compare_parser.add_argument(
+        "scratch",
+        nargs="?",
+        type=Path,
+        help="directory for the materialized fixture workspace "
+        "(default: a fresh temporary directory)",
+    )
+    compare_parser.add_argument(
+        "--subject",
+        action="append",
+        required=True,
+        dest="subjects",
+        metavar="PROVIDER:MODEL",
+        help="one comparison subject; repeat once per provider/model pair "
+        "(e.g. --subject openrouter:openai/gpt-4o-mini)",
+    )
+    compare_parser.add_argument(
+        "--repeats",
+        type=int,
+        default=DEFAULT_BUDGET.repeats,
+        metavar="N",
+        help="runs per subject over the frozen input (default: 1)",
+    )
+    compare_parser.add_argument(
+        "--max-provider-requests",
+        type=int,
+        default=DEFAULT_BUDGET.max_provider_requests,
+        metavar="N",
+        help="provider-invocation cap per subject "
+        f"(default: {DEFAULT_BUDGET.max_provider_requests})",
+    )
+    compare_parser.add_argument(
+        "--out",
+        type=Path,
+        metavar="PATH",
+        help="comparison report artifact path "
+        "(default: <scratch>/comparison-report.json)",
+    )
+    compare_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print the comparison report as JSON",
+    )
     return parser
 
 
@@ -339,6 +396,15 @@ def main(argv: list[str] | None = None) -> int:
             boundary=args.boundary,
             as_of=args.as_of,
             run_id=args.run,
+            as_json=args.json,
+        )
+    if args.command == "diagnose-compare":
+        return _cmd_diagnose_compare(
+            args.scratch,
+            args.subjects,
+            repeats=args.repeats,
+            max_provider_requests=args.max_provider_requests,
+            out=args.out,
             as_json=args.json,
         )
     return EXIT_INVALID  # pragma: no cover - argparse enforces the subcommand
@@ -1277,6 +1343,105 @@ def _print_evaluation_report(report: dict, *, run_id: str | None) -> None:
     if report["unpaired_ends"]:
         print(f"  unpaired end events: {len(report['unpaired_ends'])}")
     print(f"  overall: {report['overall']['status']}")
+
+
+def _cmd_diagnose_compare(
+    scratch: Path | None,
+    subject_args: list[str],
+    *,
+    repeats: int,
+    max_provider_requests: int,
+    out: Path | None,
+    as_json: bool,
+) -> int:
+    # The scratch path is not a workspace, but _emit_error carries the
+    # context directory for diagnostics either way.
+    context = scratch or Path(".")
+    specs: list[SubjectSpec] = []
+    for raw in subject_args:
+        provider, sep, model = raw.partition(":")
+        provider, model = provider.strip(), model.strip()
+        if not sep or not provider or not model:
+            _emit_error(
+                context,
+                as_json,
+                "DIAGNOSIS.INVALID_SUBJECT",
+                f"invalid --subject {raw!r}: expected PROVIDER:MODEL",
+                hint="e.g. --subject openrouter:openai/gpt-4o-mini",
+            )
+            return EXIT_INVALID
+        specs.append(SubjectSpec(provider=provider, model=model))
+    if repeats < 1 or max_provider_requests < 1:
+        _emit_error(
+            context,
+            as_json,
+            "DIAGNOSIS.INVALID_BUDGET",
+            "--repeats and --max-provider-requests must be at least 1",
+        )
+        return EXIT_INVALID
+
+    scratch_dir = scratch or Path(
+        tempfile.mkdtemp(prefix="ontology-compare-")
+    )
+    report_path = out or scratch_dir / "comparison-report.json"
+    try:
+        report = run_comparison(
+            scratch_dir,
+            specs,
+            resolve_provider,
+            report_path=report_path,
+            repeats=repeats,
+            budget=RunBudget(
+                repeats=repeats,
+                max_provider_requests=max_provider_requests,
+            ),
+        )
+    except EvalError as exc:
+        _emit_error(
+            scratch_dir, as_json, "DIAGNOSIS.COMPARE_FAILED", str(exc)
+        )
+        return EXIT_INVALID
+
+    if as_json:
+        payload = report.to_dict()
+        payload["report_path"] = str(report_path)
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"comparison report written: {report_path}")
+        print(
+            f"shared input: projection run {report.projection_run_id}, "
+            f"{report.candidates} candidates "
+            f"({', '.join(report.candidate_ids)}), "
+            f"input digest {report.input_digest}"
+        )
+        if not report.input_identical:
+            print("  WARNING: evaluated subjects did not share one "
+                  "input digest")
+        for subject in report.subjects:
+            print(
+                f"  [{subject.status}] {subject.provider}/{subject.model} "
+                f"— {subject.repeats_completed} run(s), "
+                f"{subject.provider_requests} provider request(s), "
+                f"{subject.latency_seconds}s, "
+                f"checks {'pass' if subject.passed else 'FAIL'}"
+            )
+            for run in subject.runs:
+                for check in run["checks"]:
+                    if not check["passed"]:
+                        print(f"       FAIL {check['name']}: {check['detail']}")
+        for entry in report.unavailable:
+            print(
+                f"  [unavailable] {entry.provider}/{entry.model}: "
+                f"{entry.reason}"
+            )
+
+    # A comparison whose subjects could not all be evaluated on identical
+    # input — or that evaluated nothing at all — is not a valid result.
+    return (
+        EXIT_OK
+        if report.subjects and report.input_identical
+        else EXIT_INVALID
+    )
 
 
 if __name__ == "__main__":
