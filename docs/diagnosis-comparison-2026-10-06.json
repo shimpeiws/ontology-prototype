@@ -1,0 +1,243 @@
+{
+  "eval_version": "diagnosis-eval.v1",
+  "prompt_version": "diagnosis.v1",
+  "generated_at": "2026-10-06T04:14:15.910169+00:00",
+  "dataset": "jobs.csv",
+  "workspace_dir": ".verification/diagnosis-comparison-2026-10-06/shared",
+  "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+  "candidates": 2,
+  "candidate_ids": [
+    "E01",
+    "E02"
+  ],
+  "input_digest": "sha256:756481a4248da043107bbef4a8a2cf9b5a25c43f1de13eb8d64b2ff359f13ca6",
+  "input_identical": true,
+  "repeats_requested": 1,
+  "budget": {
+    "repeats": 1,
+    "max_provider_requests": 8
+  },
+  "provider_requests": 3,
+  "subjects": [
+    {
+      "provider": "openrouter",
+      "model": "openai/gpt-4o-mini",
+      "status": "ok",
+      "passed": true,
+      "provider_requests": 1,
+      "latency_seconds": 6.064,
+      "repeats_requested": 1,
+      "repeats_completed": 1,
+      "repeats_clamped": false,
+      "within_budget": true,
+      "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+      "input_digest": "sha256:756481a4248da043107bbef4a8a2cf9b5a25c43f1de13eb8d64b2ff359f13ca6",
+      "run_ids": [
+        "dgx-20261006T041359796907Z-a9c55e43"
+      ],
+      "runs": [
+        {
+          "run_id": "dgx-20261006T041359796907Z-a9c55e43",
+          "status": "ok",
+          "proposals": 2,
+          "rejected": 0,
+          "passed": true,
+          "checks": [
+            {
+              "name": "contract_valid",
+              "passed": true,
+              "detail": "status='ok', errors=[]"
+            },
+            {
+              "name": "deliverables_complete",
+              "passed": true,
+              "detail": "missing or empty deliverables: []"
+            },
+            {
+              "name": "permitted_actions_only",
+              "passed": true,
+              "detail": "off-list actions: []"
+            },
+            {
+              "name": "proposals_grounded",
+              "passed": true,
+              "detail": "proposals citing no diagnosed candidate: []"
+            },
+            {
+              "name": "evidence_grounded",
+              "passed": true,
+              "detail": "hypotheses=2, unverified=0, uncited=0"
+            },
+            {
+              "name": "hypotheses_labeled",
+              "passed": true,
+              "detail": "hypotheses shaped as labeled statements: True"
+            },
+            {
+              "name": "intervention_proposed",
+              "passed": true,
+              "detail": "accepted proposals: 2"
+            },
+            {
+              "name": "follow_up_offered",
+              "passed": true,
+              "detail": "follow_up_questions=2"
+            },
+            {
+              "name": "run_recorded",
+              "passed": true,
+              "detail": "run record present with matching identity and prompt version"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "model": "anthropic/claude-haiku-4.5",
+      "status": "ok",
+      "passed": true,
+      "provider_requests": 1,
+      "latency_seconds": 6.1,
+      "repeats_requested": 1,
+      "repeats_completed": 1,
+      "repeats_clamped": false,
+      "within_budget": true,
+      "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+      "input_digest": "sha256:756481a4248da043107bbef4a8a2cf9b5a25c43f1de13eb8d64b2ff359f13ca6",
+      "run_ids": [
+        "dgx-20261006T041405876481Z-342fdfb3"
+      ],
+      "runs": [
+        {
+          "run_id": "dgx-20261006T041405876481Z-342fdfb3",
+          "status": "ok",
+          "proposals": 2,
+          "rejected": 0,
+          "passed": true,
+          "checks": [
+            {
+              "name": "contract_valid",
+              "passed": true,
+              "detail": "status='ok', errors=[]"
+            },
+            {
+              "name": "deliverables_complete",
+              "passed": true,
+              "detail": "missing or empty deliverables: []"
+            },
+            {
+              "name": "permitted_actions_only",
+              "passed": true,
+              "detail": "off-list actions: []"
+            },
+            {
+              "name": "proposals_grounded",
+              "passed": true,
+              "detail": "proposals citing no diagnosed candidate: []"
+            },
+            {
+              "name": "evidence_grounded",
+              "passed": true,
+              "detail": "hypotheses=3, unverified=0, uncited=0"
+            },
+            {
+              "name": "hypotheses_labeled",
+              "passed": true,
+              "detail": "hypotheses shaped as labeled statements: True"
+            },
+            {
+              "name": "intervention_proposed",
+              "passed": true,
+              "detail": "accepted proposals: 2"
+            },
+            {
+              "name": "follow_up_offered",
+              "passed": true,
+              "detail": "follow_up_questions=5"
+            },
+            {
+              "name": "run_recorded",
+              "passed": true,
+              "detail": "run record present with matching identity and prompt version"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "provider": "openrouter",
+      "model": "google/gemini-2.5-flash",
+      "status": "ok",
+      "passed": true,
+      "provider_requests": 1,
+      "latency_seconds": 3.921,
+      "repeats_requested": 1,
+      "repeats_completed": 1,
+      "repeats_clamped": false,
+      "within_budget": true,
+      "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+      "input_digest": "sha256:756481a4248da043107bbef4a8a2cf9b5a25c43f1de13eb8d64b2ff359f13ca6",
+      "run_ids": [
+        "dgx-20261006T041411989576Z-d34f6fba"
+      ],
+      "runs": [
+        {
+          "run_id": "dgx-20261006T041411989576Z-d34f6fba",
+          "status": "ok",
+          "proposals": 2,
+          "rejected": 0,
+          "passed": true,
+          "checks": [
+            {
+              "name": "contract_valid",
+              "passed": true,
+              "detail": "status='ok', errors=[]"
+            },
+            {
+              "name": "deliverables_complete",
+              "passed": true,
+              "detail": "missing or empty deliverables: []"
+            },
+            {
+              "name": "permitted_actions_only",
+              "passed": true,
+              "detail": "off-list actions: []"
+            },
+            {
+              "name": "proposals_grounded",
+              "passed": true,
+              "detail": "proposals citing no diagnosed candidate: []"
+            },
+            {
+              "name": "evidence_grounded",
+              "passed": true,
+              "detail": "hypotheses=3, unverified=0, uncited=0"
+            },
+            {
+              "name": "hypotheses_labeled",
+              "passed": true,
+              "detail": "hypotheses shaped as labeled statements: True"
+            },
+            {
+              "name": "intervention_proposed",
+              "passed": true,
+              "detail": "accepted proposals: 2"
+            },
+            {
+              "name": "follow_up_offered",
+              "passed": true,
+              "detail": "follow_up_questions=3"
+            },
+            {
+              "name": "run_recorded",
+              "passed": true,
+              "detail": "run record present with matching identity and prompt version"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "unavailable": []
+}
