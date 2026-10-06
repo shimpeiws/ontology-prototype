@@ -1,6 +1,71 @@
 {
   "eval_version": "diagnosis-eval.v1",
   "exported": "2026-10-06",
+  "shared_input": {
+    "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+    "projection": "CompletedButNotInvoiced",
+    "subject": "Job",
+    "as_of": "2026-10-05T00:00:00Z",
+    "candidates": [
+      {
+        "elapsed_days": 4.0,
+        "elapsed_seconds": 345600.0,
+        "evidence": {
+          "entity_observation_id": "obs-bb50e92d996a7afd",
+          "entity_updated_at": "2026-10-04T12:00:00Z",
+          "fact_key": "fact-d6e2bfcd687887987c1e7cb5a016dae5",
+          "ingest_ids": [
+            "ing-20261004T120000000000Z-1b1190a4-90ebc28f"
+          ],
+          "observation_ids": [
+            "obs-bb50e92d996a7afd"
+          ]
+        },
+        "occurred_at": "2026-10-01T00:00:00Z",
+        "properties": {
+          "assignee": "taro",
+          "status": "completed"
+        },
+        "property_types": {
+          "assignee": "ref:Person",
+          "status": "string"
+        },
+        "subject": {
+          "entity": "Job",
+          "id": "E01"
+        }
+      },
+      {
+        "elapsed_days": 3.0,
+        "elapsed_seconds": 259200.0,
+        "evidence": {
+          "entity_observation_id": "obs-1fdfbd9e425eefcc",
+          "entity_updated_at": "2026-10-04T12:00:00Z",
+          "fact_key": "fact-c49ee54a714002a071478516480a407f",
+          "ingest_ids": [
+            "ing-20261004T120000000000Z-1b1190a4-90ebc28f"
+          ],
+          "observation_ids": [
+            "obs-1fdfbd9e425eefcc"
+          ]
+        },
+        "occurred_at": "2026-10-02T00:00:00Z",
+        "properties": {
+          "assignee": "hanako",
+          "status": "completed"
+        },
+        "property_types": {
+          "assignee": "ref:Person",
+          "status": "string"
+        },
+        "subject": {
+          "entity": "Job",
+          "id": "E02"
+        }
+      }
+    ],
+    "note": "frozen eval input every subject was scored against; cited fact_key / observation_ids resolve here"
+  },
   "runs": [
     {
       "run_id": "dgx-20261006T041359796907Z-a9c55e43",

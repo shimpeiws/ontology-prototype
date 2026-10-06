@@ -8,9 +8,11 @@
 - Artifact: `docs/diagnosis-comparison-2026-10-06.json` (committed copy of
   `comparison-report.json`)
 - Recorded outputs: `docs/diagnosis-comparison-2026-10-06-runs.json` —
-  the full recorded run records (deliverables and proposals per subject)
-  exported from the comparison store, so the rubric read below is
-  auditable without the local workspace
+  the frozen shared input (projection candidates with their evidence
+  ids) plus the full recorded run records (deliverables and proposals
+  per subject) exported from the comparison store, so the rubric read
+  below and every cited `fact-*`/`obs-*` evidence id are auditable from
+  the committed artifacts alone
 - Harness: `eval_version` `diagnosis-eval.v1`, `prompt_version` `diagnosis.v1`
 - Workspace: `.verification/diagnosis-comparison-2026-10-06/shared` (the
   materialized eval workspace; its `.ontology/` store holds every recorded
