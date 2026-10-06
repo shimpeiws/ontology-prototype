@@ -78,6 +78,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Protocol
+from urllib.parse import quote
 
 CANON_DB = "canon.db"
 
@@ -511,19 +512,31 @@ class CanonicalStore(Protocol):
 
 
 class SqliteCanonicalStore:
-    """SQLite canonical store rooted at a workspace runtime directory."""
+    """SQLite canonical store rooted at a workspace runtime directory.
 
-    def __init__(self, root: str | Path) -> None:
+    ``readonly=True`` opens the database through SQLite's read-only URI
+    mode and skips schema setup and migrations, for callers that promise
+    not to write to the runtime directory — even when the database was
+    created by an older schema revision.
+    """
+
+    def __init__(self, root: str | Path, *, readonly: bool = False) -> None:
         self.root = Path(root)
         self.db_path = self.root / CANON_DB
+        self.readonly = readonly
         self._conn: sqlite3.Connection | None = None
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
-            self.root.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self.db_path)
-            conn.executescript(_SCHEMA)
-            self._migrate(conn)
+            if self.readonly:
+                conn = sqlite3.connect(
+                    f"file:{quote(str(self.db_path))}?mode=ro", uri=True
+                )
+            else:
+                self.root.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(self.db_path)
+                conn.executescript(_SCHEMA)
+                self._migrate(conn)
             self._conn = conn
         return self._conn
 

@@ -34,7 +34,10 @@ from ontology_core import (
     trace_subject,
     write_export,
 )
+from ontology_core import traceview
+from ontology_core.canonical import CANON_DB
 from ontology_core.diagnosis import ProviderError
+from ontology_core.diagnostics import Diagnostics
 from ontology_core.evidence import RUNTIME_DIR
 
 FIXED_NOW = datetime(2026, 10, 5, 12, 0, 0, tzinfo=timezone.utc)
@@ -693,3 +696,208 @@ def test_assembly_does_not_mutate_runtime(tmp_path: Path) -> None:
     trace_anchor(asm, ctx["proposal_id"])
     export_bundle(asm)
     assert fingerprint() == before
+
+
+def test_inspection_never_migrates_canonical_db(tmp_path: Path) -> None:
+    # A canon.db written by an older schema revision must not be altered
+    # by inspection; the view degrades to store diagnostics instead.
+    workspace = make_ws(tmp_path)
+    runtime = Path(workspace.path) / RUNTIME_DIR
+    runtime.mkdir(parents=True)
+    conn = sqlite3.connect(runtime / CANON_DB)
+    conn.execute(
+        "CREATE TABLE entities ("
+        "entity_type TEXT, entity_id TEXT, properties TEXT, "
+        "first_observation_id TEXT, last_observation_id TEXT, "
+        "updated_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+
+    asm = assemble_trace(Path(workspace.path))
+
+    assert any(d.code == "TRACE.STORE_ERROR" for d in asm.diagnostics)
+    conn = sqlite3.connect(runtime / CANON_DB)
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(entities)")
+    }
+    conn.close()
+    assert "last_ingest_id" not in columns
+    assert "properties_changed_at" not in columns
+
+
+def test_invalid_utf8_journal_degrades_to_diagnostic(tmp_path: Path) -> None:
+    ctx = make_loop(tmp_path)
+    journal = Path(ctx["workspace"].path) / RUNTIME_DIR / "trace.jsonl"
+    journal.write_bytes(b"\xff\xfe invalid\n")
+
+    asm = assemble_trace(Path(ctx["workspace"].path))
+
+    assert asm.journal == []
+    assert any(
+        d.code == "TRACE.JOURNAL_UNREADABLE" for d in asm.diagnostics
+    )
+    # The canonical sections are unaffected by a broken journal.
+    assert trace_anchor(asm, ctx["proposal_id"]) is not None
+
+
+def test_invalid_utf8_observation_degrades_to_warning(
+    tmp_path: Path,
+) -> None:
+    ctx = make_loop(tmp_path)
+    observations = Path(ctx["workspace"].path) / RUNTIME_DIR / "observations"
+    target = sorted(observations.glob("*.jsonl"))[0]
+    target.write_bytes(b"\xff\xfe invalid\n")
+
+    asm = assemble_trace(Path(ctx["workspace"].path))
+
+    assert any(
+        d.code == "TRACE.EVIDENCE_UNREADABLE" for d in asm.diagnostics
+    )
+    assert any(target.name in e for e in asm.observation_errors)
+    # One corrupt file is a warning, not a failed assembly.
+    assert asm.ok
+
+
+def test_unlistable_snapshots_degrade_to_diagnostic(tmp_path: Path) -> None:
+    ctx = make_loop(tmp_path)
+
+    class BrokenEvidence:
+        def observation_files(self) -> list:
+            return []
+
+        def snapshot_files(self) -> list:
+            raise PermissionError("denied")
+
+    asm = assemble_trace(
+        Path(ctx["workspace"].path), evidence=BrokenEvidence()
+    )
+
+    assert asm.snapshots == []
+    assert any(
+        d.code == "TRACE.EVIDENCE_UNREADABLE" for d in asm.diagnostics
+    )
+    # The rest of the trace is still available.
+    assert asm.journal
+    assert trace_anchor(asm, ctx["proposal_id"]) is not None
+
+
+def test_subject_inputs_match_the_runs_subject_entity(
+    tmp_path: Path,
+) -> None:
+    # Job A01 is a projection input, but a same-named subject of another
+    # entity type must not inherit that projection history.
+    ctx = make_loop(tmp_path)
+    asm = assemble_trace(Path(ctx["workspace"].path))
+
+    view = trace_subject(asm, "Invoice", "A01")
+    assert view["projections"] == []
+
+
+def test_empty_ingest_keeps_its_snapshot_link(tmp_path: Path) -> None:
+    workspace = make_ws(tmp_path)
+    result = _ingest(
+        workspace,
+        tmp_path,
+        "empty.csv",
+        "id,status,assignee,amount,completed_at,invoiced_at\n",
+        FIXED_NOW,
+    )
+
+    asm = assemble_trace(Path(workspace.path))
+
+    links = [
+        link
+        for link in asm.links
+        if link["from"] == result.ingest_id and link["via"] == "snapshot"
+    ]
+    assert len(links) == 1
+    assert links[0]["resolved"]
+    assert links[0]["to"] in {s.get("digest") for s in asm.snapshots}
+
+
+def test_legacy_proposals_do_not_mask_each_other(tmp_path: Path) -> None:
+    # A legacy run whose frozen items lack ``index`` cannot rely on the
+    # validated-list position: it may collide with a stored ``-pN`` id
+    # that belongs to a different proposal.
+    class LegacyStore:
+        def entities(self) -> list:
+            return []
+
+        def events(self) -> list:
+            return []
+
+        def projection_runs(self) -> list:
+            return []
+
+        def diagnosis_runs(self) -> list:
+            return [
+                {
+                    "run_id": "dgx-legacy",
+                    "proposals": [
+                        {"action": "Notify", "params": {"to": "a"}},
+                        {
+                            "action": "SendReminder",
+                            "params": {"target": "t"},
+                        },
+                    ],
+                }
+            ]
+
+        def evaluation_runs(self) -> list:
+            return []
+
+        def proposals(self) -> list:
+            return [
+                {
+                    "proposal_id": "dgx-legacy-p0",
+                    "diagnosis_run_id": "dgx-legacy",
+                    "action": "SendReminder",
+                    "params": {"target": "t"},
+                    "reason": None,
+                }
+            ]
+
+        def event_links(self, fact_key: str) -> list:
+            return []
+
+        def fact_links(self, fact_key: str) -> list:
+            return []
+
+        def decisions_for(self, proposal_id: str) -> list:
+            return []
+
+        def executions_for_proposal(self, proposal_id: str) -> list:
+            return []
+
+        def links_for_target(self, target: str) -> list:
+            return []
+
+    asm = traceview.TraceAssembly()
+    traceview._read_store(asm, LegacyStore(), Diagnostics())
+
+    # The stored proposal keeps its id; the never-indexed item at a
+    # colliding position stays visible under a positional name.
+    assert [p["proposal_id"] for p in asm.proposals] == ["dgx-legacy-p0"]
+    assert [
+        (p["proposal_id"], p["action"]) for p in asm.unindexed_proposals
+    ] == [("dgx-legacy-pos0", "Notify")]
+
+
+def test_export_flags_missing_snapshot_evidence(tmp_path: Path) -> None:
+    ctx = make_loop(tmp_path)
+    asm = assemble_trace(Path(ctx["workspace"].path))
+    # A snapshot that disappears between assembly and export must be
+    # flagged — the bundle is no longer self-contained.
+    Path(asm.snapshots[0]["path"]).unlink()
+
+    bundle = export_bundle(asm)
+
+    assert bundle["snapshots"][0]["content_error"]
+    assert any(
+        d["code"] == "TRACE.EXPORT_SNAPSHOT_MISSING"
+        for d in bundle["diagnostics"]
+    )
+    assert any(
+        d.code == "TRACE.EXPORT_SNAPSHOT_MISSING" for d in asm.diagnostics
+    )

@@ -109,10 +109,10 @@ def assemble_trace(
     asm.observations, asm.observation_errors = _read_observations(
         evidence, diag
     )
-    asm.snapshots = _read_snapshots(evidence)
+    asm.snapshots = _read_snapshots(evidence, diag)
 
     if store is None:
-        store = SqliteCanonicalStore(runtime)
+        store = SqliteCanonicalStore(runtime, readonly=True)
     _read_store(asm, store, diag)
     _compute_links(asm)
     for link in asm.unresolved:
@@ -138,10 +138,11 @@ def _read_journal(
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return events, errors
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        detail = getattr(exc, "strerror", None) or exc
         diag.error(
             "TRACE.JOURNAL_UNREADABLE",
-            f"cannot read trace journal: {exc.strerror or exc}",
+            f"cannot read trace journal: {detail}",
         )
         return events, errors
     for lineno, line in enumerate(text.splitlines(), start=1):
@@ -185,12 +186,12 @@ def _read_observations(
         ingest_id = path.stem
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            errors.append(f"{path.name}: {exc.strerror or exc}")
+        except (OSError, UnicodeDecodeError) as exc:
+            detail = getattr(exc, "strerror", None) or exc
+            errors.append(f"{path.name}: {detail}")
             diag.warning(
                 "TRACE.EVIDENCE_UNREADABLE",
-                f"cannot read observations {path.name}: "
-                f"{exc.strerror or exc}",
+                f"cannot read observations {path.name}: {detail}",
             )
             continue
         records: list[dict[str, Any]] = []
@@ -214,10 +215,20 @@ def _read_observations(
     return runs, errors
 
 
-def _read_snapshots(evidence: FileEvidenceStore) -> list[dict[str, Any]]:
+def _read_snapshots(
+    evidence: FileEvidenceStore, diag: Diagnostics
+) -> list[dict[str, Any]]:
     """Stored snapshot descriptors; file names carry digest and format."""
     snapshots: list[dict[str, Any]] = []
-    for path in evidence.snapshot_files():
+    try:
+        files = evidence.snapshot_files()
+    except OSError as exc:
+        diag.error(
+            "TRACE.EVIDENCE_UNREADABLE",
+            f"cannot list snapshot evidence: {exc.strerror or exc}",
+        )
+        return snapshots
+    for path in files:
         entry: dict[str, Any] = {"name": path.name, "path": str(path)}
         stem, _, fmt = path.name.partition(".")
         if stem.startswith("sha256-") and fmt:
@@ -297,12 +308,38 @@ def _read_store(
         asm.proposals.append(proposal)
 
     indexed = {p["proposal_id"] for p in asm.proposals}
+    indexed_by_run: dict[str, set[str]] = {}
+    for proposal in asm.proposals:
+        indexed_by_run.setdefault(proposal["diagnosis_run_id"], set()).add(
+            _proposal_fingerprint(
+                proposal.get("action"),
+                proposal.get("params"),
+                proposal.get("reason"),
+            )
+        )
     for run in asm.diagnosis_runs:
+        stored = indexed_by_run.get(run["run_id"], set())
         for position, item in enumerate(run.get("proposals") or []):
             index = item.get("index")
             if not isinstance(index, int):
+                # Legacy records predate the stored raw index; rejected
+                # model items shift the validated-list position, so a
+                # positional id can alias a different indexed proposal.
+                # Match on content instead, and name leftovers after the
+                # position rather than a borrowed ``-pN`` id.
+                if (
+                    _proposal_fingerprint(
+                        item.get("action"),
+                        item.get("params"),
+                        item.get("reason"),
+                    )
+                    in stored
+                ):
+                    continue
                 index = position
-            proposal_id = f"{run['run_id']}-p{index}"
+                proposal_id = f"{run['run_id']}-pos{position}"
+            else:
+                proposal_id = f"{run['run_id']}-p{index}"
             if proposal_id in indexed:
                 continue
             asm.unindexed_proposals.append(
@@ -323,6 +360,14 @@ def _read_store(
                     "indexed": False,
                 }
             )
+
+
+def _proposal_fingerprint(action: Any, params: Any, reason: Any) -> str:
+    """Content identity of a proposal for matching raw items to stored rows."""
+    return json.dumps(
+        {"action": action, "params": params, "reason": reason},
+        sort_keys=True,
+    )
 
 
 # ------------------------------------------------------------------- links
@@ -398,6 +443,12 @@ def _compute_links(asm: TraceAssembly) -> None:
             link(obs, ingest_id, "ingest_run")
             for entity in record.get("entities") or []:
                 link(obs, f"{entity['entity']}/{entity['id']}", "resolved_entity")
+
+    # An ingest of an empty source writes no observation records; its
+    # snapshot digest is then recorded only in the journal.
+    for event in asm.journal:
+        data = event.get("data") or {}
+        link(data.get("ingest_id"), data.get("content_digest"), "snapshot")
 
     for fact in asm.facts:
         fact_key = fact["fact_key"]
@@ -692,7 +743,7 @@ def trace_subject(
                 role = "candidate"
                 evidence = candidate.get("evidence")
                 break
-        if role is None:
+        if role is None and run.get("subject") == entity:
             for entry in run.get("inputs") or []:
                 if entry.get("subject_id") == subject_id:
                     role = "input"
@@ -1173,12 +1224,14 @@ def export_bundle(asm: TraceAssembly) -> dict[str, Any]:
     files or workspace definitions change.
     """
     snapshots: list[dict[str, Any]] = []
+    missing: list[tuple[str, str]] = []
     for snapshot in asm.snapshots:
         entry = dict(snapshot)
         try:
             content = Path(snapshot["path"]).read_bytes()
         except OSError as exc:
             entry["content_error"] = str(exc.strerror or exc)
+            missing.append((snapshot["name"], entry["content_error"]))
         else:
             try:
                 entry["content"] = content.decode("utf-8")
@@ -1189,6 +1242,17 @@ def export_bundle(asm: TraceAssembly) -> dict[str, Any]:
                     "ascii"
                 )
         snapshots.append(entry)
+    # A snapshot that went unreadable after assembly leaves the bundle
+    # without its source evidence; flag that in the exported diagnostics
+    # (and the caller's view of them) rather than reporting silent success.
+    for name, error in missing:
+        diagnostic = Diagnostic(
+            "warning",
+            "TRACE.EXPORT_SNAPSHOT_MISSING",
+            f"snapshot {name} could not be embedded in the export: {error}",
+        )
+        if diagnostic not in asm.diagnostics:
+            asm.diagnostics.append(diagnostic)
     return {
         "format": TRACE_FORMAT,
         "format_version": TRACE_FORMAT_VERSION,
