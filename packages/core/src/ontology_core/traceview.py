@@ -308,9 +308,9 @@ def _read_store(
         asm.proposals.append(proposal)
 
     indexed = {p["proposal_id"] for p in asm.proposals}
-    indexed_by_run: dict[str, set[str]] = {}
+    indexed_by_run: dict[str, list[str]] = {}
     for proposal in asm.proposals:
-        indexed_by_run.setdefault(proposal["diagnosis_run_id"], set()).add(
+        indexed_by_run.setdefault(proposal["diagnosis_run_id"], []).append(
             _proposal_fingerprint(
                 proposal.get("action"),
                 proposal.get("params"),
@@ -318,26 +318,28 @@ def _read_store(
             )
         )
     for run in asm.diagnosis_runs:
-        stored = indexed_by_run.get(run["run_id"], set())
+        stored = indexed_by_run.get(run["run_id"], [])
         for position, item in enumerate(run.get("proposals") or []):
             index = item.get("index")
             if not isinstance(index, int):
                 # Legacy records predate the stored raw index; rejected
-                # model items shift the validated-list position, so a
-                # positional id can alias a different indexed proposal.
-                # Match on content instead, and name leftovers after the
-                # position rather than a borrowed ``-pN`` id.
-                if (
-                    _proposal_fingerprint(
-                        item.get("action"),
-                        item.get("params"),
-                        item.get("reason"),
-                    )
-                    in stored
-                ):
+                # model items shift the validated-list position, so the
+                # position can alias a different proposal's ``-pN`` id.
+                # Match on content — each stored row claims at most one
+                # raw item — and borrow the positional ``-pN`` name only
+                # when no stored row already owns it.
+                fingerprint = _proposal_fingerprint(
+                    item.get("action"),
+                    item.get("params"),
+                    item.get("reason"),
+                )
+                if fingerprint in stored:
+                    stored.remove(fingerprint)
                     continue
                 index = position
-                proposal_id = f"{run['run_id']}-pos{position}"
+                proposal_id = f"{run['run_id']}-p{index}"
+                if proposal_id in indexed:
+                    proposal_id = f"{run['run_id']}-pos{position}"
             else:
                 proposal_id = f"{run['run_id']}-p{index}"
             if proposal_id in indexed:
@@ -447,7 +449,9 @@ def _compute_links(asm: TraceAssembly) -> None:
     # An ingest of an empty source writes no observation records; its
     # snapshot digest is then recorded only in the journal.
     for event in asm.journal:
-        data = event.get("data") or {}
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
         link(data.get("ingest_id"), data.get("content_digest"), "snapshot")
 
     for fact in asm.facts:

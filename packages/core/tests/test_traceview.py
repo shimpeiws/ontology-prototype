@@ -816,10 +816,9 @@ def test_empty_ingest_keeps_its_snapshot_link(tmp_path: Path) -> None:
     assert links[0]["to"] in {s.get("digest") for s in asm.snapshots}
 
 
-def test_legacy_proposals_do_not_mask_each_other(tmp_path: Path) -> None:
-    # A legacy run whose frozen items lack ``index`` cannot rely on the
-    # validated-list position: it may collide with a stored ``-pN`` id
-    # that belongs to a different proposal.
+def _legacy_store(diagnosis_runs: list, proposals: list):
+    """A store double exposing only what ``_read_store`` consumes."""
+
     class LegacyStore:
         def entities(self) -> list:
             return []
@@ -831,32 +830,13 @@ def test_legacy_proposals_do_not_mask_each_other(tmp_path: Path) -> None:
             return []
 
         def diagnosis_runs(self) -> list:
-            return [
-                {
-                    "run_id": "dgx-legacy",
-                    "proposals": [
-                        {"action": "Notify", "params": {"to": "a"}},
-                        {
-                            "action": "SendReminder",
-                            "params": {"target": "t"},
-                        },
-                    ],
-                }
-            ]
+            return diagnosis_runs
 
         def evaluation_runs(self) -> list:
             return []
 
         def proposals(self) -> list:
-            return [
-                {
-                    "proposal_id": "dgx-legacy-p0",
-                    "diagnosis_run_id": "dgx-legacy",
-                    "action": "SendReminder",
-                    "params": {"target": "t"},
-                    "reason": None,
-                }
-            ]
+            return proposals
 
         def event_links(self, fact_key: str) -> list:
             return []
@@ -873,8 +853,35 @@ def test_legacy_proposals_do_not_mask_each_other(tmp_path: Path) -> None:
         def links_for_target(self, target: str) -> list:
             return []
 
+    return LegacyStore()
+
+
+def test_legacy_proposals_do_not_mask_each_other(tmp_path: Path) -> None:
+    # A legacy run whose frozen items lack ``index`` cannot rely on the
+    # validated-list position: it may collide with a stored ``-pN`` id
+    # that belongs to a different proposal.
+    store = _legacy_store(
+        diagnosis_runs=[
+            {
+                "run_id": "dgx-legacy",
+                "proposals": [
+                    {"action": "Notify", "params": {"to": "a"}},
+                    {"action": "SendReminder", "params": {"target": "t"}},
+                ],
+            }
+        ],
+        proposals=[
+            {
+                "proposal_id": "dgx-legacy-p0",
+                "diagnosis_run_id": "dgx-legacy",
+                "action": "SendReminder",
+                "params": {"target": "t"},
+                "reason": None,
+            }
+        ],
+    )
     asm = traceview.TraceAssembly()
-    traceview._read_store(asm, LegacyStore(), Diagnostics())
+    traceview._read_store(asm, store, Diagnostics())
 
     # The stored proposal keeps its id; the never-indexed item at a
     # colliding position stays visible under a positional name.
@@ -882,6 +889,47 @@ def test_legacy_proposals_do_not_mask_each_other(tmp_path: Path) -> None:
     assert [
         (p["proposal_id"], p["action"]) for p in asm.unindexed_proposals
     ] == [("dgx-legacy-pos0", "Notify")]
+
+
+def test_legacy_proposals_keep_stable_ids(tmp_path: Path) -> None:
+    # Each stored row claims at most one identical raw item, and a
+    # leftover borrows the ``-pN`` name when no stored row owns it —
+    # ids an earlier export recorded stay inspectable.
+    item = {"action": "Notify", "params": {"to": "a"}}
+    store = _legacy_store(
+        diagnosis_runs=[
+            {"run_id": "dgx-legacy", "proposals": [dict(item), dict(item)]}
+        ],
+        proposals=[
+            {
+                "proposal_id": "dgx-legacy-p0",
+                "diagnosis_run_id": "dgx-legacy",
+                "action": "Notify",
+                "params": {"to": "a"},
+                "reason": None,
+            }
+        ],
+    )
+    asm = traceview.TraceAssembly()
+    traceview._read_store(asm, store, Diagnostics())
+
+    assert [p["proposal_id"] for p in asm.proposals] == ["dgx-legacy-p0"]
+    assert [
+        (p["proposal_id"], p["action"]) for p in asm.unindexed_proposals
+    ] == [("dgx-legacy-p1", "Notify")]
+
+
+def test_non_object_journal_data_is_skipped(tmp_path: Path) -> None:
+    ctx = make_loop(tmp_path)
+    journal = Path(ctx["workspace"].path) / RUNTIME_DIR / "trace.jsonl"
+    with journal.open("a", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps({"kind": "ingest.completed", "data": ["bad"]})
+            + "\n"
+        )
+
+    asm = assemble_trace(Path(ctx["workspace"].path))
+    assert asm.ok, [d.format() for d in asm.diagnostics]
 
 
 def test_export_flags_missing_snapshot_evidence(tmp_path: Path) -> None:
