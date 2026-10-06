@@ -136,7 +136,16 @@ export default function WorkspaceLayout() {
           <button type="button" onClick={() => blocker.reset()} autoFocus>
             Stay
           </button>
-          <button type="button" onClick={() => blocker.proceed()}>
+          <button
+            type="button"
+            onClick={() => {
+              // The draft outlives this navigation (the provider sits
+              // above the layout), so "discard" must clear it explicitly
+              // or every later navigation prompts again.
+              revertAll();
+              blocker.proceed();
+            }}
+          >
             Discard and leave
           </button>
         </div>

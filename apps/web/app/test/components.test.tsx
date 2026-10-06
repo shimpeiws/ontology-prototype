@@ -139,6 +139,28 @@ describe("draft status", () => {
     const agentRow = screen.getByText("agent.yaml").closest("li");
     expect(agentRow).toHaveTextContent("missing");
   });
+
+  it("per-file status shows unsaved for a missing file with draft text", () => {
+    const missingAgent = {
+      ...SYNTHETIC_OPEN_RESPONSE,
+      files: { ...SYNTHETIC_OPEN_RESPONSE.files },
+    };
+    delete missingAgent.files["agent.yaml"];
+    const opened = workspaceReducer(initialWorkspaceState, {
+      type: "opened",
+      requestedPath: "x",
+      response: missingAgent,
+    });
+    const edited = workspaceReducer(opened, {
+      type: "edited",
+      file: "agent.yaml",
+      text: "task: new",
+    });
+    render(<FileStatusList state={edited} />);
+    const agentRow = screen.getByText("agent.yaml").closest("li");
+    expect(agentRow).toHaveTextContent("unsaved");
+    expect(agentRow).not.toHaveTextContent("missing");
+  });
 });
 
 describe("keyboard operability", () => {

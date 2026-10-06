@@ -76,10 +76,10 @@ function FileStatus({
   return (
     <li>
       <code>{file}</code>{" "}
-      {!onDisk ? (
-        <span className="badge badge-missing">missing</span>
-      ) : dirty ? (
+      {dirty ? (
         <span className="badge badge-draft">unsaved</span>
+      ) : !onDisk ? (
+        <span className="badge badge-missing">missing</span>
       ) : (
         <span className="badge badge-active">active</span>
       )}

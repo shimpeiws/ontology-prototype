@@ -139,6 +139,23 @@ describe("workspace layout", () => {
     await screen.findByText("domain page");
   });
 
+  it("Discard and leave clears the draft so later navigation is unblocked", async () => {
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("link", { name: "Domain" }));
+    await screen.findByRole("alertdialog");
+    await user.click(
+      screen.getByRole("button", { name: "Discard and leave" }),
+    );
+    await screen.findByText("domain page");
+
+    // The draft was discarded — navigating back prompts nothing.
+    await user.click(screen.getByRole("link", { name: "Overview" }));
+    await screen.findByText("overview page");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
   it("closing a dirty workspace asks for confirmation first", async () => {
     const user = userEvent.setup();
     const router = renderLayout(dirtyState());
