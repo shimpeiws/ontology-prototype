@@ -11,7 +11,7 @@
  * property suggestions come from the domain draft.
  */
 
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { isMap, isScalar, isSeq } from "yaml";
 import type { Document, YAMLMap, YAMLSeq } from "yaml";
 
@@ -411,10 +411,23 @@ function AssignmentFields({
   const literalText = assign ? scalarText(assign.get("literal", true)) : "";
   const literalNode = assign ? assign.get("literal", true) : undefined;
   const literalValue = isScalar(literalNode) ? literalNode.value : literalNode;
-  // The stored literal's own type decides whether edits stay text or parse
-  // as a JSON scalar; an unset/empty literal starts as a string.
-  const literalIsString =
-    !assign?.has("literal") || typeof literalValue === "string";
+  // The stored literal's own type seeds the editor mode; an unset/empty
+  // literal starts as a string.
+  const storedKind: "string" | "json" =
+    !assign?.has("literal") || typeof literalValue === "string"
+      ? "string"
+      : "json";
+  // The picked mode is tracked apart from the stored value so an invalid
+  // intermediate JSON scalar (`12.`) doesn't snap the picker back to
+  // string mid-edit. `lastKindSync` records what our own commits stored —
+  // the same scheme TextField uses — so only external draft changes
+  // re-derive the mode from the stored value.
+  const [literalType, setLiteralType] = useState<"string" | "json">(storedKind);
+  const lastKindSync = useRef(storedKind);
+  if (storedKind !== lastKindSync.current) {
+    lastKindSync.current = storedKind;
+    setLiteralType(storedKind);
+  }
   const castText = assign ? scalarText(assign.get("as", true)) : "";
   const id = useId();
 
@@ -465,14 +478,16 @@ function AssignmentFields({
       {mode === "literal" && literalKind === "scalar" ? (
         <SelectField
           label={`${label} literal type`}
-          value={literalIsString ? "string" : "json"}
+          value={literalType}
           options={["string", "json"]}
           commit={(kind) => {
+            const stored =
+              kind === "json" ? parseLiteral(literalText) : literalText;
+            lastKindSync.current =
+              typeof stored === "string" ? "string" : "json";
+            setLiteralType(kind === "json" ? "json" : "string");
             edit((a) => {
-              a.set(
-                "literal",
-                kind === "json" ? parseLiteral(literalText) : literalText,
-              );
+              a.set("literal", stored);
             });
             return kind;
           }}
@@ -486,13 +501,14 @@ function AssignmentFields({
           label={`${label} literal`}
           value={literalText}
           commit={(text) => {
+            const stored =
+              literalKind === "string" || literalType === "string"
+                ? text
+                : parseLiteral(text);
+            lastKindSync.current =
+              typeof stored === "string" ? "string" : "json";
             edit((a) => {
-              a.set(
-                "literal",
-                literalKind === "string" || literalIsString
-                  ? text
-                  : parseLiteral(text),
-              );
+              a.set("literal", stored);
             });
             return text;
           }}

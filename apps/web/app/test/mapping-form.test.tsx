@@ -520,6 +520,41 @@ describe("MappingForm", () => {
     );
   });
 
+  it("keeps JSON literal mode through invalid intermediate input", async () => {
+    const user = userEvent.setup();
+    renderForm(<MappingForm />);
+    await waitForContract();
+
+    const job = card("Entity binding 1");
+    await user.selectOptions(
+      within(job).getByLabelText("Property status source"),
+      "literal",
+    );
+    // Choosing JSON on an empty literal must not snap back to string.
+    await user.selectOptions(
+      within(job).getByLabelText("Property status literal type"),
+      "json",
+    );
+    expect(
+      within(job).getByLabelText("Property status literal type"),
+    ).toHaveValue("json");
+
+    // `12.` is not valid JSON mid-edit; the draft holds it as a string
+    // while the picker stays on JSON, and the finished `12.5` parses.
+    await user.type(
+      within(job).getByLabelText("Property status literal"),
+      "12.5",
+    );
+    await waitFor(() =>
+      expect(
+        draftJs().mapping.entities[0].properties.status.literal,
+      ).toBe(12.5),
+    );
+    expect(
+      within(job).getByLabelText("Property status literal type"),
+    ).toHaveValue("json");
+  });
+
   it("edits set-condition values as separate elements", async () => {
     const response: OpenResponse = {
       ...SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
