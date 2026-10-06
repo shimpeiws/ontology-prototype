@@ -146,6 +146,8 @@ Apps call `ontology_core.load_workspace` and present its diagnostics; they do no
 
 Save outcomes are `saved` / `invalid` / `conflict` / `failed` (see `SaveResult`). Concurrent in-process saves of one directory are serialized; the digest check plus the per-file re-verification form the contract against cross-process writers — a local single-user tool does not take out inter-process locks.
 
+The atomicity above is writer-facing. A *reader* that loads the bundle while activation is in flight can observe a mixed old/new generation: `os.replace` commits one file at a time and there is no read-side locking. That window is microseconds per file, and a reader that lands in it sees valid YAML per file — the cross-file consistency guarantee is on writers (via the digest check), not on mid-commit readers. Callers that need a consistent generation should re-read after the save reports.
+
 Only the four definition files are ever written: a save cannot touch canonical entities/events, observations, traces, proposals, approvals, or any other file in the directory, and it never creates the workspace directory.
 
 ### Serialization and round-trip

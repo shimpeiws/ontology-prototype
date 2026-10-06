@@ -66,6 +66,10 @@ export default function WorkspaceLayout() {
   }
 
   function closeWorkspace() {
+    // A save already sent to the API cannot be recalled — discarding the
+    // draft while it is in flight would let the discarded edits still
+    // reach disk. Wait for the save to settle instead.
+    if (state.saving) return;
     if (dirty && !confirmingClose) {
       setConfirmingClose(true);
       return;
@@ -110,10 +114,28 @@ export default function WorkspaceLayout() {
           >
             {state.saving ? "Saving…" : "Save"}
           </button>
-          <button type="button" onClick={revertAll} disabled={!dirty}>
+          <button
+            type="button"
+            onClick={revertAll}
+            disabled={!dirty || state.saving}
+            title={
+              state.saving
+                ? "A save is in flight — wait for it to settle before discarding the draft."
+                : undefined
+            }
+          >
             Revert all
           </button>
-          <button type="button" onClick={closeWorkspace}>
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            disabled={state.saving}
+            title={
+              state.saving
+                ? "A save is in flight — wait for it to settle before closing."
+                : undefined
+            }
+          >
             {confirmingClose ? "Discard draft and close" : "Close workspace"}
           </button>
         </div>
@@ -176,7 +198,14 @@ export default function WorkspaceLayout() {
           </button>
           <button
             type="button"
+            disabled={state.saving}
+            title={
+              state.saving
+                ? "A save is in flight — discard only after it settles, or the discarded edits could still reach disk."
+                : undefined
+            }
             onClick={() => {
+              if (state.saving) return;
               // The draft outlives this navigation (the provider sits
               // above the layout), so "discard" must clear it explicitly
               // or every later navigation prompts again.

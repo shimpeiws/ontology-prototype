@@ -328,6 +328,7 @@ describe("workspace store", () => {
     };
     state = workspaceReducer(state, {
       type: "reloaded",
+      requestedPath: "job-invoicing",
       response: reloadedResponse,
     });
 
@@ -371,11 +372,64 @@ describe("workspace store", () => {
     expect(state.saveNotice).toBeNull();
   });
 
+  it("a late reload response cannot overwrite a different workspace", () => {
+    // The reload was issued against job-invoicing; the user opened
+    // other-workspace before it landed. The stale response must not
+    // replace the new workspace's active files.
+    let state = dirtyState();
+    state = workspaceReducer(state, { type: "reloadStarted" });
+    state = workspaceReducer(state, {
+      type: "opened",
+      requestedPath: "other-workspace",
+      response: {
+        ...SYNTHETIC_OPEN_RESPONSE,
+        workspace: {
+          ...SYNTHETIC_OPEN_RESPONSE.workspace,
+          digest: "other-digest",
+        },
+        files: {
+          ...SYNTHETIC_OPEN_RESPONSE.files,
+          "domain.yaml": "other: true",
+        },
+      },
+    });
+    state = workspaceReducer(state, {
+      type: "reloaded",
+      requestedPath: "job-invoicing",
+      response: SYNTHETIC_OPEN_RESPONSE,
+    });
+
+    expect(state.workspace?.requestedPath).toBe("other-workspace");
+    expect(state.workspace?.digest).toBe("other-digest");
+    expect(state.workspace?.activeFiles["domain.yaml"]).toBe("other: true");
+    expect(state.reloading).toBe(false);
+  });
+
+  it("a late reload failure cannot surface on a different workspace", () => {
+    let state = dirtyState();
+    state = workspaceReducer(state, { type: "reloadStarted" });
+    state = workspaceReducer(state, {
+      type: "opened",
+      requestedPath: "other-workspace",
+      response: SYNTHETIC_OPEN_RESPONSE,
+    });
+    state = workspaceReducer(state, {
+      type: "reloadFailed",
+      requestedPath: "job-invoicing",
+      error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+    });
+
+    expect(state.workspace?.requestedPath).toBe("other-workspace");
+    expect(state.saveError).toBeNull();
+    expect(state.reloading).toBe(false);
+  });
+
   it("a reload transport failure lands on the save error surface", () => {
     let state = dirtyState();
     state = workspaceReducer(state, { type: "reloadStarted" });
     state = workspaceReducer(state, {
       type: "reloadFailed",
+      requestedPath: "job-invoicing",
       error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
     });
     expect(state.reloading).toBe(false);

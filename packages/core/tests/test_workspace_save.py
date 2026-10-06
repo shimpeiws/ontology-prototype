@@ -279,6 +279,54 @@ def test_external_write_during_activation_conflicts_and_rolls_back(
     assert load_workspace(workspace).ok
 
 
+def test_rollback_never_clobbers_a_post_activation_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A concurrent write landing on an already-activated file must not be
+    erased by the rollback when a later target fails the re-check."""
+    workspace = make_workspace(tmp_path)
+    texts = _texts(workspace)
+    base = bundle_digest(texts)
+    for name in FILES:
+        texts[f"{name}.yaml"] += "\n# draft\n"
+    before = _listing(workspace)
+
+    import ontology_core.workspace as ws_module
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def racing_replace(src, dst) -> None:
+        real_replace(src, dst)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # External writer edits the file we just activated, then
+            # agent.yaml diverges before its own rename — the rollback
+            # must leave the concurrent edit on domain.yaml alone.
+            domain = workspace / "domain.yaml"
+            domain.write_text(domain.read_text() + "\n# external edit\n")
+            agent = workspace / "agent.yaml"
+            agent.write_text(agent.read_text() + "\n# external edit\n")
+
+    monkeypatch.setattr(ws_module.os, "replace", racing_replace)
+
+    result = save_workspace(workspace, texts, base_digest=base)
+
+    assert result.status == "failed"
+    assert "domain.yaml" in (result.message or "")
+    after = _listing(workspace)
+    # The concurrent edit on the already-activated file survived; the
+    # other activated files rolled back; agent.yaml keeps its own
+    # external edit (it was never activated by this save).
+    assert after["domain.yaml"] == (
+        texts["domain.yaml"].encode("utf-8") + b"\n# external edit\n"
+    )
+    assert after["mapping.yaml"] == before["mapping.yaml"]
+    assert after["evaluation.yaml"] == before["evaluation.yaml"]
+    assert after["agent.yaml"] == before["agent.yaml"] + b"\n# external edit\n"
+    assert set(after) == set(before)
+
+
 def test_extra_keys_in_texts_are_never_written(tmp_path: Path) -> None:
     workspace = make_workspace(tmp_path)
     texts = _texts(workspace)

@@ -281,6 +281,30 @@ describe("workspace layout", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
+  it("discard paths stay disabled while a save is in flight", async () => {
+    // A save already sent to the API cannot be recalled, so every
+    // discard path waits for it to settle — otherwise discarded edits
+    // could still reach disk.
+    saveWorkspace.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("button", { name: "Revert all" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Close workspace" }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("link", { name: "Domain" }));
+    await screen.findByRole("alertdialog");
+    expect(
+      screen.getByRole("button", { name: "Discard and leave" }),
+    ).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Stay" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
   it("a conflicted save offers an explicit reload that preserves the draft", async () => {
     saveWorkspace.mockResolvedValue({
       ...SYNTHETIC_SAVE_RESPONSE,

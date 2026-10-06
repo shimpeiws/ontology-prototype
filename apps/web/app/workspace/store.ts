@@ -132,9 +132,12 @@ export type WorkspaceAction =
   | { type: "reloadStarted" }
   | {
       type: "reloaded";
+      /** Path the reload was issued against — a response for a workspace
+          the user has since left must not overwrite the new one. */
+      requestedPath: string;
       response: OpenResponse;
     }
-  | { type: "reloadFailed"; error: ApiError };
+  | { type: "reloadFailed"; requestedPath: string; error: ApiError };
 
 export function workspaceReducer(
   state: WorkspaceState,
@@ -303,7 +306,11 @@ export function workspaceReducer(
       // FDE is reviewing against the new baseline. Dirty state is
       // recomputed against the new active files; a draft file identical
       // to the reloaded content simply stops being dirty.
-      if (!state.workspace) return state;
+      if (
+        !state.workspace ||
+        state.workspace.requestedPath !== action.requestedPath
+      )
+        return state;
       return {
         ...state,
         reloading: false,
@@ -321,6 +328,11 @@ export function workspaceReducer(
       };
     }
     case "reloadFailed":
+      if (
+        !state.workspace ||
+        state.workspace.requestedPath !== action.requestedPath
+      )
+        return state;
       return {
         ...state,
         reloading: false,

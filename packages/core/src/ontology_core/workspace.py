@@ -414,9 +414,11 @@ def _activate_bundle(
     """
     staged: dict[str, Path] = {}
     committed: list[str] = []
+    written: dict[str, bytes] = {}
     try:
         for filename in WORKSPACE_FILES.values():
             data = texts[filename].encode("utf-8")
+            written[filename] = data
             fd, tmp = tempfile.mkstemp(
                 dir=root, prefix=f".{filename}.", suffix=".new"
             )
@@ -441,7 +443,7 @@ def _activate_bundle(
             os.replace(staged[filename], target)
             committed.append(filename)
     except _TargetChanged as changed:
-        problems = _rollback(root, committed, disk_bytes, disk_modes)
+        problems = _rollback(root, committed, disk_bytes, disk_modes, written)
         problems += _discard_staged(staged)
         message = (
             f"{changed.filename} changed on disk while the save was being "
@@ -463,7 +465,7 @@ def _activate_bundle(
             message=message,
         )
     except OSError as exc:
-        problems = _rollback(root, committed, disk_bytes, disk_modes)
+        problems = _rollback(root, committed, disk_bytes, disk_modes, written)
         problems += _discard_staged(staged)
         message = f"failed to activate workspace: {exc.strerror or exc}"
         if problems:
@@ -490,6 +492,7 @@ def _rollback(
     committed: list[str],
     disk_bytes: dict[str, bytes],
     disk_modes: dict[str, int],
+    written: dict[str, bytes],
 ) -> list[str]:
     """Restore files activated before a commit failure.
 
@@ -497,11 +500,27 @@ def _rollback(
     committed file is back to its pre-save bytes. Files the commit never
     reached were never touched, and files absent before the save are
     removed rather than restored.
+
+    A target is only rolled back while it still holds the bytes this save
+    wrote: if a concurrent writer changed (or removed) the file after the
+    activation rename, restoring the pre-save bytes would destroy that
+    writer's edit, so the file is left alone and reported as a problem.
     """
     problems: list[str] = []
     for filename in reversed(committed):
         target = root / filename
         original = disk_bytes.get(filename)
+        ours = written.get(filename)
+        try:
+            current = target.read_bytes()
+        except OSError:
+            current = None
+        if ours is not None and current != ours:
+            problems.append(
+                f"{filename}: changed on disk after activation; "
+                "left as the concurrent writer left it"
+            )
+            continue
         try:
             if original is None:
                 target.unlink(missing_ok=True)

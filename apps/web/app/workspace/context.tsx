@@ -158,11 +158,16 @@ export function WorkspaceProvider({
     dispatch({ type: "reloadStarted" });
     try {
       const response = await api.openWorkspace(workspace.requestedPath);
-      dispatch({ type: "reloaded", response });
+      dispatch({
+        type: "reloaded",
+        requestedPath: workspace.requestedPath,
+        response,
+      });
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       dispatch({
         type: "reloadFailed",
+        requestedPath: workspace.requestedPath,
         error:
           err instanceof ApiError
             ? err
