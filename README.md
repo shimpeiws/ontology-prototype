@@ -63,6 +63,7 @@ ontology evaluate examples/job-invoicing --boundary 2026-10-05T00:00:00Z --as-of
 ontology trace examples/job-invoicing
 ontology trace examples/job-invoicing --subject Job/101
 ontology trace examples/job-invoicing --export trace-export.json
+ontology diagnose-compare --subject openrouter:openai/gpt-4o-mini --subject openrouter:<model-b> --out comparison-report.json
 ```
 
 `ontology check` loads a workspace directory (the four files `domain.yaml`, `mapping.yaml`, `evaluation.yaml`, `agent.yaml`), prints structured diagnostics, and exits `0` when the workspace is valid, `1` otherwise. See [docs/workspace.md](docs/workspace.md) for the definition format and validation rules.
@@ -81,7 +82,9 @@ ontology trace examples/job-invoicing --export trace-export.json
 
 `ontology trace` reassembles everything a run left behind — observation evidence and snapshots, canonical entities and facts, frozen projection/diagnosis/evaluation runs, proposals with decisions and execution attempts, and the per-stage journal — into one linked, read-only view. Follow one subject through the loop with `--subject Job/101`, anchor on any artifact id with `--run`, or write a self-contained export bundle with `--export` (it embeds raw snapshot contents and never overwrites). Observed facts, AI proposals, human decisions, write-backs, and evaluated outcomes carry distinct nature labels, and dangling references surface as `TRACE.UNRESOLVED_LINK` instead of disappearing. See [docs/trace.md](docs/trace.md).
 
-Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology trace`.
+`ontology diagnose-compare` runs the bounded live-model comparison: N `--subject PROVIDER:MODEL` pairs evaluated against one shared frozen fixture input through the same adapters as `diagnose`, producing a JSON report artifact that records identical-input proof (shared `input_digest`/`projection_run_id`), per-subject status/requests/latency/checks, and an explicit `unavailable` slot. See [docs/diagnosis-evaluation.md](docs/diagnosis-evaluation.md#live-model-comparison).
+
+Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology trace`, `ontology diagnose-compare`.
 
 ## Library use
 
