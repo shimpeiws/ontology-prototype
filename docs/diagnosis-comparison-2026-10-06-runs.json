@@ -1,0 +1,187 @@
+{
+  "eval_version": "diagnosis-eval.v1",
+  "exported": "2026-10-06",
+  "runs": [
+    {
+      "run_id": "dgx-20261006T041359796907Z-a9c55e43",
+      "provider": "openrouter",
+      "model": "openai/gpt-4o-mini",
+      "status": "ok",
+      "prompt_version": "diagnosis.v1",
+      "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+      "deliverables": {
+        "explanation": "The jobs have been marked as completed, but invoicing has not yet occurred, which suggests potential delays in the billing process.",
+        "follow_up_questions": [
+          "What processes are in place for transitioning completed jobs to invoicing?",
+          "Have the assignees (taro and hanako) received any notifications about the invoicing process?"
+        ],
+        "hypotheses": [
+          {
+            "evidence": [
+              "fact-d6e2bfcd687887987c1e7cb5a016dae5",
+              "fact-c49ee54a714002a071478516480a407f"
+            ],
+            "statement": "Assignees may have overlooked or forgotten to initiate the invoicing process after job completion."
+          },
+          {
+            "evidence": [
+              "fact-d6e2bfcd687887987c1e7cb5a016dae5",
+              "fact-c49ee54a714002a071478516480a407f"
+            ],
+            "statement": "There may be a miscommunication between assignees and the billing department regarding the handoff for invoicing."
+          }
+        ]
+      },
+      "proposals": [
+        {
+          "action": "SendReminder",
+          "index": 0,
+          "params": {
+            "reason": "Please remember to initiate the invoicing process for the completed job.",
+            "related_entity": "E01",
+            "target": "taro"
+          },
+          "reason": "Taro is the assignee for Job E01, which is completed but not yet invoiced."
+        },
+        {
+          "action": "SendReminder",
+          "index": 1,
+          "params": {
+            "reason": "Please remember to initiate the invoicing process for the completed job.",
+            "related_entity": "E02",
+            "target": "hanako"
+          },
+          "reason": "Hanako is the assignee for Job E02, which is completed but not yet invoiced."
+        }
+      ],
+      "latency_seconds": null,
+      "diagnostics": []
+    },
+    {
+      "run_id": "dgx-20261006T041405876481Z-342fdfb3",
+      "provider": "openrouter",
+      "model": "anthropic/claude-haiku-4.5",
+      "status": "ok",
+      "prompt_version": "diagnosis.v1",
+      "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+      "deliverables": {
+        "explanation": "Two jobs (E01 and E02) have been marked as completed but invoicing has not yet occurred. E01 has been in this state for 4 days (since 2026-10-01), and E02 for 3 days (since 2026-10-02). This delay suggests a potential breakdown in the handoff between job completion and invoice generation, possibly due to missing invoice documentation, system processing delays, or assignee oversight.",
+        "follow_up_questions": [
+          "Is there a documented billing-readiness process that should execute after job completion?",
+          "Have invoice records been created for E01 and E02 in the invoicing system but not yet sent?",
+          "What are the responsibilities of assignees (taro and hanako) after a job is marked completed?",
+          "Are there any blocking issues, missing data, or system errors preventing invoice generation for these jobs?",
+          "What is the expected time-to-invoice SLA, and have these jobs exceeded it?"
+        ],
+        "hypotheses": [
+          {
+            "evidence": [
+              "obs-bb50e92d996a7afd",
+              "obs-1fdfbd9e425eefcc"
+            ],
+            "statement": "Invoice documentation or billing-readiness checklist items have not been completed by the assigned staff members."
+          },
+          {
+            "evidence": [
+              "fact-d6e2bfcd687887987c1e7cb5a016dae5",
+              "fact-c49ee54a714002a071478516480a407f"
+            ],
+            "statement": "Automated invoice generation is not triggering when jobs transition to completed status."
+          },
+          {
+            "evidence": [
+              "obs-bb50e92d996a7afd",
+              "obs-1fdfbd9e425eefcc"
+            ],
+            "statement": "Assignees (taro for E01, hanako for E02) may not be aware that invoicing is their responsibility post-completion."
+          }
+        ]
+      },
+      "proposals": [
+        {
+          "action": "SendReminder",
+          "index": 0,
+          "params": {
+            "reason": "Job E01 completed 4 days ago but has not been invoiced. Please verify billing-readiness and initiate invoicing if all requirements are met.",
+            "related_entity": "E01",
+            "target": "taro"
+          },
+          "reason": "Direct outreach to the assignee may unblock documentation or process issues holding up invoice generation for E01."
+        },
+        {
+          "action": "SendReminder",
+          "index": 1,
+          "params": {
+            "reason": "Job E02 completed 3 days ago but has not been invoiced. Please verify billing-readiness and initiate invoicing if all requirements are met.",
+            "related_entity": "E02",
+            "target": "hanako"
+          },
+          "reason": "Direct outreach to the assignee may unblock documentation or process issues holding up invoice generation for E02."
+        }
+      ],
+      "latency_seconds": null,
+      "diagnostics": []
+    },
+    {
+      "run_id": "dgx-20261006T041411989576Z-d34f6fba",
+      "provider": "openrouter",
+      "model": "google/gemini-2.5-flash",
+      "status": "ok",
+      "prompt_version": "diagnosis.v1",
+      "projection_run_id": "prj-20261006T041359783091Z-9d73cf89",
+      "deliverables": {
+        "explanation": "Two jobs, E01 and E02, have been marked as 'completed' but have not yet been invoiced. Job E01 has been completed for 4 days, assigned to 'taro'. Job E02 has been completed for 3 days, assigned to 'hanako'. This delay suggests potential bottlenecks in the invoicing process.",
+        "follow_up_questions": [
+          "What is the standard turnaround time for invoicing after job completion?",
+          "Are there any specific reasons reported for delays in invoicing for job E01 or E02?",
+          "Is there a system in place to automatically prompt assignees or a billing department to initiate invoicing upon job completion?"
+        ],
+        "hypotheses": [
+          {
+            "evidence": [
+              "fact-d6e2bfcd687887987c1e7cb5a016dae5"
+            ],
+            "statement": "The assignee 'taro' for job E01 may have overlooked initiating the invoicing process."
+          },
+          {
+            "evidence": [
+              "fact-c49ee54a714002a071478516480a407f"
+            ],
+            "statement": "The assignee 'hanako' for job E02 may have overlooked initiating the invoicing process."
+          },
+          {
+            "evidence": [
+              "fact-d6e2bfcd687887987c1e7cb5a016dae5",
+              "fact-c49ee54a714002a071478516480a407f"
+            ],
+            "statement": "There might be a general delay in the administrative process of generating invoices after job completion, affecting both E01 and E02."
+          }
+        ]
+      },
+      "proposals": [
+        {
+          "action": "SendReminder",
+          "index": 0,
+          "params": {
+            "reason": "Job E01 (completed 4 days ago) has not yet been invoiced. Please initiate the invoicing process.",
+            "related_entity": "E01",
+            "target": "taro"
+          },
+          "reason": "Remind the assignee 'taro' for job E01 about the outstanding invoice."
+        },
+        {
+          "action": "SendReminder",
+          "index": 1,
+          "params": {
+            "reason": "Job E02 (completed 3 days ago) has not yet been invoiced. Please initiate the invoicing process.",
+            "related_entity": "E02",
+            "target": "hanako"
+          },
+          "reason": "Remind the assignee 'hanako' for job E02 about the outstanding invoice."
+        }
+      ],
+      "latency_seconds": null,
+      "diagnostics": []
+    }
+  ]
+}

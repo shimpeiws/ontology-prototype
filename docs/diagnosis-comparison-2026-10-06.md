@@ -7,6 +7,10 @@
 - Command: `ontology diagnose-compare --subject openrouter:openai/gpt-4o-mini --subject openrouter:anthropic/claude-haiku-4.5 --subject openrouter:google/gemini-2.5-flash --repeats 1 --out .verification/diagnosis-comparison-2026-10-06/comparison-report.json .verification/diagnosis-comparison-2026-10-06`
 - Artifact: `docs/diagnosis-comparison-2026-10-06.json` (committed copy of
   `comparison-report.json`)
+- Recorded outputs: `docs/diagnosis-comparison-2026-10-06-runs.json` —
+  the full recorded run records (deliverables and proposals per subject)
+  exported from the comparison store, so the rubric read below is
+  auditable without the local workspace
 - Harness: `eval_version` `diagnosis-eval.v1`, `prompt_version` `diagnosis.v1`
 - Workspace: `.verification/diagnosis-comparison-2026-10-06/shared` (the
   materialized eval workspace; its `.ontology/` store holds every recorded
@@ -49,7 +53,8 @@
 ## Quality findings
 
 All three subjects passed every deterministic check on the same frozen
-input. The rubric read of the recorded runs:
+input. The rubric read of the recorded runs (full outputs in
+`docs/diagnosis-comparison-2026-10-06-runs.json`):
 
 - `anthropic/claude-haiku-4.5` (`dgx-20261006T041405876481Z-342fdfb3`) —
   strongest read. The explanation names both jobs with their exact
@@ -91,8 +96,9 @@ off-list actions, no unverified evidence ids, no missing deliverables.
   $1.00/M input + $5.00/M output; `gemini-2.5-flash` $0.30/M input +
   $2.50/M output. With an unmeasured ~2–3k-token prompt and ~0.5–1k-token
   completion (usage not captured — see above), each call estimates at
-  roughly $0.001, $0.005, and $0.0025 respectively; the whole
-  comparison cost well under $0.01.
+  roughly $0.001, $0.005, and $0.0025 respectively; at the stated upper
+  bounds the three calls total ≲ $0.0125, so the whole comparison cost
+  under about $0.015.
 
 ## Setup tradeoffs
 
