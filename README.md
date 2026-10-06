@@ -41,6 +41,9 @@ ontology proposals examples/job-invoicing
 ontology decide examples/job-invoicing <proposal-id> --approve --reviewer fde-sato
 ontology execute examples/job-invoicing <proposal-id>
 ontology evaluate examples/job-invoicing --boundary 2026-10-05T00:00:00Z --as-of 2026-10-15T00:00:00Z
+ontology trace examples/job-invoicing
+ontology trace examples/job-invoicing --subject Job/101
+ontology trace examples/job-invoicing --export trace-export.json
 ```
 
 `ontology check` loads a workspace directory (the four files `domain.yaml`, `mapping.yaml`, `evaluation.yaml`, `agent.yaml`), prints structured diagnostics, and exits `0` when the workspace is valid, `1` otherwise. See [docs/workspace.md](docs/workspace.md) for the definition format and validation rules.
@@ -57,7 +60,9 @@ ontology evaluate examples/job-invoicing --boundary 2026-10-05T00:00:00Z --as-of
 
 `ontology evaluate` pairs the contract's interval events per canonical subject at an explicit `--as-of`, splits baseline/after cohorts at an explicit `--boundary`, and reports medians, pending/invalid/ambiguous counts, the strict target verdict, and guardrail verdicts from explicit evidence — then freezes the report append-only for `evaluate --run <id>`. Cohorts are time-based observations; the report never claims an intervention caused the change. See [docs/evaluation.md](docs/evaluation.md).
 
-Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`. Planned capabilities from the [v0.1 acceptance criteria](docs/v0.1.md) — trace inspection — are not commands yet; they will land as later issues on the same shared core.
+`ontology trace` reassembles everything a run left behind — observation evidence and snapshots, canonical entities and facts, frozen projection/diagnosis/evaluation runs, proposals with decisions and execution attempts, and the per-stage journal — into one linked, read-only view. Follow one subject through the loop with `--subject Job/101`, anchor on any artifact id with `--run`, or write a self-contained export bundle with `--export` (it embeds raw snapshot contents and never overwrites). Observed facts, AI proposals, human decisions, write-backs, and evaluated outcomes carry distinct nature labels, and dangling references surface as `TRACE.UNRESOLVED_LINK` instead of disappearing. See [docs/trace.md](docs/trace.md).
+
+Implemented so far: `ontology check`, `ontology ingest`, `ontology project`, `ontology diagnose`, `ontology proposals`, `ontology decide`, `ontology execute`, `ontology evaluate`, `ontology trace`.
 
 ## Library use
 
