@@ -15,6 +15,7 @@ import type {
   DraftPreviewResponse,
   DraftValidateResponse,
   OpenResponse,
+  SaveResponse,
 } from "./types";
 
 const API_BASE =
@@ -169,6 +170,17 @@ export const api = {
     post<DraftValidateResponse>(
       "/workspaces/drafts/validate",
       { path, files },
+      signal,
+    ),
+  saveWorkspace: (
+    path: string,
+    baseDigest: string,
+    files: Record<string, string>,
+    signal?: AbortSignal,
+  ) =>
+    post<SaveResponse>(
+      "/workspaces/save",
+      { path, base_digest: baseDigest, files },
       signal,
     ),
   previewDraft: (

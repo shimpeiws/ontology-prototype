@@ -7,7 +7,7 @@ typed workspace model serialized field-for-field.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -42,6 +42,21 @@ class DraftValidateRequest(BaseModel):
     """
 
     path: str = Field(min_length=1)
+    files: dict[str, str]
+
+
+class SaveRequest(BaseModel):
+    """Activate a draft bundle as the workspace on disk.
+
+    ``base_digest`` is the digest the open/inspect response returned —
+    the save proceeds only when the on-disk bundle still matches it, so a
+    workspace edited outside the UI (e.g. by the CLI) can never be
+    silently overwritten. An empty base digest can never match an honest
+    open: it is rejected at the boundary rather than weakening the check.
+    """
+
+    path: str = Field(min_length=1)
+    base_digest: str = Field(min_length=1)
     files: dict[str, str]
 
 
@@ -89,6 +104,27 @@ class DraftValidateResponse(BaseModel):
     digest: str
     definitions: dict[str, Any] | None
     diagnostics: list[DiagnosticOut]
+
+
+class SaveResponse(BaseModel):
+    """Result of a save attempt — a domain outcome, not a transport error.
+
+    ``outcome`` is one of ``saved`` / ``invalid`` / ``conflict`` /
+    ``failed``, mirroring ``ontology_core.save_workspace``. ``digest`` is
+    the new active digest on ``saved``, the current on-disk digest on
+    ``conflict`` (the base a reloaded client must present), the draft
+    digest on ``invalid``, and null on ``failed``. ``diagnostics`` carry
+    core validation findings on ``invalid``; ``message`` carries the
+    failure detail on ``failed``.
+    """
+
+    api_version: str
+    outcome: Literal["saved", "invalid", "conflict", "failed"]
+    valid: bool
+    digest: str | None
+    definitions: dict[str, Any] | None
+    diagnostics: list[DiagnosticOut]
+    message: str | None = None
 
 
 class DraftPreviewResponse(BaseModel):

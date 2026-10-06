@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "../lib/api";
 import {
   SYNTHETIC_OPEN_RESPONSE,
+  SYNTHETIC_SAVE_RESPONSE,
   SYNTHETIC_PREVIEW_RESPONSE,
   SYNTHETIC_VALIDATE_RESPONSE,
   stubFetchJson,
@@ -48,6 +49,25 @@ describe("api client", () => {
     expect(url).toBe("/api/v1/workspaces/drafts/validate");
     expect(JSON.parse(init.body as string)).toEqual({
       path: "job-invoicing",
+      files: { "domain.yaml": "x" },
+    });
+  });
+
+  it("sends path, base digest, and draft files to the save endpoint", async () => {
+    const fetchStub = vi.fn(stubFetchJson(200, SYNTHETIC_SAVE_RESPONSE));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const result = await api.saveWorkspace("job-invoicing", "digest-abc", {
+      "domain.yaml": "x",
+    });
+
+    expect(result.outcome).toBe("saved");
+    expect(result.digest).toBe("synthetic-saved-digest");
+    const [url, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/workspaces/save");
+    expect(JSON.parse(init.body as string)).toEqual({
+      path: "job-invoicing",
+      base_digest: "digest-abc",
       files: { "domain.yaml": "x" },
     });
   });

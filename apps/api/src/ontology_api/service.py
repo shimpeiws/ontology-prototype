@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import ontology_core
 from ontology_core import (
@@ -23,6 +23,7 @@ from ontology_core import (
     bundle_digest,
     load_workspace,
     load_workspace_texts,
+    save_workspace,
 )
 from ontology_core.agentdef import DELIVERABLES
 from ontology_core.conditions import COMPARISON_OPS, LOGIC_OPS, NULL_OPS, SET_OPS
@@ -85,6 +86,23 @@ class DraftResult:
 
 
 @dataclass
+class SaveOutcome:
+    """Outcome of a save attempt — a domain result, not a transport error.
+
+    ``outcome`` mirrors the core's ``SaveResult.status``:
+    ``saved`` / ``invalid`` / ``conflict`` / ``failed``.
+    """
+
+    path: Path
+    outcome: Literal["saved", "invalid", "conflict", "failed"]
+    valid: bool
+    diagnostics: list[Diagnostic]
+    digest: str | None
+    definitions: dict[str, Any] | None
+    message: str | None
+
+
+@dataclass
 class DraftPreviewResult:
     """Outcome of a draft preview — isolated, nothing persisted.
 
@@ -109,6 +127,9 @@ class WorkspaceService(Protocol):
         self, path: str, files: Mapping[str, str]
     ) -> DraftResult: ...
 
+    def save(
+        self, path: str, files: Mapping[str, str], base_digest: str
+    ) -> SaveOutcome: ...
     def preview_draft(
         self, path: str, files: Mapping[str, str], sample_text: str
     ) -> DraftPreviewResult: ...
@@ -162,6 +183,41 @@ class CoreWorkspaceService:
             diagnostics=result.diagnostics,
             digest=bundle_digest(files),
             definitions=_definitions(result.workspace),
+        )
+
+    def save(
+        self, path: str, files: Mapping[str, str], base_digest: str
+    ) -> SaveOutcome:
+        resolved = self._resolve(path)
+        unknown = sorted(set(files) - set(WORKSPACE_FILES.values()))
+        if unknown:
+            raise ApiError(
+                400,
+                "API.UNKNOWN_WORKSPACE_FILE",
+                f"unknown workspace file(s): {', '.join(unknown)}; "
+                f"expected only {', '.join(sorted(WORKSPACE_FILES.values()))}",
+            )
+        try:
+            is_dir = resolved.is_dir()
+        except OSError:
+            is_dir = False
+        if not is_dir:
+            raise ApiError(
+                404,
+                "API.WORKSPACE_NOT_FOUND",
+                f"no workspace directory at {path!r} (resolved: {resolved})",
+            )
+        # The core owns the whole save contract: validation, the base
+        # digest check, and atomic activation with rollback.
+        result = save_workspace(resolved, files, base_digest=base_digest)
+        return SaveOutcome(
+            path=resolved,
+            outcome=result.status,
+            valid=result.workspace is not None,
+            diagnostics=result.diagnostics,
+            digest=result.digest,
+            definitions=_definitions(result.workspace),
+            message=result.message,
         )
 
     def preview_draft(
@@ -349,6 +405,7 @@ def contract_metadata() -> dict[str, Any]:
         "operations": {
             "open": f"POST /api/{API_VERSION}/workspaces/open",
             "validate_draft": f"POST /api/{API_VERSION}/workspaces/drafts/validate",
+            "save": f"POST /api/{API_VERSION}/workspaces/save",
             "preview_draft": f"POST /api/{API_VERSION}/workspaces/drafts/preview",
         },
         "contract": {

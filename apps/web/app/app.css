@@ -65,6 +65,12 @@ code {
   padding: 0.5rem 1rem;
 }
 
+.state-ok {
+  border: 1px solid #1a7f37;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+}
+
 .error-detail {
   font-size: 0.8em;
   white-space: pre-wrap;

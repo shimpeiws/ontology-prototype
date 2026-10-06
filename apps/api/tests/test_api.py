@@ -428,6 +428,249 @@ class TestDraftValidate:
         assert not (workspace / ".ontology").exists()
 
 
+class TestSave:
+    """The #19 save flow: validation first, base-digest conflict
+    detection, all-or-nothing activation — all owned by the core."""
+
+    def test_save_valid_bundle(self, roots: Path, workspace: Path) -> None:
+        client = make_client(roots)
+        opened = client.post(
+            "/api/v1/workspaces/open", json={"path": str(workspace)}
+        ).json()
+        files = apisupport.workspace_texts(workspace)
+        files["domain.yaml"] += "\n# ui edit\n"
+
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(workspace),
+                "base_digest": opened["workspace"]["digest"],
+                "files": files,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["outcome"] == "saved"
+        assert body["valid"] is True
+        assert body["digest"] == bundle_digest(files)
+        assert body["definitions"]["domain"]["name"] == "job-invoicing"
+        # The CLI loads exactly what was saved.
+        assert (workspace / "domain.yaml").read_text().endswith("# ui edit\n")
+        assert load_workspace(workspace).ok
+
+    def test_save_invalid_draft_writes_nothing(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        client = make_client(roots)
+        opened = client.post(
+            "/api/v1/workspaces/open", json={"path": str(workspace)}
+        ).json()
+        files = apisupport.workspace_texts(workspace)
+        files["evaluation.yaml"] = files["evaluation.yaml"].replace(
+            "median", "bogus"
+        )
+        before = {
+            p.name: p.read_bytes() for p in sorted(workspace.iterdir())
+        }
+
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(workspace),
+                "base_digest": opened["workspace"]["digest"],
+                "files": files,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["outcome"] == "invalid"
+        assert body["valid"] is False
+        # The diagnostics are the core's — identical to validating the
+        # same texts directly.
+        core = load_workspace_texts(files, path=workspace)
+        assert body["diagnostics"] == [d.to_dict() for d in core.diagnostics]
+        assert {
+            p.name: p.read_bytes() for p in sorted(workspace.iterdir())
+        } == before
+
+    def test_save_conflict_on_external_change(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        client = make_client(roots)
+        opened = client.post(
+            "/api/v1/workspaces/open", json={"path": str(workspace)}
+        ).json()
+        # A CLI-side edit lands between open and save.
+        apisupport.rewrite(
+            workspace,
+            "agent",
+            lambda d: d["agent"].update(description="edited by CLI"),
+        )
+        files = apisupport.workspace_texts(workspace)
+
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(workspace),
+                "base_digest": opened["workspace"]["digest"],
+                "files": files,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["outcome"] == "conflict"
+        # The response carries the live digest the client must reload to.
+        assert body["digest"] == bundle_digest(files)
+        assert body["digest"] != opened["workspace"]["digest"]
+        assert "edited by CLI" in (workspace / "agent.yaml").read_text()
+
+    def test_save_after_reload_with_new_digest(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        client = make_client(roots)
+        opened = client.post(
+            "/api/v1/workspaces/open", json={"path": str(workspace)}
+        ).json()
+        apisupport.rewrite(
+            workspace,
+            "agent",
+            lambda d: d["agent"].update(description="edited by CLI"),
+        )
+        files = apisupport.workspace_texts(workspace)
+        files["domain.yaml"] += "\n# ui edit\n"
+
+        conflicted = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(workspace),
+                "base_digest": opened["workspace"]["digest"],
+                "files": files,
+            },
+        ).json()
+        assert conflicted["outcome"] == "conflict"
+
+        # The reload path: open again, then save against the new digest.
+        reopened = client.post(
+            "/api/v1/workspaces/open", json={"path": str(workspace)}
+        ).json()
+        assert reopened["workspace"]["digest"] == conflicted["digest"]
+        saved = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(workspace),
+                "base_digest": reopened["workspace"]["digest"],
+                "files": files,
+            },
+        ).json()
+        assert saved["outcome"] == "saved"
+        assert load_workspace(workspace).ok
+        assert "edited by CLI" in (workspace / "agent.yaml").read_text()
+
+    def test_save_refuses_symlinked_definition_file(
+        self, roots: Path, workspace: Path, tmp_path: Path
+    ) -> None:
+        client = make_client(roots)
+        # A valid draft — captured before the symlink lands — so the save
+        # reaches the activation checks instead of stopping at validation.
+        files = apisupport.workspace_texts(workspace)
+        secret = tmp_path / "secret.yaml"
+        secret.write_text("schema_version: 1\nkind: agent\nagent: {}\n")
+        (workspace / "agent.yaml").unlink()
+        (workspace / "agent.yaml").symlink_to(secret)
+
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(workspace),
+                # Any base — the symlink check must fire regardless.
+                "base_digest": bundle_digest(files),
+                "files": files,
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["outcome"] == "failed"
+        assert (workspace / "agent.yaml").is_symlink()
+        assert secret.read_text().endswith("agent: {}\n")
+
+    def test_save_rejects_unknown_file(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        client = make_client(roots)
+        files = apisupport.workspace_texts(workspace)
+        files["evil.yaml"] = "x: 1"
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(workspace),
+                "base_digest": "any",
+                "files": files,
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "API.UNKNOWN_WORKSPACE_FILE"
+        assert not (workspace / "evil.yaml").exists()
+
+    def test_save_outside_root(
+        self, roots: Path, workspace: Path, tmp_path: Path
+    ) -> None:
+        outside = apisupport.copy_example(tmp_path, "outside")
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(outside),
+                "base_digest": "any",
+                "files": apisupport.workspace_texts(outside),
+            },
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "API.PATH_OUTSIDE_ROOTS"
+
+    def test_save_missing_workspace(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={
+                "path": str(roots / "nope"),
+                "base_digest": "any",
+                "files": apisupport.workspace_texts(workspace),
+            },
+        )
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "API.WORKSPACE_NOT_FOUND"
+        assert not (roots / "nope").exists()
+
+    def test_save_no_roots(self, workspace: Path) -> None:
+        client = make_client()
+        response = client.post(
+            "/api/v1/workspaces/save",
+            json={"path": "x", "base_digest": "any", "files": {}},
+        )
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "API.ROOTS_UNCONFIGURED"
+
+    def test_save_malformed_requests(self, roots: Path) -> None:
+        client = make_client(roots)
+        bad_payloads = [
+            {},
+            {"path": "x", "files": {}},
+            {"path": "x", "base_digest": "", "files": {}},
+            {"path": "x", "base_digest": 42, "files": {}},
+            {"path": "x", "base_digest": "d", "files": {"domain.yaml": 1}},
+        ]
+        for payload in bad_payloads:
+            response = client.post("/api/v1/workspaces/save", json=payload)
+            assert response.status_code == 422, payload
+            assert response.json()["error"]["code"] == "API.MALFORMED_REQUEST"
+
+    def test_contract_lists_save_operation(self, roots: Path) -> None:
+        body = make_client(roots).get("/api/v1/contract").json()
+        assert body["operations"]["save"] == "POST /api/v1/workspaces/save"
+
+
 class TestDraftPreview:
     """Issue #17 preview surface: isolated, draft-driven, no side effects."""
 

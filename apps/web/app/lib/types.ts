@@ -47,6 +47,24 @@ export interface DraftValidateResponse {
   diagnostics: Diagnostic[];
 }
 
+/** Save outcomes, mirroring ontology_core.save_workspace statuses. */
+export type SaveOutcome = "saved" | "invalid" | "conflict" | "failed";
+
+export interface SaveResponse {
+  api_version: string;
+  outcome: SaveOutcome;
+  valid: boolean;
+  /**
+   * New active digest on `saved`, the current on-disk digest on
+   * `conflict` (the base a reloaded client must present), the draft
+   * digest on `invalid`, null on `failed`.
+   */
+  digest: string | null;
+  definitions: WorkspaceDefinitions | null;
+  diagnostics: Diagnostic[];
+  message: string | null;
+}
+
 export interface ContractResponse {
   api_version: string;
   core_version: string;

@@ -15,6 +15,7 @@ from .service import (
     DraftPreviewResult,
     DraftResult,
     OpenResult,
+    SaveOutcome,
     WorkspaceService,
     contract_metadata,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "DraftPreviewResult",
     "DraftResult",
     "OpenResult",
+    "SaveOutcome",
     "WorkspaceService",
     "__version__",
     "contract_metadata",

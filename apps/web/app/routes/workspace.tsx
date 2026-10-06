@@ -4,6 +4,7 @@ import { Navigate, NavLink, Outlet, useBlocker } from "react-router";
 import { useWorkspace } from "../workspace/context";
 import { isDraftDirty } from "../workspace/store";
 import { DraftStatusBadge } from "../components/DraftStatus";
+import { SaveNoticeView } from "../components/SaveNotice";
 import { ErrorState } from "../components/states";
 
 export function meta() {
@@ -19,7 +20,14 @@ const NAV_ITEMS = [
 ] as const;
 
 export default function WorkspaceLayout() {
-  const { state, close, revertAll, validateDraft } = useWorkspace();
+  const {
+    state,
+    close,
+    revertAll,
+    validateDraft,
+    saveDraft,
+    reloadActive,
+  } = useWorkspace();
   const dirty = isDraftDirty(state);
   // The blocker must consult the latest render's state, not the closure it
   // was registered with: React runs a descendant <Navigate>'s effect before
@@ -58,6 +66,10 @@ export default function WorkspaceLayout() {
   }
 
   function closeWorkspace() {
+    // A save already sent to the API cannot be recalled — discarding the
+    // draft while it is in flight would let the discarded edits still
+    // reach disk. Wait for the save to settle instead.
+    if (state.saving) return;
     if (dirty && !confirmingClose) {
       setConfirmingClose(true);
       return;
@@ -85,10 +97,45 @@ export default function WorkspaceLayout() {
           >
             Validate draft
           </button>
-          <button type="button" onClick={revertAll} disabled={!dirty}>
+          <button
+            type="button"
+            onClick={() => void saveDraft()}
+            disabled={
+              state.saving ||
+              state.reloading ||
+              !dirty ||
+              state.workspace.digest === null
+            }
+            title={
+              state.workspace.digest === null
+                ? "The active bundle digest is unavailable, so a save can never be conflict-checked — reload the workspace."
+                : undefined
+            }
+          >
+            {state.saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={revertAll}
+            disabled={!dirty || state.saving}
+            title={
+              state.saving
+                ? "A save is in flight — wait for it to settle before discarding the draft."
+                : undefined
+            }
+          >
             Revert all
           </button>
-          <button type="button" onClick={closeWorkspace}>
+          <button
+            type="button"
+            onClick={closeWorkspace}
+            disabled={state.saving}
+            title={
+              state.saving
+                ? "A save is in flight — wait for it to settle before closing."
+                : undefined
+            }
+          >
             {confirmingClose ? "Discard draft and close" : "Close workspace"}
           </button>
         </div>
@@ -97,6 +144,19 @@ export default function WorkspaceLayout() {
         <ErrorState
           error={state.validationError}
           onRetry={() => void validateDraft()}
+        />
+      ) : null}
+      {state.saveError ? (
+        <ErrorState
+          error={state.saveError}
+          onRetry={() => void saveDraft()}
+        />
+      ) : null}
+      {state.saveNotice ? (
+        <SaveNoticeView
+          notice={state.saveNotice}
+          onReload={() => void reloadActive()}
+          onRetrySave={() => void saveDraft()}
         />
       ) : null}
       {confirmingClose ? (
@@ -138,7 +198,14 @@ export default function WorkspaceLayout() {
           </button>
           <button
             type="button"
+            disabled={state.saving}
+            title={
+              state.saving
+                ? "A save is in flight — discard only after it settles, or the discarded edits could still reach disk."
+                : undefined
+            }
             onClick={() => {
+              if (state.saving) return;
               // The draft outlives this navigation (the provider sits
               // above the layout), so "discard" must clear it explicitly
               // or every later navigation prompts again.

@@ -132,4 +132,24 @@ agent:
 
 ## Boundary
 
-Apps call `ontology_core.load_workspace` and present its diagnostics; they do not re-validate. `ontology_core` imports nothing from apps and needs only PyYAML. When `domain.yaml` itself fails, cross-file reference checks are skipped with a `WORKSPACE.CROSS_VALIDATION_SKIPPED` warning so diagnostics stay actionable instead of cascading.
+Apps call `ontology_core.load_workspace` and present its diagnostics; they do not re-validate, and writes go through `ontology_core.save_workspace`. `ontology_core` imports nothing from apps and needs only PyYAML. When `domain.yaml` itself fails, cross-file reference checks are skipped with a `WORKSPACE.CROSS_VALIDATION_SKIPPED` warning so diagnostics stay actionable instead of cascading.
+
+## Saving
+
+`ontology_core.save_workspace(path, texts, base_digest=...)` activates a draft bundle as the workspace on disk — the shared persistence the API's save endpoint exposes and the CLI interoperates with. The flow is fixed:
+
+1. **Whole-bundle validation first.** The draft texts run through the same restricted loader and validators as `load_workspace` / `ontology check`; an invalid bundle writes nothing and reports the standard diagnostics.
+2. **Base digest check.** The on-disk bundle is read byte-exact and its digest compared against `base_digest` — the digest the open/inspect call returned. A mismatch (an external or CLI edit, or a file that appeared or disappeared) reports a `conflict` carrying the current on-disk digest; nothing is written.
+3. **Atomic activation.** All four files are staged as synced temporary files inside the workspace directory before the first rename, then each target is replaced with `os.replace` — per-file atomic, and never writing through a symlink. A mid-commit failure restores every already-activated file to its pre-save bytes, so a failed save never leaves a mixed old/new bundle; an incomplete rollback is reported in the failure message. Replaced files keep their permission mode.
+4. **Mid-activation re-verification.** `os.replace` is a blind overwrite, so before each rename the target's bytes are re-checked against what the digest read: a cross-process write that lands between the digest check and activation aborts the save as `conflict` (with rollback) instead of being silently lost. A residual window remains between that re-check and the rename itself — single-digit microseconds per file — and is accepted for v0.2 without inter-process locking.
+5. **Symlinked definition files are refused** — a save never writes through or silently replaces a link the operator placed.
+
+Save outcomes are `saved` / `invalid` / `conflict` / `failed` (see `SaveResult`). Concurrent in-process saves of one directory are serialized; the digest check plus the per-file re-verification form the contract against cross-process writers — a local single-user tool does not take out inter-process locks.
+
+The atomicity above is writer-facing. A *reader* that loads the bundle while activation is in flight can observe a mixed old/new generation: `os.replace` commits one file at a time and there is no read-side locking. That window is microseconds per file, and a reader that lands in it sees valid YAML per file — the cross-file consistency guarantee is on writers (via the digest check), not on mid-commit readers. Callers that need a consistent generation should re-read after the save reports.
+
+Only the four definition files are ever written: a save cannot touch canonical entities/events, observations, traces, proposals, approvals, or any other file in the directory, and it never creates the workspace directory.
+
+### Serialization and round-trip
+
+Saved bytes are exactly the supplied draft text encoded as UTF-8 — the core does not re-serialize the parsed model. A UI editor that edits YAML through a CST-preserving document therefore keeps comments, key order, quoting, and unmodeled fields byte-exact. The round-trip limits live at the editor, not the loader: formatting *inside a node the editor rewrites* follows that library's emission, and anchors/aliases in draft text are preserved verbatim on save but validated post-resolution by the loader.

@@ -14,6 +14,7 @@ import type { WorkspaceFileName } from "../lib/types";
 import {
   draftFilesForRequest,
   initialWorkspaceState,
+  isDraftDirty,
   workspaceReducer,
 } from "./store";
 import type { WorkspaceState } from "./store";
@@ -29,6 +30,20 @@ export interface WorkspaceContextValue {
   revertAll: () => void;
   /** Run draft validation through the API. No-ops while one is in flight. */
   validateDraft: () => Promise<void>;
+  /**
+   * Explicitly save the draft bundle through the API. No-ops while a save
+   * or a reload is in flight, when the draft is clean, or when no base
+   * digest is available — a save without a base can never be
+   * conflict-checked.
+   */
+  saveDraft: () => Promise<void>;
+  /**
+   * Reload the active bundle from disk (the conflict resolution path).
+   * No-ops while a save is in flight — the two must never interleave, or
+   * a save response could roll the reloaded baseline back. The draft is
+   * preserved — it becomes pending edits against the new baseline.
+   */
+  reloadActive: () => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -102,6 +117,65 @@ export function WorkspaceProvider({
     }
   }, [state.workspace, state.validating, state.draftRevision, state.drafts]);
 
+  const saveDraft = useCallback(async () => {
+    const workspace = state.workspace;
+    if (
+      !workspace ||
+      state.saving ||
+      state.reloading ||
+      workspace.digest == null ||
+      !isDraftDirty(state)
+    ) {
+      return;
+    }
+    const requestId = ++requestSeq.current;
+    // Same rule as validate: the API resolves the path under its roots on
+    // every call, so send it exactly as the FDE requested it.
+    const path = workspace.requestedPath;
+    const baseDigest = workspace.digest;
+    const files = draftFilesForRequest(state.drafts);
+    const revision = state.draftRevision;
+    dispatch({ type: "saveStarted", requestId });
+    try {
+      const response = await api.saveWorkspace(path, baseDigest, files);
+      dispatch({ type: "saveFinished", requestId, revision, files, response });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      dispatch({
+        type: "saveFailed",
+        requestId,
+        error:
+          err instanceof ApiError
+            ? err
+            : new ApiError("WEB.UNEXPECTED", String(err), null, false),
+      });
+    }
+  }, [state]);
+
+  const reloadActive = useCallback(async () => {
+    const workspace = state.workspace;
+    if (!workspace || state.saving || state.reloading) return;
+    dispatch({ type: "reloadStarted" });
+    try {
+      const response = await api.openWorkspace(workspace.requestedPath);
+      dispatch({
+        type: "reloaded",
+        requestedPath: workspace.requestedPath,
+        response,
+      });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      dispatch({
+        type: "reloadFailed",
+        requestedPath: workspace.requestedPath,
+        error:
+          err instanceof ApiError
+            ? err
+            : new ApiError("WEB.UNEXPECTED", String(err), null, false),
+      });
+    }
+  }, [state.workspace, state.saving, state.reloading]);
+
   const value = useMemo(
     () => ({
       state,
@@ -112,6 +186,8 @@ export function WorkspaceProvider({
       revertFile,
       revertAll,
       validateDraft,
+      saveDraft,
+      reloadActive,
     }),
     [
       state,
@@ -122,6 +198,8 @@ export function WorkspaceProvider({
       revertFile,
       revertAll,
       validateDraft,
+      saveDraft,
+      reloadActive,
     ],
   );
   return (

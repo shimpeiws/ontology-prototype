@@ -9,13 +9,17 @@
  * - `draftRevision` increments on every draft mutation; a validation result
  *   records the revision it describes, so a draft edit renders any shown
  *   validation stale instead of silently disagreeing with it.
- * - Validation requests are sequenced: a response for a superseded request
- *   is discarded, so stale async results are never shown as current.
+ * - Validation and save requests are sequenced: a response for a
+ *   superseded request is discarded, so stale async results are never
+ *   shown as current. Save and reload are mutually exclusive in flight —
+ *   a reload may only re-base the draft when no save can still land on it.
  */
 
 import type {
   Diagnostic,
   OpenResponse,
+  SaveOutcome,
+  SaveResponse,
   WorkspaceDefinitions,
   WorkspaceFileName,
 } from "../lib/types";
@@ -45,6 +49,23 @@ export interface DraftValidation {
   diagnostics: Diagnostic[];
 }
 
+/**
+ * The outcome of the last save attempt (authoring-flow.md save contract:
+ * success, validation-blocked, conflict, and retryable failure are
+ * distinct states). Stays until the next save attempt or a reload — it
+ * records what the last save did, while the draft badge independently
+ * shows whether edits happened since.
+ */
+export interface SaveNotice {
+  outcome: SaveOutcome;
+  /**
+   * New active digest on `saved`; the current on-disk digest on
+   * `conflict` — the base a reloaded draft saves against; null elsewhere.
+   */
+  digest: string | null;
+  message: string | null;
+}
+
 export interface WorkspaceState {
   workspace: OpenedWorkspace | null;
   drafts: Partial<Record<WorkspaceFileName, string | null>>;
@@ -53,6 +74,12 @@ export interface WorkspaceState {
   lastValidationRequestId: number;
   validation: DraftValidation | null;
   validationError: ApiError | null;
+  saving: boolean;
+  lastSaveRequestId: number;
+  reloading: boolean;
+  saveNotice: SaveNotice | null;
+  /** Transport-level save/reload failure — never a validation finding. */
+  saveError: ApiError | null;
 }
 
 export const initialWorkspaceState: WorkspaceState = {
@@ -63,6 +90,11 @@ export const initialWorkspaceState: WorkspaceState = {
   lastValidationRequestId: 0,
   validation: null,
   validationError: null,
+  saving: false,
+  lastSaveRequestId: 0,
+  reloading: false,
+  saveNotice: null,
+  saveError: null,
 };
 
 export type WorkspaceAction =
@@ -85,7 +117,27 @@ export type WorkspaceAction =
       digest: string;
       diagnostics: Diagnostic[];
     }
-  | { type: "validationFailed"; requestId: number; error: ApiError };
+  | { type: "validationFailed"; requestId: number; error: ApiError }
+  | { type: "saveStarted"; requestId: number }
+  | {
+      type: "saveFinished";
+      requestId: number;
+      /** Draft revision at the moment the save was submitted. */
+      revision: number;
+      /** The exact files that were written on a `saved` outcome. */
+      files: Record<string, string>;
+      response: SaveResponse;
+    }
+  | { type: "saveFailed"; requestId: number; error: ApiError }
+  | { type: "reloadStarted" }
+  | {
+      type: "reloaded";
+      /** Path the reload was issued against — a response for a workspace
+          the user has since left must not overwrite the new one. */
+      requestedPath: string;
+      response: OpenResponse;
+    }
+  | { type: "reloadFailed"; requestedPath: string; error: ApiError };
 
 export function workspaceReducer(
   state: WorkspaceState,
@@ -177,6 +229,115 @@ export function workspaceReducer(
         validationError: action.error,
       };
     }
+    case "saveStarted":
+      return {
+        ...state,
+        saving: true,
+        lastSaveRequestId: action.requestId,
+        saveNotice: null,
+        saveError: null,
+      };
+    case "saveFinished": {
+      // A response for a superseded save is discarded, same rule as
+      // validation: it must never roll the active baseline back.
+      if (action.requestId !== state.lastSaveRequestId) return state;
+      const { response } = action;
+      const next: WorkspaceState = {
+        ...state,
+        saving: false,
+        saveError: null,
+        saveNotice: {
+          outcome: response.outcome,
+          digest: response.digest,
+          message: response.message,
+        },
+      };
+      if (response.outcome === "saved" && state.workspace) {
+        // The files sent are the new active bundle. Drafts are untouched:
+        // if the FDE kept editing while the save was in flight, the draft
+        // stays dirty against the new baseline; otherwise it is clean.
+        next.workspace = {
+          ...state.workspace,
+          digest: response.digest,
+          valid: response.valid,
+          activeFiles: { ...action.files },
+          definitions: response.definitions,
+          diagnostics: response.diagnostics,
+        };
+        // The save's diagnostics describe exactly the saved content —
+        // they are the freshest validation result for that revision.
+        next.validation = {
+          revision: action.revision,
+          valid: response.valid,
+          digest: response.digest ?? "",
+          diagnostics: response.diagnostics,
+        };
+      } else if (response.outcome === "invalid") {
+        // The save ran whole-bundle validation server-side; surface those
+        // diagnostics everywhere validation output is shown.
+        next.validation = {
+          revision: action.revision,
+          valid: false,
+          digest: response.digest ?? "",
+          diagnostics: response.diagnostics,
+        };
+      }
+      // `conflict` and `failed` change no workspace state: the draft is
+      // preserved for the review/retry path.
+      return next;
+    }
+    case "saveFailed": {
+      if (action.requestId !== state.lastSaveRequestId) return state;
+      return {
+        ...state,
+        saving: false,
+        saveError: action.error,
+      };
+    }
+    case "reloadStarted":
+      return {
+        ...state,
+        reloading: true,
+        saveError: null,
+      };
+    case "reloaded": {
+      // The conflict path's "reload": the active baseline updates to what
+      // is on disk now, but the draft is preserved — it is the thing the
+      // FDE is reviewing against the new baseline. Dirty state is
+      // recomputed against the new active files; a draft file identical
+      // to the reloaded content simply stops being dirty.
+      if (
+        !state.workspace ||
+        state.workspace.requestedPath !== action.requestedPath
+      )
+        return state;
+      return {
+        ...state,
+        reloading: false,
+        workspace: {
+          requestedPath: state.workspace.requestedPath,
+          resolvedPath: action.response.workspace.path,
+          digest: action.response.workspace.digest,
+          valid: action.response.valid,
+          activeFiles: action.response.files,
+          definitions: action.response.definitions,
+          diagnostics: action.response.diagnostics,
+        },
+        saveNotice: null,
+        saveError: null,
+      };
+    }
+    case "reloadFailed":
+      if (
+        !state.workspace ||
+        state.workspace.requestedPath !== action.requestedPath
+      )
+        return state;
+      return {
+        ...state,
+        reloading: false,
+        saveError: action.error,
+      };
   }
 }
 
