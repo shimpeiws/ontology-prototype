@@ -196,6 +196,31 @@ describe("domain page", () => {
     expect(files["evaluation.yaml"]).toContain("start_event: JobCompleted");
   });
 
+  it("renaming to an existing sibling name is refused in the UI", async () => {
+    contract.mockResolvedValue(SYNTHETIC_CONTRACT);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("button", { name: "Entity Job" }));
+    await user.click(
+      screen.getAllByRole("button", { name: "Rename…" })[0],
+    );
+    const input = screen.getByLabelText("New entity name");
+    await user.clear(input);
+    await user.type(input, "Person");
+
+    expect(
+      screen.getByRole("button", { name: "Apply rename" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText("'Person' is already used in this scope"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(drafts()["domain.yaml"]).toBe(
+      SYNTHETIC_BUNDLE_OPEN_RESPONSE.files["domain.yaml"],
+    );
+  });
+
   it("cancel on the impact panel changes nothing", async () => {
     contract.mockResolvedValue(SYNTHETIC_CONTRACT);
     const user = userEvent.setup();

@@ -461,7 +461,14 @@ export function applyRename(
       skipped.push(file);
       continue;
     }
-    if (RENAMERS[file](doc, concept, newName)) files[file] = doc.toString();
+    try {
+      // A renamer may throw when the new name collides with an existing
+      // key in this file — the file stays untouched and is reported so
+      // the result never silently holds a half-applied rename.
+      if (RENAMERS[file](doc, concept, newName)) files[file] = doc.toString();
+    } catch {
+      skipped.push(file);
+    }
   }
   return { files, skipped };
 }

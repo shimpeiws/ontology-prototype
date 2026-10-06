@@ -189,7 +189,12 @@ function applyEdit(text: string, fn: Mutator): string | null {
   return doc.toString();
 }
 
-/** Rename a key of a YAML map, preserving its value node and position. */
+/**
+ * Rename a key of a YAML map, preserving its value node and position.
+ * Returns false when `oldKey` is absent; throws when `newKey` already
+ * exists in the same map — a duplicate key would corrupt the draft and
+ * drop the structured editor entirely, so it is rejected, never written.
+ */
 export function renameMapKey(
   doc: Document,
   map: YAMLMap | undefined,
@@ -201,6 +206,11 @@ export function renameMapKey(
     (p) => isScalar(p.key) && p.key.value === oldKey,
   );
   if (!pair) return false;
+  if (
+    map.items.some((p) => isScalar(p.key) && p.key.value === newKey)
+  ) {
+    throw new Error(`'${newKey}' already exists in this scope`);
+  }
   pair.key = doc.createNode(newKey);
   return true;
 }
@@ -311,6 +321,29 @@ export function renameDeclaration(
 
 export type PropertyField = "type" | "required" | "ref" | "description";
 
+/** Sibling names a rename must not collide with, for UI gating and as a
+ *  pre-flight check before applyRename. */
+export function siblingsOf(
+  view: DomainDraftView,
+  concept: Concept,
+): string[] {
+  switch (concept.kind) {
+    case "entity":
+      return view.entities.map((e) => e.name);
+    case "event":
+      return view.events.map((e) => e.name);
+    case "projection":
+      return view.projections.map((p) => p.name);
+    case "property": {
+      const owner =
+        concept.ownerKind === "entities"
+          ? view.entities.find((e) => e.name === concept.owner)
+          : view.events.find((e) => e.name === concept.owner);
+      return (owner?.properties ?? []).map((p) => p.name);
+    }
+  }
+}
+
 export function addProperty(
   text: string,
   owner: { kind: OwnerKind; name: string },
@@ -321,20 +354,6 @@ export function addProperty(
       ["domain", owner.kind, owner.name, "properties", propName],
       doc.createNode({}),
     );
-  });
-}
-
-export function renameProperty(
-  text: string,
-  owner: { kind: OwnerKind; name: string },
-  oldName: string,
-  newName: string,
-): string | null {
-  return applyEdit(text, (doc) => {
-    const spec = doc.getIn(["domain", owner.kind, owner.name]);
-    if (!isMap(spec)) return;
-    const props = spec.get("properties");
-    if (isMap(props)) renameMapKey(doc, props, oldName, newName);
   });
 }
 

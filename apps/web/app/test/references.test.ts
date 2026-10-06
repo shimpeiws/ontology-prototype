@@ -199,6 +199,17 @@ describe("applyRename", () => {
     expect(result.files["domain.yaml"]).toContain("Bill:");
   });
 
+  it("a rename colliding with an existing key skips the colliding file", () => {
+    // Job -> Person: `Person:` already exists under entities, so
+    // domain.yaml cannot carry the rename and is reported as skipped;
+    // reference files still retarget (Person is a declared entity).
+    const concept: Concept = { kind: "entity", name: "Job" };
+    const result = applyRename(SYNTHETIC_BUNDLE_FILES, concept, "Person");
+    expect(result.skipped).toEqual(["domain.yaml"]);
+    expect(result.files["domain.yaml"]).toBeUndefined();
+    expect(result.files["mapping.yaml"]).toContain("entity: Person");
+  });
+
   it("does not touch a same-named scalar elsewhere", () => {
     // mapping `field: status` value must not be renamed — only keys.
     const concept: Concept = {

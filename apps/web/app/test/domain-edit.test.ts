@@ -19,6 +19,7 @@ import {
   setPropertyField,
   setSpecDescription,
   setSubject,
+  siblingsOf,
 } from "../lib/domainEdit";
 import { SYNTHETIC_DOMAIN_YAML } from "./fixtures";
 
@@ -157,6 +158,44 @@ describe("add/remove/rename", () => {
       parseOk(next).events.find((e) => e.name === "InvoiceIssued")
         ?.properties,
     ).toEqual([]);
+  });
+
+  it("renameDeclaration refuses a name that collides with a sibling", () => {
+    // Job -> Person would produce two `Person:` keys — rejected, not written.
+    expect(
+      renameDeclaration(
+        SYNTHETIC_DOMAIN_YAML,
+        { kind: "entity", name: "Job" },
+        "Person",
+      ),
+    ).toBeNull();
+    expect(
+      renameDeclaration(
+        SYNTHETIC_DOMAIN_YAML,
+        {
+          kind: "property",
+          ownerKind: "entities",
+          owner: "Job",
+          name: "assignee",
+        },
+        "status",
+      ),
+    ).toBeNull();
+  });
+
+  it("siblingsOf lists the names a rename must not collide with", () => {
+    const view = parseOk(SYNTHETIC_DOMAIN_YAML);
+    expect(
+      siblingsOf(view, { kind: "entity", name: "Job" }),
+    ).toEqual(["Job", "Person"]);
+    expect(
+      siblingsOf(view, {
+        kind: "property",
+        ownerKind: "entities",
+        owner: "Job",
+        name: "status",
+      }),
+    ).toEqual(["status", "assignee"]);
   });
 
   it("renameDeclaration renames only the key, not references", () => {

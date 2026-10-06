@@ -25,6 +25,7 @@ import {
   setPropertyField,
   setSpecDescription,
   setSubject,
+  siblingsOf,
 } from "../lib/domainEdit";
 import type {
   Concept,
@@ -162,16 +163,23 @@ export function ImpactPanel({
 function RenameControl({
   currentName,
   what,
+  existing,
   onRename,
 }: {
   currentName: string;
   /** Used in the input's accessible label. */
   what: string;
+  /** Sibling names the new name must not collide with (includes
+   *  currentName). */
+  existing: string[];
   onRename: (newName: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(currentName);
   const inputId = `rename-${what}-${currentName.replaceAll(/[^A-Za-z0-9_]/g, "_")}`;
+  const trimmed = value.trim();
+  const collides =
+    trimmed !== currentName && existing.includes(trimmed);
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)}>
@@ -192,9 +200,9 @@ function RenameControl({
       />
       <button
         type="button"
-        disabled={value.trim() === "" || value === currentName}
+        disabled={trimmed === "" || trimmed === currentName || collides}
         onClick={() => {
-          onRename(value);
+          onRename(trimmed);
           setOpen(false);
         }}
       >
@@ -203,6 +211,11 @@ function RenameControl({
       <button type="button" onClick={() => setOpen(false)}>
         Cancel
       </button>
+      {collides ? (
+        <span className="hint" role="alert">
+          '{trimmed}' is already used in this scope
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -269,8 +282,8 @@ function PropertyTable({
   const pathPrefix = `domain.${ownerKind}.${ownerName}.properties`;
   const existing = new Set(properties.map((p) => p.name));
 
-  const rowId = (prop: string, field: string) =>
-    `prop-${ownerKind}-${ownerName}-${prop}-${field}`.replaceAll(
+  const rowId = (index: number, field: string) =>
+    `prop-${ownerKind}-${ownerName}-${index}-${field}`.replaceAll(
       /[^A-Za-z0-9_-]/g,
       "_",
     );
@@ -291,7 +304,7 @@ function PropertyTable({
           </tr>
         </thead>
         <tbody>
-          {properties.map((p) => {
+          {properties.map((p, index) => {
             const concept: Concept = {
               kind: "property",
               ownerKind,
@@ -315,12 +328,12 @@ function PropertyTable({
                   />
                 </td>
                 <td>
-                  <label className="sr-only" htmlFor={rowId(p.name, "type")}>
+                  <label className="sr-only" htmlFor={rowId(index, "type")}>
                     type of {p.name}
                   </label>
                   {propertyTypes.length > 0 ? (
                     <select
-                      id={rowId(p.name, "type")}
+                      id={rowId(index, "type")}
                       value={p.type ?? ""}
                       onChange={(e) =>
                         onEdit((t) =>
@@ -370,11 +383,11 @@ function PropertyTable({
                 <td>
                   {p.type === "ref" ? (
                     <>
-                      <label className="sr-only" htmlFor={rowId(p.name, "ref")}>
+                      <label className="sr-only" htmlFor={rowId(index, "ref")}>
                         ref target of {p.name}
                       </label>
                       <select
-                        id={rowId(p.name, "ref")}
+                        id={rowId(index, "ref")}
                         value={p.ref ?? ""}
                         onChange={(e) =>
                           onEdit((t) =>
@@ -410,11 +423,11 @@ function PropertyTable({
                   />
                 </td>
                 <td>
-                  <label className="sr-only" htmlFor={rowId(p.name, "desc")}>
+                  <label className="sr-only" htmlFor={rowId(index, "desc")}>
                     description of {p.name}
                   </label>
                   <input
-                    id={rowId(p.name, "desc")}
+                    id={rowId(index, "desc")}
                     value={p.description ?? ""}
                     onChange={(e) =>
                       onEdit((t) =>
@@ -434,6 +447,7 @@ function PropertyTable({
                     key={p.name}
                     currentName={p.name}
                     what="property"
+                    existing={properties.map((x) => x.name)}
                     onRename={(n) => onRename(concept, n)}
                   />
                   <button type="button" onClick={() => onRemove(concept)}>
@@ -446,20 +460,20 @@ function PropertyTable({
         </tbody>
       </table>
       <div className="add-row">
-        <label className="sr-only" htmlFor={rowId("new", "name")}>
+        <label className="sr-only" htmlFor={rowId(-1, "new-name")}>
           New property name on {ownerName}
         </label>
         <input
-          id={rowId("new", "name")}
+          id={rowId(-1, "new-name")}
           placeholder="new property name"
           value={newProp}
           onChange={(e) => setNewProp(e.target.value)}
         />
         <button
           type="button"
-          disabled={newProp.trim() === "" || existing.has(newProp)}
+          disabled={newProp.trim() === "" || existing.has(newProp.trim())}
           onClick={() => {
-            const name = newProp;
+            const name = newProp.trim();
             onEdit((t) => addProperty(t, owner, name));
             setNewProp("");
           }}
@@ -500,6 +514,7 @@ function EntityForm({
           key={entity.name}
           currentName={entity.name}
           what="entity"
+          existing={view.entities.map((e) => e.name)}
           onRename={(n) => onRename(concept, n)}
         />
         <button type="button" onClick={() => onRemove(concept)}>
@@ -560,6 +575,7 @@ function EventForm({
           key={event.name}
           currentName={event.name}
           what="event"
+          existing={view.events.map((e) => e.name)}
           onRename={(n) => onRename(concept, n)}
         />
         <button type="button" onClick={() => onRemove(concept)}>
@@ -645,6 +661,7 @@ function ProjectionForm({
           key={projection.name}
           currentName={projection.name}
           what="projection"
+          existing={view.projections.map((p) => p.name)}
           onRename={(n) => onRename(concept, n)}
         />
         <button type="button" onClick={() => onRemove(concept)}>
@@ -725,9 +742,9 @@ function AddRow({
       />
       <button
         type="button"
-        disabled={name.trim() === "" || existing.includes(name)}
+        disabled={name.trim() === "" || existing.includes(name.trim())}
         onClick={() => {
-          onAdd(name);
+          onAdd(name.trim());
           setName("");
         }}
       >
@@ -753,6 +770,15 @@ export function DomainEditor({
   const entityNames = view.entities.map((e) => e.name);
 
   const requestRename = (concept: Concept, newName: string) => {
+    // Defense in depth — RenameControl already disables colliding names;
+    // never produce a duplicate key even if a caller bypasses it.
+    if (
+      siblingsOf(view, concept)
+        .filter((n) => n !== concept.name)
+        .includes(newName)
+    ) {
+      return;
+    }
     const { hits, skipped } = findReferences(state.drafts, concept);
     if (hits.length === 0 && skipped.length === 0) {
       confirmRename(concept, newName, false);
