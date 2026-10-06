@@ -194,9 +194,11 @@ Response `200`:
 - `observations[].record` holds the normalized record (blanks/nulls as
   `null`); rejected rows keep the record and the diagnostics that
   rejected it — a record is accepted whole or rejected whole.
-- `diagnostics` at the payload level covers run-level findings
-  (`INGEST.ENCODING_ERROR`, `PREVIEW.TRUNCATED`, …); per-record findings
-  stay inside each observation.
+- `diagnostics` at the payload level aggregates every finding — run-level
+  (`INGEST.ENCODING_ERROR`, `PREVIEW.TRUNCATED`, …) and per-record. Each
+  observation repeats its own findings under `observations[].diagnostics`,
+  so clients rendering per-row diagnostics should read that field instead
+  of filtering the payload list.
 
 ## Errors
 
