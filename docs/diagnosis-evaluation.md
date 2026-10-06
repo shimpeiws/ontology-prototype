@@ -2,7 +2,7 @@
 
 A small, repeatable evaluation of the diagnosis pipeline that runs entirely
 with controlled provider doubles — no credentials, no network. It exists so
-that a later live-model comparison (the successor of issue #12) measures
+that the live-model comparison (#35, #36) measures
 model quality against an already-frozen, already-documented baseline instead
 of improvising fixtures at comparison time.
 
@@ -41,7 +41,10 @@ compared on.
 | frozen clock | `EVAL_OBSERVED_AT = 2026-10-04T12:00:00Z`, `EVAL_AS_OF = 2026-10-05T00:00:00Z` | `diagnosis_eval.py` |
 
 Bump `EVAL_VERSION` whenever fixtures, criteria, or scenario expectations
-change so recorded reports stay comparable.
+change so recorded reports stay comparable. A bump also invalidates the
+comparison behind the default model decision, so revisit
+[ADR 0002](adr/0002-default-diagnosis-model.md) whenever these pinned versions
+change.
 
 ## Fixtures
 
