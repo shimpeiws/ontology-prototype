@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -120,6 +120,18 @@ def make_proposal(workspace, tmp_path):
     rows = open_store(workspace).proposals()
     (proposal,) = rows
     return proposal
+
+
+def later_snapshot_after_proposal(proposal):
+    created_at = datetime.fromisoformat(
+        proposal["created_at"].replace("Z", "+00:00")
+    ).astimezone(timezone.utc)
+    occurred_on = created_at.date() + timedelta(days=1)
+    snapshot = LATER_CSV.replace("2026-10-05", occurred_on.isoformat())
+    observed_at = datetime.combine(
+        occurred_on, datetime.min.time(), tzinfo=timezone.utc
+    ) + timedelta(hours=12)
+    return snapshot, observed_at
 
 
 def test_later_snapshot_appends_only_new_facts(tmp_path: Path) -> None:
@@ -288,7 +300,10 @@ def test_later_fact_links_to_intervention_as_correlation(
     )
     assert executed.ok
 
-    later = ingest(workspace, tmp_path, "jobs-later.csv", LATER_CSV, LATER)
+    snapshot, observed_at = later_snapshot_after_proposal(proposal)
+    later = ingest(
+        workspace, tmp_path, "jobs-later.csv", snapshot, observed_at
+    )
 
     assert later.ok
     invoice = next(
@@ -759,10 +774,11 @@ def test_fact_links_are_traced_and_queryable(tmp_path: Path) -> None:
             self.events.append((stage, kind, data))
 
     trace = ListTrace()
+    snapshot, observed_at = later_snapshot_after_proposal(proposal)
     later = ingest_snapshot(
         workspace,
-        write_snapshot(tmp_path, "jobs-later.csv", LATER_CSV),
-        observed_at=LATER,
+        write_snapshot(tmp_path, "jobs-later.csv", snapshot),
+        observed_at=observed_at,
         trace=trace,
     )
 
