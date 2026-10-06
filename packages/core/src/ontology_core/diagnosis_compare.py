@@ -431,7 +431,7 @@ def _existing_report_error(dest: Path) -> EvalError:
 
 
 # Errors that mean "this filesystem cannot hard-link", as opposed to a
-# real failure like ENOSPC — only these trigger the create fallback.
+# real failure like ENOSPC.
 _LINK_UNSUPPORTED = frozenset(
     {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}
 )
@@ -455,9 +455,11 @@ def write_comparison_report(
     destination directory, then published with a hard link: an
     interrupted write can strand only a cleaned-up temp file, never a
     partial report at the final path, and a concurrent write to the
-    same path still fails instead of racing a check-then-create.
-    Filesystems that reject hard links fall back to an exclusive
-    create. Pass a fresh path.
+    same path still fails instead of racing a check-then-create. A
+    filesystem that cannot hard-link has no atomic no-overwrite
+    publish, so the write fails cleanly — nothing is created at the
+    destination — rather than risking a stranded partial artifact.
+    Pass a fresh path.
     """
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -480,12 +482,14 @@ def write_comparison_report(
         except OSError as exc:
             if exc.errno == errno.EEXIST:
                 raise _existing_report_error(dest) from None
-            if exc.errno not in _LINK_UNSUPPORTED:
-                raise
-            with dest.open("x", encoding="utf-8") as fh:
-                fh.write(payload)
-    except FileExistsError:
-        raise _existing_report_error(dest) from None
+            if exc.errno in _LINK_UNSUPPORTED:
+                raise EvalError(
+                    f"cannot publish comparison report {dest}: this "
+                    "filesystem does not support atomic no-overwrite "
+                    "writes (hard links); pass an artifact path on a "
+                    "filesystem that does"
+                ) from None
+            raise
     finally:
         tmp.unlink(missing_ok=True)
     return dest

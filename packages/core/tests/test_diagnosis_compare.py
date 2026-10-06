@@ -345,11 +345,12 @@ def test_interrupted_write_leaves_no_stranded_artifact(
     )
 
 
-def test_publish_falls_back_when_links_unsupported(
+def test_publish_fails_cleanly_when_links_unsupported(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """A filesystem that rejects hard links still gets the report via
-    an exclusive create — and the fallback still never overwrites."""
+    """A filesystem without hard links has no atomic no-overwrite
+    publish — the write fails with a clear error and leaves nothing at
+    the destination, so the same path stays usable."""
     probe = prepare(tmp_path / "probe")
     golden = _golden_text(probe.candidates)
     report = run_comparison(
@@ -363,13 +364,16 @@ def test_publish_falls_back_when_links_unsupported(
         raise PermissionError(errno.EPERM, "hard links unsupported")
 
     monkeypatch.setattr(os, "link", denied)
+    with pytest.raises(EvalError, match="hard links"):
+        write_comparison_report(report, out)
+    assert not out.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+    monkeypatch.undo()
     write_comparison_report(report, out)
     assert json.loads(out.read_text())["eval_version"] == (
         report.eval_version
     )
-    assert not list(tmp_path.glob("*.tmp"))
-    with pytest.raises(EvalError, match="already exists"):
-        write_comparison_report(report, out)
 
 
 def test_report_artifact_matches_create_permissions(
