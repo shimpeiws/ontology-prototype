@@ -24,7 +24,14 @@ The Web app is presentation only:
   active bundle. Editing marks a file `unsaved`, never mutates the active
   baseline, and invalidates any displayed draft-validation result.
   "Validate draft" posts the whole bundle to `/api/v1/workspaces/drafts/validate`.
-  Saving to disk is not implemented here (#19).
+  "Save" is explicit only (never autosave): it posts the draft with the
+  active digest as `base_digest` to `/api/v1/workspaces/save`, and the four
+  outcomes render distinctly — `saved` rebases the active bundle to the
+  sent files, `invalid` surfaces the core diagnostics the save ran,
+  `conflict` offers an explicit reload that re-bases the draft without
+  losing it, and `failed` offers retry. Save is disabled while the draft
+  is clean or the active digest is unavailable, because a baseless save
+  can never be conflict-checked.
 - The Domain page offers structured authoring on top of the raw editor: a
   visual graph of entities/events/projections, an inspectable list, and
   per-concept forms that mutate the draft `domain.yaml` through the

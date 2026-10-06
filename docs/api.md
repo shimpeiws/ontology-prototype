@@ -123,6 +123,49 @@ valid, and the cross-definition `diagnostics` — the same list the core
 produces for the equivalent on-disk bundle, so a draft and the CLI always
 agree.
 
+### `POST /api/v1/workspaces/save`
+
+Validate a draft bundle and activate it as the workspace on disk — the
+explicit save behind every editor (#19).
+
+```json
+{
+  "path": "job-invoicing",
+  "base_digest": "<digest returned by workspaces/open>",
+  "files": { "domain.yaml": "…", "mapping.yaml": "…", "evaluation.yaml": "…", "agent.yaml": "…" }
+}
+```
+
+`base_digest` is required and non-empty: a save that cannot verify what
+the draft was based on never runs. Response `200` carries a domain
+outcome, never a transport error:
+
+```json
+{
+  "api_version": "v1",
+  "outcome": "saved",
+  "valid": true,
+  "digest": "…",
+  "definitions": { "domain": {…}, "mapping": {…}, "evaluation": {…}, "agent": {…} },
+  "diagnostics": [],
+  "message": null
+}
+```
+
+| outcome | Meaning | digest |
+| --- | --- | --- |
+| `saved` | The bundle validated and activated atomically; `definitions` is the new active workspace. | Digest of the saved bundle — the client's new base. |
+| `invalid` | The draft failed whole-bundle validation; nothing was written. `diagnostics` are the core's, identical to `drafts/validate` on the same texts. | The draft digest. |
+| `conflict` | The on-disk bundle no longer matches `base_digest` — an external/CLI edit or a file appearing/disappearing since open. Nothing was written; the client should reload (re-open) and review before retrying. | The current on-disk digest. |
+| `failed` | Persistence failed: not a directory, an unreadable or symlinked definition file, or an I/O error during activation. A commit that failed partway is rolled back to the pre-save bytes. `message` carries the detail; a retry is meaningful. | null |
+
+`files` keys outside the four workspace file names are rejected with
+`API.UNKNOWN_WORKSPACE_FILE`. The save writes only the four definition
+files — never canonical state, observations, traces, proposals, or other
+files in the directory — and never creates the workspace directory
+itself. Activation semantics (staging, per-file rename, rollback) are in
+[workspace.md](workspace.md#saving).
+
 ## Errors
 
 API failures are structured errors, never diagnostics: the `diagnostics`
@@ -157,9 +200,8 @@ uses the same `{ "error": { "code", "message" } }` shape.
   `load_workspace_texts`, `bundle_digest`).
 - `apps/cli` keeps using the same files and the same loader — the API and
   CLI accept and reject identical configurations.
+- `packages/core` also owns workspace persistence: `save_workspace`
+  performs whole-bundle validation, the base-digest conflict check, and
+  atomic activation with rollback — the API maps its outcome verbatim.
 - The workspace service (`WorkspaceService` protocol) is injectable via
   `create_app(config, service)` for tests and embeddings.
-
-Saving drafts to disk, digest conflict detection, and atomic activation
-belong to the save/interoperability issue (#19) and are intentionally not
-endpoints yet.

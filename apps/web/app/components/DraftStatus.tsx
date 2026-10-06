@@ -22,6 +22,11 @@ export function DraftStatusBadge({ state }: { state: WorkspaceState }) {
       <span className={`badge ${dirty ? "badge-draft" : "badge-active"}`}>
         {dirty ? "unsaved draft" : "active"}
       </span>
+      {state.saving ? (
+        <span className="badge badge-validating" role="status">
+          saving…
+        </span>
+      ) : null}
       {state.validating ? (
         <span className="badge badge-validating" role="status">
           validating…

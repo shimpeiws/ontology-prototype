@@ -128,9 +128,11 @@ from .workspace import (
     SUPPORTED_SCHEMA_VERSION,
     WORKSPACE_FILES,
     LoadResult,
+    SaveResult,
     bundle_digest,
     load_workspace,
     load_workspace_texts,
+    save_workspace,
 )
 
 __version__ = "0.0.1"
@@ -201,6 +203,7 @@ __all__ = [
     "RunBudget",
     "SCENARIOS",
     "SUPPORTED_SCHEMA_VERSION",
+    "SaveResult",
     "Scenario",
     "ScenarioResult",
     "SourceSpec",
@@ -243,6 +246,7 @@ __all__ = [
     "run_projection",
     "run_scenario",
     "run_suite",
+    "save_workspace",
     "score_run",
     "trace_anchor",
     "trace_overview",

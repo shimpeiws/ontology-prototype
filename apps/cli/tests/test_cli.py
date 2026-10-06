@@ -65,6 +65,28 @@ def test_parity_core_and_cli(tmp_path: Path, capsys) -> None:
         assert exit_code == expected, name
 
 
+def test_check_accepts_a_workspace_saved_via_core(tmp_path: Path, capsys) -> None:
+    """Issue #19 round trip: a bundle activated by core persistence (the
+    path the API's save endpoint drives) is exactly what `ontology check`
+    loads — UI saves and CLI loads share one format and one validator."""
+    from ontology_core import bundle_digest, save_workspace
+
+    workspace = copy_example(tmp_path)
+    texts = {
+        f"{name}.yaml": (workspace / f"{name}.yaml").read_text(
+            encoding="utf-8"
+        )
+        for name in ("domain", "mapping", "evaluation", "agent")
+    }
+    base = bundle_digest(texts)
+    texts["domain.yaml"] += "\n# saved through the authoring UI\n"
+    result = save_workspace(workspace, texts, base_digest=base)
+    assert result.status == "saved"
+    capsys.readouterr()
+    assert main(["check", str(workspace)]) == EXIT_OK
+    assert "workspace valid" in capsys.readouterr().out
+
+
 def test_module_entry_point(tmp_path: Path) -> None:
     completed = subprocess.run(
         [sys.executable, "-m", "ontology_cli", "check", str(EXAMPLE_WORKSPACE)],

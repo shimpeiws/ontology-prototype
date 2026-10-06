@@ -27,7 +27,9 @@ import {
 } from "../workspace/store";
 import type { WorkspaceState } from "../workspace/store";
 import {
+  SYNTHETIC_DIAGNOSTIC,
   SYNTHETIC_OPEN_RESPONSE,
+  SYNTHETIC_SAVE_RESPONSE,
   SYNTHETIC_VALIDATE_RESPONSE,
 } from "./fixtures";
 
@@ -35,11 +37,18 @@ vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
   return {
     ...mod,
-    api: { ...mod.api, validateDraft: vi.fn() },
+    api: {
+      ...mod.api,
+      validateDraft: vi.fn(),
+      saveWorkspace: vi.fn(),
+      openWorkspace: vi.fn(),
+    },
   };
 });
 
 const validateDraft = vi.mocked(api.validateDraft);
+const saveWorkspace = vi.mocked(api.saveWorkspace);
+const openWorkspace = vi.mocked(api.openWorkspace);
 
 // React Router creates an AbortSignal during client-side navigation and
 // passes it to `new Request` — Node's undici Request, which rejects
@@ -100,6 +109,8 @@ function renderLayout(state: WorkspaceState) {
 
 afterEach(() => {
   validateDraft.mockReset();
+  saveWorkspace.mockReset();
+  openWorkspace.mockReset();
 });
 
 describe("workspace layout", () => {
@@ -230,6 +241,143 @@ describe("workspace layout", () => {
     validateDraft.mockResolvedValue(SYNTHETIC_VALIDATE_RESPONSE);
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText("draft invalid");
+  });
+
+  it("Save sends the requested path, base digest, and current draft files", async () => {
+    saveWorkspace.mockResolvedValue(SYNTHETIC_SAVE_RESPONSE);
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveWorkspace).toHaveBeenCalledTimes(1));
+    expect(saveWorkspace).toHaveBeenCalledWith(
+      "job-invoicing",
+      "synthetic-digest",
+      expect.objectContaining({ "domain.yaml": "changed: true" }),
+    );
+    await screen.findByText(/Saved to disk/);
+    // The draft is now the active bundle — the badge flips to active.
+    await screen.findByText("active");
+  });
+
+  it("Save is disabled while the draft is clean", () => {
+    renderLayout(cleanState());
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("Save is disabled when the active digest is unavailable", () => {
+    const state = workspaceReducer(
+      workspaceReducer(initialWorkspaceState, {
+        type: "opened",
+        requestedPath: "job-invoicing",
+        response: {
+          ...SYNTHETIC_OPEN_RESPONSE,
+          workspace: { ...SYNTHETIC_OPEN_RESPONSE.workspace, digest: null },
+        },
+      }),
+      { type: "edited", file: "domain.yaml", text: "changed: true" },
+    );
+    renderLayout(state);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("a conflicted save offers an explicit reload that preserves the draft", async () => {
+    saveWorkspace.mockResolvedValue({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "conflict",
+      digest: "on-disk-now",
+      message: "workspace files changed on disk",
+    });
+    const reloaded = {
+      ...SYNTHETIC_OPEN_RESPONSE,
+      workspace: {
+        ...SYNTHETIC_OPEN_RESPONSE.workspace,
+        digest: "on-disk-now",
+      },
+      files: {
+        ...SYNTHETIC_OPEN_RESPONSE.files,
+        "agent.yaml": "# changed outside the UI\n",
+      },
+    };
+    openWorkspace.mockResolvedValue(reloaded);
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("changed on disk");
+
+    await user.click(
+      screen.getByRole("button", { name: "Reload active bundle" }),
+    );
+    await waitFor(() =>
+      expect(openWorkspace).toHaveBeenCalledWith("job-invoicing"),
+    );
+    // Conflict notice cleared; the draft stays dirty against the new base.
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).toBeNull(),
+    );
+    await screen.findByText("unsaved draft");
+    // Saving again sends the reloaded digest as the base.
+    saveWorkspace.mockResolvedValue(SYNTHETIC_SAVE_RESPONSE);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(saveWorkspace).toHaveBeenCalledTimes(2));
+    expect(saveWorkspace).toHaveBeenLastCalledWith(
+      "job-invoicing",
+      "on-disk-now",
+      expect.any(Object),
+    );
+  });
+
+  it("a validation-blocked save shows a distinct state, not a transport error", async () => {
+    saveWorkspace.mockResolvedValue({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "invalid",
+      valid: false,
+      diagnostics: [SYNTHETIC_DIAGNOSTIC],
+    });
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("validation errors");
+  });
+
+  it("a failed save offers retry", async () => {
+    saveWorkspace.mockResolvedValueOnce({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "failed",
+      digest: null,
+      message: "disk full",
+    });
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Save failed");
+    expect(alert).toHaveTextContent("disk full");
+
+    saveWorkspace.mockResolvedValueOnce(SYNTHETIC_SAVE_RESPONSE);
+    await user.click(screen.getByRole("button", { name: "Retry save" }));
+    await screen.findByText(/Saved to disk/);
+  });
+
+  it("a save transport failure shows an error with retry, never diagnostics", async () => {
+    saveWorkspace.mockRejectedValueOnce(
+      new ApiError("WEB.API_UNREACHABLE", "API is down", null, true),
+    );
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("WEB.API_UNREACHABLE");
+
+    saveWorkspace.mockResolvedValueOnce(SYNTHETIC_SAVE_RESPONSE);
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText(/Saved to disk/);
   });
 
   it("preventDefault is set on beforeunload only while drafts are unsaved", async () => {

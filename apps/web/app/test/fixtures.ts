@@ -13,6 +13,7 @@ import type {
   Diagnostic,
   DraftValidateResponse,
   OpenResponse,
+  SaveResponse,
 } from "../lib/types";
 
 export const SYNTHETIC_FILES: Record<string, string> = {
@@ -130,6 +131,16 @@ export const SYNTHETIC_VALIDATE_RESPONSE: DraftValidateResponse = {
   digest: "synthetic-draft-digest",
   definitions: null,
   diagnostics: [SYNTHETIC_DIAGNOSTIC],
+};
+
+export const SYNTHETIC_SAVE_RESPONSE: SaveResponse = {
+  api_version: "v1",
+  outcome: "saved",
+  valid: true,
+  digest: "synthetic-saved-digest",
+  definitions: null,
+  diagnostics: [],
+  message: null,
 };
 
 /**

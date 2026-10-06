@@ -28,6 +28,8 @@ from .schemas import (
     ErrorResponse,
     OpenRequest,
     OpenResponse,
+    SaveRequest,
+    SaveResponse,
     WorkspaceRef,
 )
 from .service import (
@@ -181,6 +183,32 @@ def create_app(
             digest=result.digest,
             definitions=result.definitions,
             diagnostics=[DiagnosticOut(**d.to_dict()) for d in result.diagnostics],
+        )
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/save",
+        response_model=SaveResponse,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def save_workspace_endpoint(
+        payload: SaveRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> SaveResponse:
+        result = service.save(payload.path, payload.files, payload.base_digest)
+        return SaveResponse(
+            api_version=API_VERSION,
+            outcome=result.outcome,
+            valid=result.valid,
+            digest=result.digest,
+            definitions=result.definitions,
+            diagnostics=[DiagnosticOut(**d.to_dict()) for d in result.diagnostics],
+            message=result.message,
         )
 
     return app

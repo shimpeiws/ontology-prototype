@@ -1,13 +1,24 @@
-"""Workspace loading: the four checked definition files, validated together.
+"""Workspace loading and saving: the four checked definition files.
 
 A workspace is a directory containing exactly ``domain.yaml``,
 ``mapping.yaml``, ``evaluation.yaml``, and ``agent.yaml``. Loading is
 data-only: no environment interpolation, no external includes, no execution.
+
+Saving activates a draft bundle: whole-bundle validation first, a base
+digest check against the on-disk files, then an all-or-nothing activation
+(staged temp files, per-file rename, rollback on failure). A save writes
+the draft text byte-exact — comments and formatting survive to the extent
+the editor preserved them — and never touches anything outside the four
+definition files.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
+import stat
+import tempfile
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -155,6 +166,281 @@ def bundle_digest(texts: Mapping[str, str]) -> str:
         digest.update(b"\n")
         digest.update(data)
     return digest.hexdigest()
+
+
+@dataclass
+class SaveResult:
+    """Outcome of ``save_workspace``.
+
+    ``status`` is one of:
+
+    - ``"saved"`` — the bundle validated, ``base_digest`` matched the
+      on-disk bundle, and all four files were activated. ``digest`` is the
+      new active digest (equal to ``bundle_digest(texts)``) and
+      ``workspace`` holds the validated definitions.
+    - ``"invalid"`` — validation failed; nothing was written.
+      ``diagnostics`` carries exactly what ``load_workspace_texts``
+      reports, so a blocked save explains itself identically to
+      ``ontology check``. ``digest`` is the draft digest.
+    - ``"conflict"`` — the on-disk bundle no longer matches
+      ``base_digest`` (an external or CLI edit, or a file that appeared
+      or disappeared since the base was captured); nothing was written.
+      ``digest`` is the current on-disk digest — the base a reloaded
+      client must present to save.
+    - ``"failed"`` — the workspace could not be persisted: not a
+      directory, an unreadable or non-regular (e.g. symlinked) definition
+      file, or an I/O error during activation. A commit that failed
+      partway is rolled back to the pre-save bytes; ``message`` describes
+      the failure and says so explicitly when a rollback was incomplete.
+    """
+
+    status: str
+    diagnostics: list[Diagnostic] = field(default_factory=list)
+    digest: str | None = None
+    workspace: Workspace | None = None
+    message: str | None = None
+
+
+_save_locks_guard = threading.Lock()
+_save_locks: dict[str, threading.Lock] = {}
+
+
+def _save_lock(root: Path) -> threading.Lock:
+    """Serialize commit sequences per workspace directory.
+
+    The API serves saves from a threadpool, so two in-process saves of the
+    same directory must not interleave their rename/rollback steps.
+    Cross-process writers (e.g. the CLI) are covered by the base-digest
+    check, not this lock.
+    """
+    with _save_locks_guard:
+        lock = _save_locks.get(str(root))
+        if lock is None:
+            lock = threading.Lock()
+            _save_locks[str(root)] = lock
+        return lock
+
+
+def save_workspace(
+    path: str | Path, texts: Mapping[str, str], *, base_digest: str
+) -> SaveResult:
+    """Validate a draft bundle and activate it as the workspace on disk.
+
+    ``texts`` maps the four workspace file names to their draft YAML text,
+    exactly as supplied to ``load_workspace_texts``. ``base_digest`` is the
+    digest of the on-disk bundle the draft was based on (the digest an
+    open/inspect call returned): the save proceeds only when the on-disk
+    bundle still matches it, so an external edit since the base was
+    captured produces ``"conflict"`` rather than a silent overwrite.
+
+    The write is all-or-nothing: all four files are staged as synced temp
+    files in the workspace directory before the first rename, each target
+    is then replaced with ``os.replace``, and a mid-commit failure
+    restores every already-activated file to the exact bytes the digest
+    check read. Only the four definition files are ever written — saving
+    cannot touch canonical state, observations, traces, proposals, or any
+    other file in the directory.
+    """
+    root = Path(path)
+    with _save_lock(root):
+        return _save_workspace(root, texts, base_digest)
+
+
+def _save_workspace(
+    root: Path, texts: Mapping[str, str], base_digest: str
+) -> SaveResult:
+    # Whole-bundle validation first — the same authoritative path the
+    # CLI's `ontology check` runs, so a saveable draft is exactly a
+    # CLI-loadable bundle. An invalid draft never reaches the filesystem.
+    result = load_workspace_texts(texts, path=root)
+    draft_digest = bundle_digest(texts)
+    if not result.ok:
+        return SaveResult(
+            status="invalid",
+            diagnostics=result.diagnostics,
+            digest=draft_digest,
+        )
+
+    try:
+        is_dir = root.is_dir()
+    except (OSError, ValueError):
+        is_dir = False
+    if not is_dir:
+        return _save_failed(f"workspace path is not a directory: {root}")
+
+    # Read the on-disk bundle byte-exact — the same recipe the API's open
+    # response uses, so a digest captured at open compares equal here.
+    # Symlinked definition files are refused outright: activation must
+    # never write through a link, and hashing a link target that may live
+    # outside the workspace would grant a content-comparison oracle. The
+    # pre-save bytes are kept for rollback, so a failed commit restores
+    # exactly the state the digest check verified.
+    disk_texts: dict[str, str] = {}
+    disk_bytes: dict[str, bytes] = {}
+    disk_modes: dict[str, int] = {}
+    for filename in WORKSPACE_FILES.values():
+        file_path = root / filename
+        try:
+            file_stat = os.lstat(file_path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            return _save_failed(
+                f"cannot stat {filename}: {exc.strerror or exc}"
+            )
+        if stat.S_ISLNK(file_stat.st_mode):
+            return _save_failed(
+                f"{filename} is a symbolic link; refusing to save over it"
+            )
+        if not stat.S_ISREG(file_stat.st_mode):
+            return _save_failed(f"{filename} is not a regular file")
+        try:
+            data = file_path.read_bytes()
+        except OSError as exc:
+            return _save_failed(
+                f"cannot read {filename}: {exc.strerror or exc}"
+            )
+        try:
+            disk_texts[filename] = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return _save_failed(f"cannot read {filename}: {exc}")
+        disk_bytes[filename] = data
+        disk_modes[filename] = stat.S_IMODE(file_stat.st_mode)
+
+    active_digest = bundle_digest(disk_texts)
+    if base_digest != active_digest:
+        return SaveResult(
+            status="conflict",
+            digest=active_digest,
+            message=(
+                "workspace files changed on disk since the base digest was "
+                "captured; reload the active bundle before saving"
+            ),
+        )
+
+    failure = _activate_bundle(root, texts, disk_bytes, disk_modes)
+    if failure is not None:
+        return _save_failed(failure)
+    return SaveResult(
+        status="saved",
+        diagnostics=result.diagnostics,
+        digest=draft_digest,
+        workspace=result.workspace,
+    )
+
+
+def _save_failed(message: str) -> SaveResult:
+    return SaveResult(status="failed", message=message)
+
+
+def _activate_bundle(
+    root: Path,
+    texts: Mapping[str, str],
+    disk_bytes: dict[str, bytes],
+    disk_modes: dict[str, int],
+) -> str | None:
+    """Stage then activate the four files; return a failure message or None.
+
+    Commit/rollback strategy: every new file is fully written and synced
+    to a temporary name in the workspace directory *before* the first
+    rename touches the active set, so a staging failure writes nothing.
+    Activation then replaces each target in ``WORKSPACE_FILES`` order
+    (``os.replace`` is per-file atomic and replaces — never writes
+    through — a symlink). A mid-commit failure restores each
+    already-activated file from the pre-save bytes held in memory, so a
+    failed save never leaves a mixed old/new bundle.
+    """
+    staged: dict[str, Path] = {}
+    committed: list[str] = []
+    try:
+        for filename in WORKSPACE_FILES.values():
+            data = texts[filename].encode("utf-8")
+            fd, tmp = tempfile.mkstemp(
+                dir=root, prefix=f".{filename}.", suffix=".new"
+            )
+            tmp_path = Path(tmp)
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                # Replaced files keep their mode; brand-new files get a
+                # plain readable mode instead of mkstemp's 0o600.
+                os.chmod(tmp_path, disk_modes.get(filename, 0o644))
+            except OSError:
+                tmp_path.unlink(missing_ok=True)
+                raise
+            staged[filename] = tmp_path
+
+        for filename in WORKSPACE_FILES.values():
+            os.replace(staged[filename], root / filename)
+            committed.append(filename)
+    except OSError as exc:
+        problems = _rollback(root, committed, disk_bytes, disk_modes)
+        for tmp_path in staged.values():
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                problems.append(f"leftover staging file {tmp_path.name}")
+        message = f"failed to activate workspace: {exc.strerror or exc}"
+        if problems:
+            message += "; rollback incomplete: " + "; ".join(problems)
+        return message
+
+    _fsync_dir(root)
+    return None
+
+
+def _rollback(
+    root: Path,
+    committed: list[str],
+    disk_bytes: dict[str, bytes],
+    disk_modes: dict[str, int],
+) -> list[str]:
+    """Restore files activated before a commit failure.
+
+    Returns a list of per-file problems; an empty list means every
+    committed file is back to its pre-save bytes. Files the commit never
+    reached were never touched, and files absent before the save are
+    removed rather than restored.
+    """
+    problems: list[str] = []
+    for filename in reversed(committed):
+        target = root / filename
+        original = disk_bytes.get(filename)
+        try:
+            if original is None:
+                target.unlink(missing_ok=True)
+            else:
+                fd, tmp = tempfile.mkstemp(
+                    dir=root, prefix=f".{filename}.", suffix=".restore"
+                )
+                tmp_path = Path(tmp)
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        handle.write(original)
+                    os.chmod(tmp_path, disk_modes.get(filename, 0o644))
+                    os.replace(tmp_path, target)
+                except OSError:
+                    tmp_path.unlink(missing_ok=True)
+                    raise
+        except OSError as exc:
+            problems.append(f"{filename}: {exc.strerror or exc}")
+    return problems
+
+
+def _fsync_dir(root: Path) -> None:
+    """Best-effort durability for the renamed directory entries."""
+    try:
+        fd = os.open(root, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def _validate_documents(

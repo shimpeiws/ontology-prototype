@@ -4,6 +4,7 @@ import { Navigate, NavLink, Outlet, useBlocker } from "react-router";
 import { useWorkspace } from "../workspace/context";
 import { isDraftDirty } from "../workspace/store";
 import { DraftStatusBadge } from "../components/DraftStatus";
+import { SaveNoticeView } from "../components/SaveNotice";
 import { ErrorState } from "../components/states";
 
 export function meta() {
@@ -19,7 +20,14 @@ const NAV_ITEMS = [
 ] as const;
 
 export default function WorkspaceLayout() {
-  const { state, close, revertAll, validateDraft } = useWorkspace();
+  const {
+    state,
+    close,
+    revertAll,
+    validateDraft,
+    saveDraft,
+    reloadActive,
+  } = useWorkspace();
   const dirty = isDraftDirty(state);
   // The blocker must consult the latest render's state, not the closure it
   // was registered with: React runs a descendant <Navigate>'s effect before
@@ -85,6 +93,20 @@ export default function WorkspaceLayout() {
           >
             Validate draft
           </button>
+          <button
+            type="button"
+            onClick={() => void saveDraft()}
+            disabled={
+              state.saving || !dirty || state.workspace.digest === null
+            }
+            title={
+              state.workspace.digest === null
+                ? "The active bundle digest is unavailable, so a save can never be conflict-checked — reload the workspace."
+                : undefined
+            }
+          >
+            {state.saving ? "Saving…" : "Save"}
+          </button>
           <button type="button" onClick={revertAll} disabled={!dirty}>
             Revert all
           </button>
@@ -97,6 +119,19 @@ export default function WorkspaceLayout() {
         <ErrorState
           error={state.validationError}
           onRetry={() => void validateDraft()}
+        />
+      ) : null}
+      {state.saveError ? (
+        <ErrorState
+          error={state.saveError}
+          onRetry={() => void saveDraft()}
+        />
+      ) : null}
+      {state.saveNotice ? (
+        <SaveNoticeView
+          notice={state.saveNotice}
+          onReload={() => void reloadActive()}
+          onRetrySave={() => void saveDraft()}
         />
       ) : null}
       {confirmingClose ? (
