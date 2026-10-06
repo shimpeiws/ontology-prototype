@@ -145,6 +145,7 @@ class ComparisonReport:
     prompt_version: str
     generated_at: str
     dataset: str
+    workspace_dir: str
     projection_run_id: str
     candidates: int
     candidate_ids: list[str]
@@ -162,6 +163,7 @@ class ComparisonReport:
             "prompt_version": self.prompt_version,
             "generated_at": self.generated_at,
             "dataset": self.dataset,
+            "workspace_dir": self.workspace_dir,
             "projection_run_id": self.projection_run_id,
             "candidates": self.candidates,
             "candidate_ids": self.candidate_ids,
@@ -227,24 +229,46 @@ def compare_subjects(
             )
             continue
         started = time.monotonic()
-        report = evaluate_prepared(
-            prepared,
-            adapter,
-            model=spec.model,
-            repeats=repeats,
-            budget=budget,
-        )
-        latency = time.monotonic() - started
-        digests: list[str | None] = []
-        run_ids: list[str] = []
-        for run in report.runs:
-            if run.run_id is None:
-                continue
-            run_ids.append(run.run_id)
-            record = get_diagnosis_run(
-                prepared.workspace, run.run_id, store=prepared.store
+        try:
+            report = evaluate_prepared(
+                prepared,
+                adapter,
+                model=spec.model,
+                repeats=repeats,
+                budget=budget,
             )
-            digests.append(record.get("input_digest") if record else None)
+            digests: list[str | None] = []
+            run_ids: list[str] = []
+            for run in report.runs:
+                if run.run_id is None:
+                    continue
+                run_ids.append(run.run_id)
+                record = get_diagnosis_run(
+                    prepared.workspace, run.run_id, store=prepared.store
+                )
+                digests.append(
+                    record.get("input_digest") if record else None
+                )
+        except (ProviderError, EvalError) as exc:
+            # Trusted, sanitized messages (same rule as resolution).
+            unavailable.append(
+                UnavailableSubject(
+                    spec.provider, spec.model, f"evaluation failed: {exc}"
+                )
+            )
+            continue
+        except Exception as exc:
+            # One subject's unexpected failure must not lose the evidence
+            # other subjects already produced; only the class is recorded.
+            unavailable.append(
+                UnavailableSubject(
+                    spec.provider,
+                    spec.model,
+                    f"evaluation failed: unexpected {type(exc).__name__}",
+                )
+            )
+            continue
+        latency = time.monotonic() - started
         shared = (
             digests[0]
             if digests and all(d == digests[0] for d in digests)
@@ -283,6 +307,7 @@ def compare_subjects(
         prompt_version=PROMPT_VERSION,
         generated_at=datetime.now(timezone.utc).isoformat(),
         dataset=prepared.dataset,
+        workspace_dir=str(prepared.workspace_dir),
         projection_run_id=prepared.run_id,
         candidates=len(prepared.candidates),
         candidate_ids=[c["subject"]["id"] for c in prepared.candidates],
@@ -330,16 +355,18 @@ def write_comparison_report(
     """Write the comparison artifact as JSON; never overwrites.
 
     A comparison report is evidence — silently replacing one would
-    destroy the record a previous run produced. Pass a fresh path.
+    destroy the record a previous run produced. The file is created
+    exclusively (``"x"``), so a concurrent write to the same path fails
+    instead of racing a check-then-create. Pass a fresh path.
     """
     dest = Path(path)
-    if dest.exists():
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with dest.open("x", encoding="utf-8") as fh:
+            fh.write(json.dumps(report.to_dict(), indent=2) + "\n")
+    except FileExistsError:
         raise EvalError(
             f"comparison report {dest} already exists; "
             "pass a fresh artifact path"
-        )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(
-        json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8"
-    )
+        ) from None
     return dest

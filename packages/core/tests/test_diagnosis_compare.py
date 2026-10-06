@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from ontology_core import (
+    RUNTIME_DIR,
     EvalError,
     ProviderError,
     RunBudget,
@@ -23,6 +24,7 @@ from ontology_core import (
     run_comparison,
     write_comparison_report,
 )
+import ontology_core.diagnosis_compare as diagnosis_compare
 from ontology_core.diagnosis_eval import FailingProvider, ScriptedProvider
 
 from test_diagnosis_eval import _golden_text
@@ -149,6 +151,71 @@ def test_unexpected_resolution_error_is_sanitized(tmp_path: Path) -> None:
 
     assert report.unavailable[0].reason == "unexpected RuntimeError"
     assert marker not in json.dumps(report.to_dict())
+
+
+def test_evaluation_error_recorded_not_raised(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """FIND-002: an unexpected exception inside one subject's evaluation
+    is recorded in ``unavailable`` (class name only) instead of escaping —
+    the evidence already produced by other subjects still reaches the
+    artifact."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    resolve = _resolver(
+        **{
+            "double-a": ScriptedProvider("double-a", golden),
+            "double-b": ScriptedProvider("double-b", golden),
+        }
+    )
+    real_evaluate = diagnosis_compare.evaluate_prepared
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("store exploded: sk-secret-ctx")
+        return real_evaluate(*args, **kwargs)
+
+    monkeypatch.setattr(diagnosis_compare, "evaluate_prepared", flaky)
+    out = tmp_path / "comparison.json"
+    report = run_comparison(
+        tmp_path / "scratch",
+        _specs(("double-a", "eval/a"), ("double-b", "eval/b")),
+        resolve,
+        report_path=out,
+    )
+
+    # Subject 1's evidence survived; subject 2 is recorded, not raised.
+    assert [s.model for s in report.subjects] == ["eval/a"]
+    assert report.subjects[0].status == "ok"
+    un = report.unavailable
+    assert [(u.provider, u.model) for u in un] == [("double-b", "eval/b")]
+    assert un[0].reason == "evaluation failed: unexpected RuntimeError"
+    artifact = out.read_text()
+    assert "sk-secret-ctx" not in artifact
+    assert "evaluation failed: unexpected RuntimeError" in artifact
+
+
+def test_artifact_records_workspace_path(tmp_path: Path) -> None:
+    """FIND-003: the artifact names the materialized workspace whose
+    .ontology store holds every recorded run for audit."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    out = tmp_path / "comparison.json"
+    report = run_comparison(
+        tmp_path / "scratch",
+        _specs(("double-a", "eval/a")),
+        _resolver(**{"double-a": ScriptedProvider("double-a", golden)}),
+        report_path=out,
+    )
+
+    workspace_dir = Path(report.workspace_dir)
+    assert workspace_dir == tmp_path / "scratch" / "shared"
+    assert (workspace_dir / RUNTIME_DIR).is_dir()
+    assert json.loads(out.read_text())["workspace_dir"] == str(
+        workspace_dir
+    )
 
 
 def test_report_artifact_never_overwrites(tmp_path: Path) -> None:

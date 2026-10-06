@@ -108,6 +108,27 @@ def test_subject_split_on_first_colon(tmp_path: Path, capsys) -> None:
     assert payload["subjects"][0]["model"] == "eval/model:free"
 
 
+def test_compare_human_output(tmp_path: Path, capsys) -> None:
+    """The non-JSON output names the artifact and the audit workspace."""
+    out = tmp_path / "report.json"
+    code = main(
+        [
+            "diagnose-compare",
+            str(tmp_path / "scratch"),
+            "--subject",
+            "stub:eval/a",
+            "--out",
+            str(out),
+        ]
+    )
+    text = capsys.readouterr().out
+    assert code == 0
+    assert str(out) in text
+    assert ".ontology store" in text
+    assert "shared input" in text
+    assert "[ok] stub/eval/a" in text
+
+
 def test_invalid_subject_specs_rejected(tmp_path: Path, capsys) -> None:
     """INV-004: malformed --subject values are rejected before any run."""
     for raw in ("nomodelsep", ":missing-provider", "missing-model:"):

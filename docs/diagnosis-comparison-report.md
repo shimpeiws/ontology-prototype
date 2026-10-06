@@ -12,7 +12,8 @@
 - Command: `ontology diagnose-compare <args actually used>`
 - Artifact: `<path to comparison-report.json>` (commit or link it)
 - Harness: `eval_version` `<from artifact>`, `prompt_version` `<from artifact>`
-- Scratch: `<path>` (the materialized workspace with recorded runs)
+- Workspace: `<workspace_dir from artifact>` (the materialized eval
+  workspace; its `.ontology/` store holds every recorded run for audit)
 
 ## Credential / setup steps taken
 

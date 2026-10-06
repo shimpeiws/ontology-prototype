@@ -1401,6 +1401,17 @@ def _cmd_diagnose_compare(
             scratch_dir, as_json, "DIAGNOSIS.COMPARE_FAILED", str(exc)
         )
         return EXIT_INVALID
+    except Exception as exc:
+        # Final guard: an unexpected harness fault is a diagnostic, never
+        # a traceback — and its message may carry sensitive detail, so
+        # only the exception class is reported.
+        _emit_error(
+            scratch_dir,
+            as_json,
+            "DIAGNOSIS.COMPARE_FAILED",
+            f"comparison failed: unexpected {type(exc).__name__}",
+        )
+        return EXIT_INVALID
 
     if as_json:
         payload = report.to_dict()
@@ -1408,6 +1419,9 @@ def _cmd_diagnose_compare(
         print(json.dumps(payload, indent=2))
     else:
         print(f"comparison report written: {report_path}")
+        print(
+            f"run records and the .ontology store: {report.workspace_dir}"
+        )
         print(
             f"shared input: projection run {report.projection_run_id}, "
             f"{report.candidates} candidates "
