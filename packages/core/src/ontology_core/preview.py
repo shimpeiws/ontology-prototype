@@ -15,20 +15,23 @@ The differences from ingest are the point of the type:
   a pasted sample small enough for interactive editing.
 - Versions are explicit: the result carries the sample's content digest and
   the same ``mapping_digest`` recipe ingest records, and the preview id and
-  observation ids are derived deterministically from those digests — a
-  preview result states exactly which input and which mapping produced it.
+  observation ids are derived deterministically from the input, mapping, and
+  domain digests — a preview result states exactly which input and which
+  definitions produced it. Resolution consults the domain (required
+  properties, event-time policy), so the domain is part of preview identity.
 
 Never raises on bad input: encoding errors, parse failures, and malformed
 records all become diagnostics, same as ingest.
 
 This module deliberately reaches into ``ingest``'s private helpers
-(``_parse_csv``/``_parse_json``/``_process_record``/``_mapping_digest``)
-rather than reimplementing them: preview parity is guaranteed only if both
-call the same code. The helpers stay underscore-private — they are an
-intra-package seam, not a public API — so any change to their signature or
-semantics must be reviewed against ``preview_snapshot`` and the parity
-tests (``test_preview.py`` / ``test_preview_parity_with_core``), which pin
-field-for-field equality including run-level diagnostics.
+(``_parse_csv``, ``_parse_json``, ``_process_record``, ``_mapping_digest``,
+``_domain_digest``) rather than reimplementing them: preview parity is
+guaranteed only if both call the same code. The helpers stay
+underscore-private — they are an intra-package seam, not a public API — so
+any change to their signature or semantics must be reviewed against
+``preview_snapshot`` and the parity tests (``test_preview.py`` /
+``test_preview_parity_with_core``), which pin field-for-field equality
+including run-level diagnostics.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from datetime import datetime, timezone
 from .diagnostics import Diagnostic, Diagnostics
 from .ingest import (
     Observation,
+    _domain_digest,
     _mapping_digest,
     _parse_csv,
     _parse_json,
@@ -60,8 +64,8 @@ class PreviewResult:
 
     ``record_count`` counts every record the parser produced, including ones
     dropped by the record cap; ``truncated`` marks that drop. ``preview_id``
-    is deterministic — derived from the input and mapping digests — so an
-    identical re-run reports identical observation ids.
+    is deterministic — derived from the input, mapping, and domain digests —
+    so an identical re-run reports identical observation ids.
     """
 
     diagnostics: list[Diagnostic] = field(default_factory=list)
@@ -164,6 +168,7 @@ def preview_snapshot(
 
     result.preview_id = (
         f"prev-{result.content_digest[7:19]}-{result.mapping_digest[7:19]}"
+        f"-{_domain_digest(workspace)[7:19]}"
     )
     for row, raw in records:
         result.observations.append(

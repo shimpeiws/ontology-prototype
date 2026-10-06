@@ -632,6 +632,37 @@ class TestDraftPreview:
         preview = response.json()["preview"]
         assert "INGEST.ENCODING_ERROR" in codes(preview["diagnostics"])
 
+    def test_preview_escaped_json_surrogate_is_a_diagnostic(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        # Distinct from the lone-surrogate request above: the sample text
+        # is pure ASCII, but the \ud800 JSON escape decodes to a lone
+        # surrogate inside the parsed record. It must surface as a record
+        # diagnostic — not an HTTP 500 while serializing the observation.
+        files = apisupport.workspace_texts(workspace)
+        files["mapping.yaml"] = files["mapping.yaml"].replace(
+            "format: csv", "format: json"
+        )
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {
+                    "text": (
+                        '[{"id": "\\ud800", "status": "completed", '
+                        '"assignee": "taro", "completed_at": "2026-10-01"}]'
+                    )
+                },
+            },
+        )
+        assert response.status_code == 200
+        observation = response.json()["preview"]["observations"][0]
+        assert observation["status"] == "rejected"
+        assert "INGEST.ENCODING_ERROR" in codes(observation["diagnostics"])
+        assert observation["record"]["id"] is None
+
     def test_preview_rejects_unknown_file(
         self, roots: Path, workspace: Path
     ) -> None:

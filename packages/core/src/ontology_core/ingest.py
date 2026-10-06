@@ -791,6 +791,20 @@ def _mapping_digest(workspace: Workspace) -> str:
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
+def _domain_digest(workspace: Workspace) -> str:
+    """Digest of the validated domain definition.
+
+    Record resolution consults the domain beyond the mapping — required
+    properties and the event-time policy — so a domain-only change must not
+    reuse a preview's observation ids.
+    """
+    raw = json.dumps(
+        dataclasses.asdict(workspace.domain), sort_keys=True, default=str
+    ).encode("utf-8")
+    payload = f"schema_version={SUPPORTED_SCHEMA_VERSION}\n".encode("utf-8") + raw
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
 class _GuardedTrace:
     """Trace sink wrapper: a sink ``OSError`` becomes one run diagnostic.
 

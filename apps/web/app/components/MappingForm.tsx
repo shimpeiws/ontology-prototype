@@ -12,8 +12,8 @@
  */
 
 import { useId, useState } from "react";
-import { isMap, isSeq } from "yaml";
-import type { Document, YAMLMap } from "yaml";
+import { isMap, isScalar, isSeq } from "yaml";
+import type { Document, YAMLMap, YAMLSeq } from "yaml";
 
 import { contractVocabulary, useContract } from "../lib/contract";
 import type { ContractVocabulary } from "../lib/contract";
@@ -170,6 +170,8 @@ function ConditionEditor({
     };
 
   const argsSeq = cond ? seqAt(cond, ["args"]) : null;
+  const valuesNode = cond ? cond.get("values", true) : undefined;
+  const valuesSeq = isSeq(valuesNode) ? valuesNode : null;
 
   return (
     <div className="condition-node">
@@ -213,32 +215,82 @@ function ConditionEditor({
       ) : null}
 
       {group === "set" ? (
-        <TextField
-          label="Values (comma-separated)"
-          value={(() => {
-            const vs = cond?.get("values", true);
-            return isSeq(vs)
-              ? vs.items.map((v) => scalarText(v)).join(", ")
-              : nodeText(vs);
-          })()}
-          commit={(text) => {
-            mutate((m, d) => {
-              m.set(
-                "values",
-                d.createNode(
-                  text
-                    .split(",")
-                    .map((v) => v.trim())
-                    .filter((v) => v !== "")
-                    .map(parseLiteral),
-                ),
-              );
-            });
-            return text;
-          }}
-          diagnostics={diagnostics}
-          path={`${diagPath}.values`}
-        />
+        <div className="condition-values">
+          {valuesSeq
+            ? valuesSeq.items.map((item, i) => (
+                <div className="condition-value" key={i}>
+                  <TextField
+                    label={`Value ${i + 1}`}
+                    value={scalarText(item)}
+                    commit={(text) => {
+                      mutate((m, d) => {
+                        const seq = seqAt(m, ["values"]);
+                        const idx = seq ? seq.items.indexOf(item) : -1;
+                        if (!seq || idx < 0) return;
+                        seq.items[idx] = d.createNode(parseLiteral(text));
+                      });
+                      return text;
+                    }}
+                    diagnostics={diagnostics}
+                    path={`${diagPath}.values[${i}]`}
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      mutate((m) => {
+                        const seq = seqAt(m, ["values"]);
+                        const idx = seq ? seq.items.indexOf(item) : -1;
+                        if (seq && idx >= 0) seq.items.splice(idx, 1);
+                      })
+                    }
+                  >
+                    Remove value {i + 1}
+                  </button>
+                </div>
+              ))
+            : null}
+          {!valuesSeq && valuesNode !== undefined && valuesNode !== null ? (
+            // A scalar where the list belongs — keep it visible; the next
+            // edit rewrites it as a one-element list.
+            <TextField
+              label="Value 1"
+              value={nodeText(valuesNode)}
+              commit={(text) => {
+                mutate((m, d) => {
+                  m.set("values", d.createNode([parseLiteral(text)]));
+                });
+                return text;
+              }}
+              diagnostics={diagnostics}
+              path={`${diagPath}.values`}
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={() =>
+              mutate((m, d) => {
+                const seq =
+                  seqAt(m, ["values"]) ??
+                  (() => {
+                    const created = d.createNode([]) as YAMLSeq;
+                    // A malformed scalar becomes the first element rather
+                    // than being dropped.
+                    const prev = m.get("values", true);
+                    if (prev !== undefined && prev !== null) created.add(prev);
+                    m.set("values", created);
+                    return created;
+                  })();
+                seq.add(d.createNode(""));
+              })
+            }
+          >
+            Add value
+          </button>
+          <FieldDiagnostics
+            diagnostics={diagnostics}
+            path={`${diagPath}.values`}
+          />
+        </div>
       ) : null}
 
       {group === "and_or" ? (
@@ -324,6 +376,12 @@ function ConditionEditor({
  * One `{field|literal, as}` assignment. `casts` is null where casts are
  * forbidden (ids/subjects), a vocabulary list elsewhere — the event-time
  * positions get the restricted `time_casts` list.
+ *
+ * `literalKind` controls how literal text is stored: `"string"` keeps the
+ * typed text verbatim (ids, subjects, and event times — the mapping
+ * language requires string literals there), while `"scalar"` lets the
+ * author pick a string or a JSON scalar explicitly so a numeric-looking
+ * string stays a string.
  */
 function AssignmentFields({
   label,
@@ -331,6 +389,7 @@ function AssignmentFields({
   diagPath,
   diagnostics,
   casts,
+  literalKind,
   edit,
 }: {
   label: string;
@@ -339,6 +398,7 @@ function AssignmentFields({
   diagPath: string;
   diagnostics: Diagnostic[];
   casts: string[] | null;
+  literalKind: "string" | "scalar";
   edit: (fn: (a: YAMLMap, d: Document) => void) => void;
 }) {
   const assign = isMap(node) ? node : null;
@@ -349,6 +409,12 @@ function AssignmentFields({
       : "unset";
   const fieldText = assign ? scalarText(assign.get("field", true)) : "";
   const literalText = assign ? scalarText(assign.get("literal", true)) : "";
+  const literalNode = assign ? assign.get("literal", true) : undefined;
+  const literalValue = isScalar(literalNode) ? literalNode.value : literalNode;
+  // The stored literal's own type decides whether edits stay text or parse
+  // as a JSON scalar; an unset/empty literal starts as a string.
+  const literalIsString =
+    !assign?.has("literal") || typeof literalValue === "string";
   const castText = assign ? scalarText(assign.get("as", true)) : "";
   const id = useId();
 
@@ -396,13 +462,37 @@ function AssignmentFields({
         />
       ) : null}
 
+      {mode === "literal" && literalKind === "scalar" ? (
+        <SelectField
+          label={`${label} literal type`}
+          value={literalIsString ? "string" : "json"}
+          options={["string", "json"]}
+          commit={(kind) => {
+            edit((a) => {
+              a.set(
+                "literal",
+                kind === "json" ? parseLiteral(literalText) : literalText,
+              );
+            });
+            return kind;
+          }}
+          diagnostics={diagnostics}
+          path={`${diagPath}.literal`}
+        />
+      ) : null}
+
       {mode === "literal" ? (
         <TextField
           label={`${label} literal`}
           value={literalText}
           commit={(text) => {
             edit((a) => {
-              a.set("literal", parseLiteral(text));
+              a.set(
+                "literal",
+                literalKind === "string" || literalIsString
+                  ? text
+                  : parseLiteral(text),
+              );
             });
             return text;
           }}
@@ -484,6 +574,7 @@ function EntityBindingCard({
         diagPath={`${base}.id`}
         diagnostics={diagnostics}
         casts={null}
+        literalKind="string"
         edit={(fn) =>
           editItem(item, (m, d) => fn(ensureAssignment(m, ["id"], d), d))
         }
@@ -501,6 +592,7 @@ function EntityBindingCard({
                 diagPath={`${base}.properties.${name}`}
                 diagnostics={diagnostics}
                 casts={vocabulary?.castTypes ?? []}
+                literalKind="scalar"
                 edit={(fn) =>
                   editItem(item, (m, d) => {
                     const live = mapAt(m, ["properties"]);
@@ -640,6 +732,7 @@ function EventBindingCard({
         diagPath={`${base}.subject.id`}
         diagnostics={diagnostics}
         casts={null}
+        literalKind="string"
         edit={(fn) =>
           editItem(item, (m, d) =>
             fn(ensureAssignment(m, ["subject", "id"], d), d),
@@ -691,6 +784,7 @@ function EventBindingCard({
         diagPath={`${base}.${timeFields.occurrence}`}
         diagnostics={diagnostics}
         casts={vocabulary?.timeCasts ?? []}
+        literalKind="string"
         edit={(fn) =>
           editItem(item, (m, d) =>
             fn(ensureAssignment(m, [timeFields.occurrence], d), d),
@@ -720,6 +814,7 @@ function EventBindingCard({
             diagPath={`${base}.${timeFields.observation}`}
             diagnostics={diagnostics}
             casts={vocabulary?.timeCasts ?? []}
+            literalKind="string"
             edit={(fn) =>
               editItem(item, (m, d) =>
                 fn(ensureAssignment(m, [timeFields.observation], d), d),

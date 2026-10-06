@@ -595,6 +595,17 @@ code {
   margin: 0.25rem 0 0.5rem;
 }
 
+.condition-values {
+  margin: 0.25rem 0 0.5rem;
+}
+
+.condition-value {
+  border-left: 3px solid
+    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.25));
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
+}
+
 .preview {
   margin-top: 1.5rem;
   border-top: 1px solid

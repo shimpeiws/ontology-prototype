@@ -159,6 +159,9 @@ export function ensureMap(
   doc: Document,
   path: readonly (string | number)[],
 ): YAMLMap {
+  // A scalar intermediate (e.g. `mapping: null`) would make `setIn` throw
+  // before the leaf is ever reached — repair the chain first.
+  ensureContainerPath(doc, path);
   const existing = mapAt(doc, path);
   if (existing) return existing;
   const created = doc.createNode({});
@@ -180,6 +183,7 @@ export function ensureSeq(
   doc: Document,
   path: readonly (string | number)[],
 ): YAMLSeq {
+  ensureContainerPath(doc, path);
   const existing = seqAt(doc, path);
   if (existing) return existing;
   const created = doc.createNode([]);

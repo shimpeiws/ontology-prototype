@@ -14,6 +14,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { parseDocument } from "yaml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
@@ -25,6 +26,7 @@ import { PreviewPanel } from "../components/PreviewPanel";
 import {
   SYNTHETIC_CONTRACT_RESPONSE,
   SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
+  SYNTHETIC_MAPPING_FORM_YAML,
   SYNTHETIC_PREVIEW_RESPONSE,
 } from "./fixtures";
 
@@ -123,6 +125,11 @@ function renderForm(
 
 function draftText(): string {
   return screen.getByTestId("draft-mapping.yaml").textContent ?? "";
+}
+
+/** The live draft as plain JS — assertions on stored scalar types. */
+function draftJs(): any {
+  return parseDocument(draftText()).toJS();
 }
 
 function card(label: string): HTMLElement {
@@ -433,6 +440,128 @@ describe("MappingForm", () => {
       ).toBeInTheDocument(),
     );
     expect(screen.queryByLabelText("Source name")).toBeNull();
+  });
+
+  it("repairs a scalar `mapping` section when adding bindings", async () => {
+    const response: OpenResponse = {
+      ...SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
+      files: {
+        ...SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE.files,
+        "mapping.yaml": "schema_version: 1\nkind: mapping\nmapping: null\n",
+      },
+    };
+    const user = userEvent.setup();
+    renderForm(<MappingForm />, response);
+    await waitForContract();
+
+    await user.click(
+      screen.getByRole("button", { name: "Add entity binding" }),
+    );
+    expect(screen.getByText("Entity binding 1")).toBeInTheDocument();
+    expect(draftJs().mapping.entities).toHaveLength(1);
+
+    await user.click(
+      screen.getByRole("button", { name: "Add event binding" }),
+    );
+    expect(screen.getByText("Event binding 1")).toBeInTheDocument();
+    expect(draftJs().mapping.events).toHaveLength(1);
+  });
+
+  it("keeps a numeric-looking id literal as a string", async () => {
+    const user = userEvent.setup();
+    renderForm(<MappingForm />);
+    await waitForContract();
+
+    const job = card("Entity binding 1");
+    await user.selectOptions(
+      within(job).getByLabelText("Entity id source"),
+      "literal",
+    );
+    // Ids are always strings — no type picker is offered here.
+    expect(
+      within(job).queryByLabelText("Entity id literal type"),
+    ).toBeNull();
+    await user.type(within(job).getByLabelText("Entity id literal"), "101");
+    await waitFor(() =>
+      expect(draftJs().mapping.entities[0].id.literal).toBe("101"),
+    );
+  });
+
+  it("lets a property literal be a string or a JSON scalar", async () => {
+    const user = userEvent.setup();
+    renderForm(<MappingForm />);
+    await waitForContract();
+
+    const job = card("Entity binding 1");
+    await user.selectOptions(
+      within(job).getByLabelText("Property status source"),
+      "literal",
+    );
+    // String is the default type — a numeric-looking value stays a string.
+    await user.type(
+      within(job).getByLabelText("Property status literal"),
+      "101",
+    );
+    await waitFor(() =>
+      expect(
+        draftJs().mapping.entities[0].properties.status.literal,
+      ).toBe("101"),
+    );
+
+    // The explicit type switch stores the same text as a JSON scalar.
+    await user.selectOptions(
+      within(job).getByLabelText("Property status literal type"),
+      "json",
+    );
+    await waitFor(() =>
+      expect(
+        draftJs().mapping.entities[0].properties.status.literal,
+      ).toBe(101),
+    );
+  });
+
+  it("edits set-condition values as separate elements", async () => {
+    const response: OpenResponse = {
+      ...SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
+      files: {
+        ...SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE.files,
+        "mapping.yaml": SYNTHETIC_MAPPING_FORM_YAML.replace(
+          "when: { op: not_null, field: invoiced_at }",
+          'when: { op: in, field: status, values: ["New York, NY", "LA"] }',
+        ),
+      },
+    };
+    const user = userEvent.setup();
+    renderForm(<MappingForm />, response);
+    await waitForContract();
+
+    const event2 = card("Event binding 2");
+    // A comma inside one value must not split it into two entries.
+    const first = within(event2).getByLabelText("Value 1");
+    expect(first).toHaveValue("New York, NY");
+    await user.type(first, "x");
+    await waitFor(() =>
+      expect(draftJs().mapping.events[1].when.values).toEqual([
+        "New York, NYx",
+        "LA",
+      ]),
+    );
+
+    await user.click(
+      within(event2).getByRole("button", { name: "Add value" }),
+    );
+    await waitFor(() =>
+      expect(draftJs().mapping.events[1].when.values).toHaveLength(3),
+    );
+    await user.click(
+      within(event2).getByRole("button", { name: "Remove value 2" }),
+    );
+    await waitFor(() =>
+      expect(draftJs().mapping.events[1].when.values).toEqual([
+        "New York, NYx",
+        "",
+      ]),
+    );
   });
 });
 

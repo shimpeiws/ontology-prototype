@@ -15,6 +15,9 @@ regardless of format:
   rejected, never guessed.
 - ``nan``/``inf`` are not valid numbers, and ``bool`` is never a number.
 - Non-scalar values (nested objects or lists) are rejected.
+- Strings containing unpaired surrogates are rejected: a JSON ``\\ud800``
+  escape decodes into a value that cannot be encoded back to UTF-8, so it
+  could never be written into serialized evidence or API responses.
 
 Nothing here raises on bad input: failures are reported through the ``err``
 callback and the caller receives the ``FAILED`` sentinel.
@@ -43,12 +46,22 @@ _NUM_RE = re.compile(r"^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$")
 _DATE_ONLY_TIMEZONES = {"UTC": timezone.utc}
 
 
+def _has_unpaired_surrogate(text: str) -> bool:
+    """True when ``text`` cannot be encoded to UTF-8 (a lone surrogate)."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def normalize_record(raw: dict[Any, Any], err: ErrorFn, row: int) -> dict[str, Normalized]:
     """Normalize one parsed record into canonical scalar/null fields.
 
     Applies the format-independent blank/null and scalar rules. ``raw`` comes
     straight from the CSV or JSON parser; field values that are not scalars
-    produce ``INGEST.NON_SCALAR`` diagnostics.
+    produce ``INGEST.NON_SCALAR`` diagnostics, and strings that cannot be
+    encoded as UTF-8 produce ``INGEST.ENCODING_ERROR``.
     """
     record: dict[str, Normalized] = {}
     for key, value in raw.items():
@@ -56,9 +69,26 @@ def normalize_record(raw: dict[Any, Any], err: ErrorFn, row: int) -> dict[str, N
             # A CSV row with more cells than header columns; reported by the
             # caller as an invalid row, so the extra cells are dropped here.
             continue
+        if _has_unpaired_surrogate(key):
+            err(
+                "INGEST.ENCODING_ERROR",
+                f"record[{row}]",
+                "field name contains an unpaired surrogate and cannot be "
+                "encoded as UTF-8",
+            )
+            continue
         path = f"record[{row}].{key}"
         if isinstance(value, str):
-            record[key] = None if value.strip() == "" else value
+            if _has_unpaired_surrogate(value):
+                err(
+                    "INGEST.ENCODING_ERROR",
+                    path,
+                    "string contains an unpaired surrogate and cannot be "
+                    "encoded as UTF-8",
+                )
+                record[key] = None
+            else:
+                record[key] = None if value.strip() == "" else value
         elif value is None or isinstance(value, bool):
             record[key] = value
         elif isinstance(value, (int, float)):

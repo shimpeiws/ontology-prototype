@@ -224,3 +224,53 @@ def test_preview_ids_are_deterministic_and_versioned(tmp_path: Path) -> None:
         observed_at=FIXED_NOW,
     )
     assert changed.preview_id != first.preview_id
+
+
+def test_preview_ids_cover_domain_only_changes(tmp_path: Path) -> None:
+    """Resolution consults the domain, so a domain-only edit changes ids."""
+    workspace = make_ws(tmp_path / "strict")
+    # A blank `status` rejects the row while the property is required.
+    sample = b"id,status,assignee,completed_at\n101,,taro,2026-10-01\n"
+    strict = preview_snapshot(workspace, sample, observed_at=FIXED_NOW)
+    assert strict.observations[0].status == "rejected"
+    assert "INGEST.MISSING_REQUIRED" in codes_of(strict.observations[0])
+
+    docs = support.base_docs()
+    job_props = docs["domain"]["domain"]["entities"]["Job"]["properties"]
+    job_props["status"]["required"] = False
+    relaxed_dir = support.make_workspace(tmp_path / "relaxed", docs)
+    loaded = load_workspace(relaxed_dir)
+    assert loaded.ok and loaded.workspace is not None
+    relaxed = preview_snapshot(loaded.workspace, sample, observed_at=FIXED_NOW)
+
+    assert relaxed.observations[0].status == "accepted"
+    # Same input, same mapping — but different observations under the same
+    # preview_id would mislabel evidence, so the domain feeds the ids.
+    assert relaxed.mapping_digest == strict.mapping_digest
+    assert relaxed.preview_id != strict.preview_id
+    assert (
+        relaxed.observations[0].observation_id
+        != strict.observations[0].observation_id
+    )
+
+
+def test_preview_escaped_json_surrogate_is_a_diagnostic(tmp_path: Path) -> None:
+    """A ``\\ud800`` escape decodes to a lone surrogate inside a record.
+
+    The surrogate cannot be encoded back to UTF-8, so it must surface as a
+    record diagnostic — not leak into an observation and crash response
+    serialization downstream.
+    """
+    workspace = make_ws(tmp_path / "json", source_format="json")
+    sample = (
+        b'[{"id": "\\ud800", "status": "completed", "assignee": "taro",'
+        b' "completed_at": "2026-10-01"}]'
+    )
+
+    result = preview_snapshot(workspace, sample, observed_at=FIXED_NOW)
+
+    assert not result.ok
+    observation = result.observations[0]
+    assert observation.status == "rejected"
+    assert "INGEST.ENCODING_ERROR" in codes_of(observation)
+    assert observation.record["id"] is None
