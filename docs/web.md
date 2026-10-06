@@ -25,8 +25,14 @@ The Web app is presentation only:
   baseline, and invalidates any displayed draft-validation result.
   "Validate draft" posts the whole bundle to `/api/v1/workspaces/drafts/validate`.
   Saving to disk is not implemented here (#19).
-- Raw-text editing is the interim authoring surface; structured
-  per-definition forms belong to #16/#17/#18.
+- Draft edits are made in two equivalent views: a raw-text editor and
+  structured per-definition forms (evaluation and agent task from #18;
+  domain/mapping forms belong to #16/#17). The forms mutate the same draft
+  YAML text via the `yaml` Document API, so unexposed fields, comments,
+  and ordering are preserved; a draft that does not parse degrades the
+  form to a notice and leaves the raw editor usable. Select options come
+  from `GET /api/v1/contract`; entity/event/projection suggestions come
+  from the domain draft — the core remains the only validator.
 
 ## Development
 
