@@ -108,6 +108,12 @@ from .model import (
     Workspace,
 )
 from .outcome import EvaluationResult, get_evaluation_run, run_evaluation
+from .preview import (
+    MAX_PREVIEW_BYTES,
+    MAX_PREVIEW_RECORDS,
+    PreviewResult,
+    preview_snapshot,
+)
 from .projections import (
     ProjectionCandidate,
     ProjectionResult,
@@ -183,10 +189,13 @@ __all__ = [
     "JsonlTraceSink",
     "LoadResult",
     "MappingDefinition",
+    "MAX_PREVIEW_BYTES",
+    "MAX_PREVIEW_RECORDS",
     "NullTraceSink",
     "Observation",
     "PROMPT_VERSION",
     "PreparedEval",
+    "PreviewResult",
     "ProjectionCandidate",
     "ProjectionResult",
     "ProjectionSpec",
@@ -236,6 +245,7 @@ __all__ = [
     "load_workspace_texts",
     "payload_digest",
     "prepare",
+    "preview_snapshot",
     "proposal_view",
     "run_comparison",
     "run_diagnosis",

@@ -45,6 +45,26 @@ class DraftValidateRequest(BaseModel):
     files: dict[str, str]
 
 
+class PreviewSample(BaseModel):
+    """A bounded source sample: raw CSV/JSON text, format decided by the
+    draft mapping's ``source.format`` — never by the request."""
+
+    text: str
+
+
+class DraftPreviewRequest(BaseModel):
+    """Preview a draft mapping against an in-memory sample.
+
+    Same draft semantics as ``DraftValidateRequest``; ``sample.text`` is the
+    raw CSV/JSON content the draft mapping is resolved against. Nothing is
+    persisted — the request is pure like draft validation.
+    """
+
+    path: str = Field(min_length=1)
+    files: dict[str, str]
+    sample: PreviewSample
+
+
 class WorkspaceRef(BaseModel):
     """``digest`` is null when the on-disk bundle could not be fully
     represented in ``files`` (e.g. a symlink escaping the roots), so the
@@ -69,6 +89,20 @@ class DraftValidateResponse(BaseModel):
     digest: str
     definitions: dict[str, Any] | None
     diagnostics: list[DiagnosticOut]
+
+
+class DraftPreviewResponse(BaseModel):
+    """Preview outcome: draft diagnostics plus the isolated run payload.
+
+    ``preview`` is null when the draft bundle did not validate (there is no
+    typed workspace to resolve against); the ``diagnostics`` explain why.
+    """
+
+    api_version: str
+    valid: bool
+    digest: str
+    diagnostics: list[DiagnosticOut]
+    preview: dict[str, Any] | None
 
 
 class ContractResponse(BaseModel):

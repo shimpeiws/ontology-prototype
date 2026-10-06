@@ -22,7 +22,13 @@ from ontology_api import (
     __version__,
     create_app,
 )
-from ontology_core import bundle_digest, load_workspace, load_workspace_texts
+from ontology_core import (
+    MAX_PREVIEW_BYTES,
+    bundle_digest,
+    load_workspace,
+    load_workspace_texts,
+    preview_snapshot,
+)
 
 
 def make_client(*roots: Path, service=None) -> TestClient:
@@ -409,6 +415,269 @@ class TestDraftValidate:
             json={"path": str(workspace), "files": files},
         )
         assert response.status_code == 200
+        after = {
+            p.relative_to(workspace): p.read_bytes()
+            for p in sorted(workspace.rglob("*"))
+            if p.is_file()
+        }
+        assert before == after
+        assert not (workspace / ".ontology").exists()
+
+
+class TestDraftPreview:
+    """Issue #17 preview surface: isolated, draft-driven, no side effects."""
+
+    SAMPLE = (
+        "id,status,assignee,completed_at,invoiced_at\n"
+        "101,completed,taro,2026-10-01,\n"
+        "102,in_progress,hanako,,\n"
+    )
+
+    def test_preview_valid_draft(self, roots: Path, workspace: Path) -> None:
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["valid"] is True
+        preview = body["preview"]
+        assert preview["source"] == "jobs"
+        assert preview["format"] == "csv"
+        assert preview["input_digest"].startswith("sha256:")
+        assert preview["mapping_digest"].startswith("sha256:")
+        assert preview["record_count"] == 2
+        assert preview["truncated"] is False
+        assert len(preview["observations"]) == 2
+        first = preview["observations"][0]
+        assert first["status"] == "accepted"
+        # The JobCompleted fact from the completed row.
+        events = {e["event"] for e in first["events"]}
+        assert "JobCompleted" in events
+        assert "InvoiceIssued" not in events
+        entities = {e["entity"]: e for e in first["entities"]}
+        assert entities["Job"]["id"] == "101"
+        assert entities["Person"]["id"] == "taro"
+        # Blank cells normalize to null on the record.
+        assert first["record"]["invoiced_at"] is None
+
+    def test_preview_parity_with_core(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        body = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        ).json()
+        core = load_workspace_texts(files, path=workspace)
+        assert core.workspace is not None
+        expected = preview_snapshot(core.workspace, self.SAMPLE.encode())
+        assert body["preview"]["input_digest"] == expected.content_digest
+        assert body["preview"]["mapping_digest"] == expected.mapping_digest
+        # observed_at is the run timestamp — volatile by design; everything
+        # else must match a direct core preview field-for-field.
+        def stable(obs: dict) -> dict:
+            o = {k: v for k, v in obs.items() if k != "observed_at"}
+            o["events"] = [
+                {k: v for k, v in e.items() if k != "observed_at"}
+                for e in o["events"]
+            ]
+            return o
+
+        assert [stable(o) for o in body["preview"]["observations"]] == [
+            stable(o.to_dict()) for o in expected.observations
+        ]
+
+    def test_preview_uses_draft_not_disk(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        # Draft-only edit, still valid: Person's id reads a `worker` column
+        # the sample lacks. The on-disk mapping still maps `assignee`.
+        files["mapping.yaml"] = files["mapping.yaml"].replace(
+            "field: assignee\n      properties:\n        name:",
+            "field: worker\n      properties:\n        name:",
+        )
+        client = make_client(roots)
+        body = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        ).json()
+        assert body["valid"] is True
+        # Every row rejects on the missing Person id; the on-disk mapping
+        # would have accepted them.
+        assert all(
+            o["status"] == "rejected" for o in body["preview"]["observations"]
+        )
+        assert all(
+            "INGEST.MISSING_ID" in [d["code"] for d in o["diagnostics"]]
+            for o in body["preview"]["observations"]
+        )
+
+    def test_preview_invalid_draft_returns_null(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        files["mapping.yaml"] = "mapping: [unclosed"
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["valid"] is False
+        assert body["preview"] is None
+        assert "WORKSPACE.YAML_ERROR" in codes(body["diagnostics"])
+
+    def test_preview_row_diagnostics(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        bad = (
+            "id,status,assignee,completed_at,invoiced_at\n"
+            ",completed,taro,2026-10-01,\n"
+            "102,completed,hanako,yesterday,\n"
+        )
+        client = make_client(roots)
+        body = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": bad},
+            },
+        ).json()
+        assert body["valid"] is True
+        observations = body["preview"]["observations"]
+        assert [o["status"] for o in observations] == ["rejected", "rejected"]
+        row1_codes = [d["code"] for d in observations[0]["diagnostics"]]
+        row2_codes = [d["code"] for d in observations[1]["diagnostics"]]
+        assert "INGEST.MISSING_ID" in row1_codes
+        assert "INGEST.INVALID_TIMESTAMP" in row2_codes
+        assert observations[0]["entities"] == []
+
+    def test_preview_sample_too_large_is_a_diagnostic(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": "x" * (MAX_PREVIEW_BYTES + 1)},
+            },
+        )
+        # A bounded-input violation is a preview diagnostic, not a transport
+        # error — it must not masquerade as a request/schema failure.
+        assert response.status_code == 200
+        preview = response.json()["preview"]
+        assert "PREVIEW.SAMPLE_TOO_LARGE" in codes(preview["diagnostics"])
+        assert preview["observations"] == []
+
+    def test_preview_rejects_unknown_file(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        files["evil.yaml"] = "x: 1"
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "API.UNKNOWN_WORKSPACE_FILE"
+
+    def test_preview_outside_root(
+        self, roots: Path, workspace: Path, tmp_path: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(tmp_path),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "API.PATH_OUTSIDE_ROOTS"
+
+    def test_preview_malformed_request(self, roots: Path) -> None:
+        client = make_client(roots)
+        bad_payloads = [
+            {},
+            {"path": "x"},
+            {"path": "x", "files": {}},
+            {"path": "x", "files": {}, "sample": {}},
+            {"path": "x", "files": {}, "sample": {"text": 42}},
+        ]
+        for payload in bad_payloads:
+            response = client.post(
+                "/api/v1/workspaces/drafts/preview", json=payload
+            )
+            assert response.status_code == 422, payload
+            assert response.json()["error"]["code"] == "API.MALFORMED_REQUEST"
+
+    def test_preview_no_roots(self, workspace: Path) -> None:
+        client = make_client()
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": "anything",
+                "files": {},
+                "sample": {"text": ""},
+            },
+        )
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "API.ROOTS_UNCONFIGURED"
+
+    def test_preview_has_no_side_effects(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        before = {
+            p.relative_to(workspace): p.read_bytes()
+            for p in sorted(workspace.rglob("*"))
+            if p.is_file()
+        }
+        client = make_client(roots)
+        response = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["preview"]["observations"]
         after = {
             p.relative_to(workspace): p.read_bytes()
             for p in sorted(workspace.rglob("*"))
