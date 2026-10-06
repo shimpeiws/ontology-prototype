@@ -88,7 +88,7 @@ class WorkspaceService(Protocol):
 class CoreWorkspaceService:
     """WorkspaceService over ``ontology_core``, scoped to configured roots."""
 
-    def __init__(self, roots: tuple[Path, ...] | list[Path]) -> None:
+    def __init__(self, roots: tuple[str | Path, ...] | list[str | Path]) -> None:
         self._roots = tuple(Path(r).expanduser().resolve() for r in roots)
 
     @property

@@ -12,7 +12,7 @@ Keep one repository that can host multiple applications over a shared operationa
 | --- | --- | --- |
 | `packages/core/` | Installable Python package for workspace contracts and the operational loop | v0.1 |
 | `apps/cli/` | Installable Python CLI application calling the shared core | v0.1 |
-| `apps/api/` | Future Python API application exposing shared-core operations | v0.2 |
+| `apps/api/` | Local FastAPI application exposing shared-core workspace operations ([api.md](api.md)) | v0.2 |
 | `apps/web/` | Future FDE authoring and inspection frontend | v0.2 |
 | `examples/` | Portable workspace definitions and synthetic source data | v0.1 |
 | `docs/` | Product plan, release criteria, and architecture decisions | v0.1 |

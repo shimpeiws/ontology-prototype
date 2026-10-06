@@ -33,7 +33,7 @@ class ApiConfig:
     network interface without an explicit choice.
     """
 
-    workspace_roots: tuple[Path, ...] = field(default_factory=tuple)
+    workspace_roots: tuple[str | Path, ...] = field(default_factory=tuple)
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
 
