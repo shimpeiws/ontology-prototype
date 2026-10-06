@@ -39,6 +39,8 @@ Evidence lands under `<workspace>/.ontology/`:
 
 `.ontology/` is git-ignored: runtime snapshots, databases, and traces are never committed.
 
+`ontology trace` reassembles these artifacts plus the later stages into one linked, read-only view — `ontology trace <workspace>` for the overview, `--subject Job/101` to follow one subject, `--run <id>` to inspect a single artifact, and `--export <path>` for a self-contained bundle. See [trace.md](trace.md).
+
 ## Re-ingesting later snapshots
 
 The same command re-observes a source after it changes — run it again with the newer file (`examples/job-invoicing/data/jobs-later.csv` shows job 101 after its invoice was issued):
