@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+import ontology_core
 from ontology_core import (
     WORKSPACE_FILES,
     Diagnostic,
@@ -211,8 +212,6 @@ def contract_metadata() -> dict[str, Any]:
     Values come straight from the core's authoritative constants so the
     frontend contract can never drift from what validation accepts.
     """
-    import ontology_core
-
     return {
         "api_version": "v1",
         "core_version": ontology_core.__version__,

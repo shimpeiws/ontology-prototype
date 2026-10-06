@@ -19,6 +19,7 @@ from .schemas import (
     DiagnosticOut,
     DraftValidateRequest,
     DraftValidateResponse,
+    ErrorResponse,
     OpenRequest,
     OpenResponse,
     WorkspaceRef,
@@ -87,7 +88,17 @@ def create_app(
     def get_contract() -> dict:
         return contract_metadata()
 
-    @app.post(f"{API_PREFIX}/workspaces/open", response_model=OpenResponse)
+    @app.post(
+        f"{API_PREFIX}/workspaces/open",
+        response_model=OpenResponse,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
     def open_workspace(
         payload: OpenRequest,
         service: WorkspaceService = Depends(get_service),
@@ -107,6 +118,12 @@ def create_app(
     @app.post(
         f"{API_PREFIX}/workspaces/drafts/validate",
         response_model=DraftValidateResponse,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
     )
     def validate_draft(
         payload: DraftValidateRequest,

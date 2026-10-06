@@ -8,9 +8,9 @@ data-only: no environment interpolation, no external includes, no execution.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 from .agentdef import validate_agent
 from .diagnostics import Diagnostic, Diagnostics
