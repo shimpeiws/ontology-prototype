@@ -33,7 +33,9 @@ The Web app is presentation only:
   panel that scans all four draft files at the positions the core
   validators dereference (`app/lib/references.ts`); the FDE chooses
   whether references are retargeted. Property types come from
-  `GET /api/v1/contract`, never a hardcoded client copy. The Mapping /
+  `GET /api/v1/contract`, never a hardcoded client copy. Projections can
+  be renamed, removed, and re-subjected but not created — projection
+  authoring is an unassigned gap in authoring-flow.md. The Mapping /
   Evaluation / Agent task pages still render read-only definitions next
   to the raw editor; their forms belong to #17/#18.
 

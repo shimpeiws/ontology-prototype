@@ -220,4 +220,19 @@ describe("applyRename", () => {
     const result = applyRename(SYNTHETIC_BUNDLE_FILES, concept, "state");
     expect(result.files["mapping.yaml"]).toContain("field: status");
   });
+
+  it("prototype property names do not create phantom binding hits", () => {
+    // `in` matches inherited members; a property literally named
+    // "toString" must not report a mapping.properties.toString binding.
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Job",
+      name: "toString",
+    };
+    const hits = findReferences(SYNTHETIC_BUNDLE_FILES, concept).hits;
+    expect(hits.map((h) => h.path)).not.toContain(
+      "mapping.entities[0].properties.toString",
+    );
+  });
 });

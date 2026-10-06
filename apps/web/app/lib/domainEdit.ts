@@ -274,16 +274,28 @@ export function setDomainMeta(
   });
 }
 
-export function addEntity(text: string, name: string): string | null {
-  return applyEdit(text, (doc) => {
-    doc.setIn(["domain", "entities", name], doc.createNode({}));
+/** Add `name: {}` under `domain.<collection>`, refusing to overwrite an
+ * existing declaration (setIn would silently wipe its value). */
+function addConcept(
+  text: string,
+  collection: "entities" | "events",
+  name: string,
+): string | null {
+  return applyEdit(text, (doc, domain) => {
+    const coll = mapValue(domain, collection);
+    if (isMap(coll) && findPair(coll, name)) {
+      throw new Error(`'${name}' already exists in ${collection}`);
+    }
+    doc.setIn(["domain", collection, name], doc.createNode({}));
   });
 }
 
+export function addEntity(text: string, name: string): string | null {
+  return addConcept(text, "entities", name);
+}
+
 export function addEvent(text: string, name: string): string | null {
-  return applyEdit(text, (doc) => {
-    doc.setIn(["domain", "events", name], doc.createNode({}));
-  });
+  return addConcept(text, "events", name);
 }
 
 /**
@@ -423,11 +435,18 @@ export function addProperty(
   owner: { kind: OwnerKind; name: string },
   propName: string,
 ): string | null {
-  return applyEdit(text, (doc) => {
-    doc.setIn(
-      ["domain", owner.kind, owner.name, "properties", propName],
-      doc.createNode({}),
-    );
+  return applyEdit(text, (doc, domain) => {
+    const spec = specMapFor(doc, domain, owner.kind, owner.name);
+    let props = mapValue(spec, "properties");
+    if (isMap(props) && findPair(props, propName)) {
+      throw new Error(`property '${propName}' already exists`);
+    }
+    if (!isMap(props)) {
+      const created = doc.createNode({});
+      spec.set("properties", created);
+      props = created;
+    }
+    (props as YAMLMap).set(propName, doc.createNode({}));
   });
 }
 

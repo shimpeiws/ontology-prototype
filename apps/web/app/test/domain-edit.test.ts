@@ -355,4 +355,23 @@ describe("hostile input (INV-007)", () => {
       ),
     ).toBeNull();
   });
+
+  it("adding an existing name fails instead of wiping its spec", () => {
+    // setIn silently overwrites an existing key's value; the adders must
+    // refuse so a desynced UI cannot clobber a populated declaration.
+    expect(addEntity(SYNTHETIC_DOMAIN_YAML, "Job")).toBeNull();
+    expect(addEvent(SYNTHETIC_DOMAIN_YAML, "JobCompleted")).toBeNull();
+    expect(
+      addProperty(
+        SYNTHETIC_DOMAIN_YAML,
+        { kind: "entities", name: "Job" },
+        "status",
+      ),
+    ).toBeNull();
+    const after = js(SYNTHETIC_DOMAIN_YAML);
+    expect(
+      (after.domain as Record<string, Record<string, unknown>>).entities
+        .Job,
+    ).toHaveProperty("properties");
+  });
 });

@@ -153,7 +153,7 @@ function scanMapping(
       concept.ownerKind === "entities" &&
       scalarEq(binding.entity, concept.owner) &&
       isRecord(binding.properties) &&
-      concept.name in binding.properties
+      Object.hasOwn(binding.properties, concept.name)
     ) {
       hits.push({
         file: "mapping.yaml",
