@@ -61,8 +61,9 @@ Contract and schema metadata for the frontend, derived from the core's
 authoritative constants: API version, core version, supported
 `schema_version`, the four workspace file names, diagnostic field names,
 the operation list, and the vocabularies the editors need
-(`property_types`, `cast_types`, `source_formats`, condition operators,
-evaluation metrics/aggregations/units/comparators, deliverables).
+(`property_types`, `scalar_types`, `cast_types`, `source_formats`,
+condition operators, evaluation
+metrics/aggregations/units/comparators, deliverables).
 
 ### `POST /api/v1/workspaces/open`
 
@@ -105,7 +106,10 @@ written to disk, no entities/events are created, no model is called, no
 write-back occurs. `path` identifies the workspace the draft belongs to
 (it must still resolve under a configured root, but need not exist on
 disk); `files` maps workspace file names to their draft text. Omitted
-files are reported as `WORKSPACE.MISSING_FILE`.
+files are reported as `WORKSPACE.MISSING_FILE`. Each file's text is
+subject to the same 1 MiB cap as on-disk loading; the cap is applied by
+the core loader, so oversized request bodies are rejected after parsing
+— acceptable for a local single-user tool.
 
 ```json
 {
