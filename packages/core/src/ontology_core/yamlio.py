@@ -91,6 +91,38 @@ def load_yaml_file(path: Path, file: str, diag: Diagnostics) -> dict | None:
         )
         return None
 
+    return _parse_yaml(text, file, diag)
+
+
+def load_yaml_text(text: str, file: str, diag: Diagnostics) -> dict | None:
+    """Parse one workspace YAML document from an in-memory string, or None.
+
+    Applies the same restricted loader, size cap, and diagnostics as
+    ``load_yaml_file`` so a draft bundle validates exactly like the files
+    on disk. Never raises.
+    """
+    try:
+        data = text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        diag.error(
+            "WORKSPACE.ENCODING_ERROR",
+            f"file is not valid UTF-8: {exc}",
+            file=file,
+        )
+        return None
+
+    if len(data) > MAX_FILE_BYTES:
+        diag.error(
+            "WORKSPACE.FILE_TOO_LARGE",
+            f"file is {len(data)} bytes; limit is {MAX_FILE_BYTES}",
+            file=file,
+        )
+        return None
+
+    return _parse_yaml(text, file, diag)
+
+
+def _parse_yaml(text: str, file: str, diag: Diagnostics) -> dict | None:
     try:
         document = yaml.load(text, Loader=_WorkspaceLoader)
     except DuplicateKeyError as exc:

@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ontology-api"
+version = "0.0.1"
+description = "Local FastAPI application exposing ontology-core workspace load/inspect and draft validation for the FDE authoring UI."
+readme = { text = "Local API application for the ontology-prototype monorepo.", content-type = "text/plain" }
+requires-python = ">=3.11"
+dependencies = ["ontology-core>=0.0.1", "fastapi>=0.115", "uvicorn>=0.30"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx2>=2"]
+
+[project.scripts]
+ontology-api = "ontology_api.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
