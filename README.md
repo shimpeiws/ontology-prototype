@@ -12,6 +12,25 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 
 `apps/api/` and `apps/web/` are documented v0.2 destinations (see [docs/monorepo.md](docs/monorepo.md)); they are intentionally not implemented in v0.1. The framework-neutral authoring-flow and UI-state contract they implement is specified in [docs/authoring-flow.md](docs/authoring-flow.md).
 
+## Documentation
+
+| Document | Content |
+| --- | --- |
+| [docs/proposal.md](docs/proposal.md) | Product scope and the problem the operational loop solves |
+| [docs/v0.1.md](docs/v0.1.md) | v0.1 acceptance criteria and the demonstration workflow |
+| [docs/monorepo.md](docs/monorepo.md) | Repository boundaries and the shared-core rule |
+| [docs/workspace.md](docs/workspace.md) | Workspace definition format and validation rules |
+| [docs/ingestion.md](docs/ingestion.md) | CSV/JSON ingestion and immutable observation evidence |
+| [docs/canonical.md](docs/canonical.md) | Canonical entities, events, and the append-only rules |
+| [docs/projections.md](docs/projections.md) | Deterministic projections and frozen runs |
+| [docs/diagnosis.md](docs/diagnosis.md) | Model-backed diagnosis, provider adapters, and the default model |
+| [docs/diagnosis-evaluation.md](docs/diagnosis-evaluation.md) | Evaluation harness: fixtures, criteria, and run budget |
+| [docs/decisions.md](docs/decisions.md) | Proposal review and human approve/reject decisions |
+| [docs/execution.md](docs/execution.md) | Approved write-back, receipts, and retry behavior |
+| [docs/evaluation.md](docs/evaluation.md) | Outcome evaluation, cohorts, and guardrails |
+| [docs/authoring-flow.md](docs/authoring-flow.md) | v0.2 authoring flow and UI state contract |
+| [docs/adr/](docs/adr/) | Architecture decision records |
+
 ## Install
 
 Requires Python 3.11+.
