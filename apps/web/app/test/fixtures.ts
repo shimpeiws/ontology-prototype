@@ -131,6 +131,126 @@ export const SYNTHETIC_VALIDATE_RESPONSE: DraftValidateResponse = {
   diagnostics: [SYNTHETIC_DIAGNOSTIC],
 };
 
+/**
+ * SYNTHETIC FIXTURE — a small but complete draft bundle shaped after
+ * examples/job-invoicing, used by the domain-editor tests. Includes a
+ * comment so round-trip fidelity is exercised.
+ */
+export const SYNTHETIC_DOMAIN_YAML = `# edited in tests
+schema_version: 1
+kind: domain
+domain:
+  name: job-invoicing
+  description: Minimal model.
+  policies:
+    entity_id_type: string
+    event_times:
+      occurrence_field: occurred_at
+      observation_field: observed_at
+      date_only_timezone: UTC
+  entities:
+    Job:
+      description: A unit of work.
+      properties:
+        status: { type: string, required: true }
+        assignee:
+          type: ref
+          ref: Person
+    Person:
+      properties:
+        name: { type: string }
+  events:
+    JobCompleted: { subject: Job }
+    InvoiceIssued:
+      subject: Job
+      properties:
+        invoice: { type: ref, ref: Invoice }
+  projections:
+    CompletedButNotInvoiced: { subject: Job }
+`;
+
+export const SYNTHETIC_MAPPING_YAML = `schema_version: 1
+kind: mapping
+mapping:
+  name: jobs-csv
+  source: { name: jobs, format: csv }
+  entities:
+    - entity: Job
+      id: { field: id }
+      properties:
+        status: { field: status }
+        assignee: { field: assignee }
+    - entity: Person
+      id: { field: assignee }
+      properties:
+        name: { field: assignee }
+  events:
+    - event: JobCompleted
+      subject: { entity: Job, id: { field: id } }
+      occurred_at: { field: done_at, as: datetime }
+`;
+
+export const SYNTHETIC_EVALUATION_YAML = `schema_version: 1
+kind: evaluation
+evaluation:
+  name: latency
+  interval: { start_event: JobCompleted, end_event: InvoiceIssued }
+  metric: duration
+  aggregation: median
+  unit: days
+  baseline: { value: 9 }
+  target: { comparator: lt, value: 4 }
+  guardrails: []
+`;
+
+export const SYNTHETIC_AGENT_YAML = `schema_version: 1
+kind: agent
+agent:
+  name: t
+  projection: CompletedButNotInvoiced
+  task: { goal: g, deliverables: [explanation] }
+  permitted_actions:
+    SendReminder:
+      params:
+        target: { type: ref, ref: Person, required: true }
+        related_entity: { type: ref, ref: Job, required: true }
+`;
+
+/** All four files, consistent with each other (Job/Person/Invoice refs). */
+export const SYNTHETIC_BUNDLE_FILES: Record<string, string> = {
+  "domain.yaml": SYNTHETIC_DOMAIN_YAML,
+  "mapping.yaml": SYNTHETIC_MAPPING_YAML,
+  "evaluation.yaml": SYNTHETIC_EVALUATION_YAML,
+  "agent.yaml": SYNTHETIC_AGENT_YAML,
+};
+
+/** Open response whose file texts are the full synthetic bundle. */
+export const SYNTHETIC_BUNDLE_OPEN_RESPONSE: OpenResponse = {
+  ...SYNTHETIC_OPEN_RESPONSE,
+  files: { ...SYNTHETIC_BUNDLE_FILES },
+};
+
+/** Contract vocabulary subset the domain editor needs. */
+export const SYNTHETIC_CONTRACT = {
+  api_version: "v1",
+  core_version: "0.0.0",
+  schema_version: 1,
+  workspace_files: {},
+  diagnostic_fields: [],
+  operations: {},
+  contract: {
+    property_types: [
+      "string",
+      "integer",
+      "number",
+      "boolean",
+      "date",
+      "datetime",
+      "ref",
+    ],
+  },
+};
+
 /** Build a fetch stub that returns a JSON response. */
 export function stubFetchJson(status: number, body: unknown) {
   return (input: RequestInfo | URL, init?: RequestInit) => {

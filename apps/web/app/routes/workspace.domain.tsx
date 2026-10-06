@@ -1,87 +1,94 @@
+import { useMemo, useState } from "react";
+
 import { useWorkspace } from "../workspace/context";
 import { DefinitionPage } from "../components/DefinitionPage";
-import { EmptyState } from "../components/states";
-import type { PropertySpec } from "../lib/types";
+import { DomainEditor } from "../components/DomainForms";
+import { ErrorState, LoadingState } from "../components/states";
+import { parseDomainDraft } from "../lib/domainEdit";
+import { diagnosticsForFile } from "../lib/diagnostics";
+import { useContract } from "../lib/useContract";
+import type { WorkspaceFileName } from "../lib/types";
 
 export function meta() {
   return [{ title: "ontology — domain" }];
 }
 
-function PropertyLine({ spec }: { spec: PropertySpec }) {
-  return (
-    <li>
-      <code>{spec.name}</code>: {spec.type}
-      {spec.ref ? <code>{` → ${spec.ref}`}</code> : null}
-      {spec.required ? " (required)" : null}
-      {spec.description ? ` — ${spec.description}` : null}
-    </li>
-  );
-}
-
 export default function DomainPage() {
-  const { state } = useWorkspace();
-  const domain = state.workspace?.definitions?.domain;
-  if (!domain) return <DefinitionPage title="Domain" file="domain.yaml" />;
+  const { state, editFile } = useWorkspace();
+  const contract = useContract();
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const draftText = state.drafts["domain.yaml"] ?? null;
+  const parsed = useMemo(
+    () =>
+      draftText === null
+        ? {
+            view: null,
+            problem:
+              "domain.yaml is not in the draft — restore it with the raw editor below.",
+          }
+        : parseDomainDraft(draftText),
+    [draftText],
+  );
+
+  const editDomain = (fn: (text: string) => string | null) => {
+    if (draftText === null) return;
+    const next = fn(draftText);
+    if (next === null) {
+      setEditError(
+        "Could not apply the structured edit — the draft may need fixing in the raw editor first.",
+      );
+    } else {
+      setEditError(null);
+      editFile("domain.yaml", next);
+    }
+  };
+
+  const editFiles = (files: Partial<Record<WorkspaceFileName, string>>) => {
+    for (const [file, text] of Object.entries(files)) {
+      editFile(file as WorkspaceFileName, text);
+    }
+  };
+
+  // Property types come from the API contract (core constants) — never a
+  // hardcoded client copy.
+  const propertyTypes = (() => {
+    const pt = contract.contract?.contract?.property_types;
+    return Array.isArray(pt)
+      ? pt.filter((t): t is string => typeof t === "string")
+      : [];
+  })();
 
   return (
-    <DefinitionPage title="Domain" file="domain.yaml">
-      <p>
-        <strong>{domain.name}</strong>
-        {domain.description ? ` — ${domain.description}` : null}
-      </p>
-
-      <section aria-labelledby="entities-heading">
-        <h2 id="entities-heading">Entities</h2>
-        {Object.keys(domain.entities).length === 0 ? (
-          <EmptyState title="No entities defined yet." />
-        ) : (
-          <ul className="definition-list">
-            {Object.values(domain.entities).map((entity) => (
-              <li key={entity.name}>
-                <strong>{entity.name}</strong>
-                {entity.description ? ` — ${entity.description}` : null}
-                <ul>
-                  {Object.values(entity.properties).map((p) => (
-                    <PropertyLine key={p.name} spec={p} />
-                  ))}
-                </ul>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section aria-labelledby="events-heading">
-        <h2 id="events-heading">Events</h2>
-        {Object.keys(domain.events).length === 0 ? (
-          <EmptyState title="No events defined yet." />
-        ) : (
-          <ul className="definition-list">
-            {Object.values(domain.events).map((event) => (
-              <li key={event.name}>
-                <strong>{event.name}</strong> on <code>{event.subject}</code>
-                {event.description ? ` — ${event.description}` : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section aria-labelledby="projections-heading">
-        <h2 id="projections-heading">Projections</h2>
-        {Object.keys(domain.projections).length === 0 ? (
-          <EmptyState title="No projections defined yet." />
-        ) : (
-          <ul className="definition-list">
-            {Object.values(domain.projections).map((p) => (
-              <li key={p.name}>
-                <strong>{p.name}</strong> on <code>{p.subject}</code>
-                {p.description ? ` — ${p.description}` : null}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+    <DefinitionPage
+      title="Domain"
+      file="domain.yaml"
+      requireDefinitions={false}
+    >
+      {contract.error ? (
+        <ErrorState error={contract.error} onRetry={contract.retry} />
+      ) : null}
+      {editError ? (
+        <p className="field-error" role="alert">
+          {editError}
+        </p>
+      ) : null}
+      {parsed.view ? (
+        <DomainEditor
+          view={parsed.view}
+          diagnostics={diagnosticsForFile(state, "domain.yaml")}
+          propertyTypes={propertyTypes}
+          editDomain={editDomain}
+          editFiles={editFiles}
+        />
+      ) : (
+        <p className="hint">
+          Structured editor unavailable: {parsed.problem}
+        </p>
+      )}
+      {contract.loading && parsed.view ? (
+        <LoadingState label="Loading contract vocabulary…" />
+      ) : null}
     </DefinitionPage>
   );
 }

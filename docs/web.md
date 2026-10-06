@@ -25,8 +25,17 @@ The Web app is presentation only:
   baseline, and invalidates any displayed draft-validation result.
   "Validate draft" posts the whole bundle to `/api/v1/workspaces/drafts/validate`.
   Saving to disk is not implemented here (#19).
-- Raw-text editing is the interim authoring surface; structured
-  per-definition forms belong to #16/#17/#18.
+- The Domain page offers structured authoring on top of the raw editor: a
+  visual graph of entities/events/projections, an inspectable list, and
+  per-concept forms that mutate the draft `domain.yaml` through the
+  `yaml` CST-preserving document API — comments, key order, and unmodeled
+  sections survive edits. Rename/remove goes through a reference-impact
+  panel that scans all four draft files at the positions the core
+  validators dereference (`app/lib/references.ts`); the FDE chooses
+  whether references are retargeted. Property types come from
+  `GET /api/v1/contract`, never a hardcoded client copy. The Mapping /
+  Evaluation / Agent task pages still render read-only definitions next
+  to the raw editor; their forms belong to #17/#18.
 
 ## Development
 

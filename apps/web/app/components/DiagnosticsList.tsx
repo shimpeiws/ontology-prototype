@@ -44,3 +44,28 @@ export function DiagnosticsList({
     </ul>
   );
 }
+
+/**
+ * Diagnostics attached to one field/control, rendered compactly beside it.
+ * Same verbatim rendering rule as DiagnosticsList — severity, code,
+ * message, hint straight from the core.
+ */
+export function FieldDiagnostics({
+  diagnostics,
+}: {
+  diagnostics: Diagnostic[];
+}) {
+  if (diagnostics.length === 0) return null;
+  return (
+    <ul className="field-diagnostics">
+      {diagnostics.map((d, i) => (
+        <li key={i} className={`diagnostic severity-${d.severity}`}>
+          <span className="diagnostic-severity">{d.severity}</span>{" "}
+          <code className="diagnostic-code">{d.code}</code>{" "}
+          <span className="diagnostic-message">{d.message}</span>
+          {d.hint ? <span className="diagnostic-hint">{d.hint}</span> : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
