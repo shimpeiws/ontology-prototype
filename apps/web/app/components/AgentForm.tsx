@@ -57,6 +57,9 @@ export function AgentForm() {
   const vocabulary = contractVocabulary(contract);
   const diagnostics = useFileDiagnostics(FILE);
   const refs = useDomainReferences();
+  // Hooks precede the gate: the ready/gate branches must not change the
+  // hook count between renders.
+  const [newDeliverable, setNewDeliverable] = useState("");
 
   if (parsed.status !== "ready") {
     return (
@@ -81,7 +84,6 @@ export function AgentForm() {
   const knownDeliverables = vocabulary?.deliverables ?? null;
   const actions = mapAt(doc, ACTIONS);
   const entityList = { id: "agent-domain-entities", options: refs.entities };
-  const [newDeliverable, setNewDeliverable] = useState("");
 
   function addDeliverable(name: string) {
     const trimmed = name.trim();
