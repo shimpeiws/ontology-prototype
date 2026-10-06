@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from datetime import timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -33,8 +34,13 @@ from ontology_core.evaluation import (
     METRICS,
     UNITS,
 )
-from ontology_core.mapping import SOURCE_FORMATS
+from ontology_core.mapping import SOURCE_FORMATS, TIME_CASTS
 from ontology_core.model import CAST_TYPES, PROPERTY_TYPES, SCALAR_TYPES
+from ontology_core.preview import (
+    MAX_PREVIEW_BYTES,
+    MAX_PREVIEW_RECORDS,
+    preview_snapshot,
+)
 from ontology_core.workspace import SUPPORTED_SCHEMA_VERSION
 from ontology_core.yamlio import MAX_FILE_BYTES
 
@@ -96,6 +102,22 @@ class SaveOutcome:
     message: str | None
 
 
+@dataclass
+class DraftPreviewResult:
+    """Outcome of a draft preview — isolated, nothing persisted.
+
+    ``preview`` carries the core's preview payload (input/mapping digests,
+    per-record observations with diagnostics) and is ``None`` when the draft
+    bundle did not validate into a typed workspace.
+    """
+
+    path: Path
+    valid: bool
+    diagnostics: list[Diagnostic]
+    digest: str
+    preview: dict[str, Any] | None
+
+
 class WorkspaceService(Protocol):
     """Workspace operations the API exposes. Injectable for tests."""
 
@@ -108,6 +130,9 @@ class WorkspaceService(Protocol):
     def save(
         self, path: str, files: Mapping[str, str], base_digest: str
     ) -> SaveOutcome: ...
+    def preview_draft(
+        self, path: str, files: Mapping[str, str], sample_text: str
+    ) -> DraftPreviewResult: ...
 
 
 class CoreWorkspaceService:
@@ -150,14 +175,7 @@ class CoreWorkspaceService:
 
     def validate_draft(self, path: str, files: Mapping[str, str]) -> DraftResult:
         resolved = self._resolve(path)
-        unknown = sorted(set(files) - set(WORKSPACE_FILES.values()))
-        if unknown:
-            raise ApiError(
-                400,
-                "API.UNKNOWN_WORKSPACE_FILE",
-                f"unknown workspace file(s): {', '.join(unknown)}; "
-                f"expected only {', '.join(sorted(WORKSPACE_FILES.values()))}",
-            )
+        self._check_file_names(files)
         result = load_workspace_texts(files, path=resolved)
         return DraftResult(
             path=resolved,
@@ -201,6 +219,42 @@ class CoreWorkspaceService:
             definitions=_definitions(result.workspace),
             message=result.message,
         )
+
+    def preview_draft(
+        self, path: str, files: Mapping[str, str], sample_text: str
+    ) -> DraftPreviewResult:
+        """Resolve a draft mapping against an in-memory sample.
+
+        The draft bundle is validated exactly like ``validate_draft``; only a
+        valid bundle produces a ``preview`` payload. The core preview reads
+        nothing from disk and writes nothing anywhere — no workspace files,
+        no ``.ontology/`` runtime artifacts, no canonical store.
+        """
+        resolved = self._resolve(path)
+        self._check_file_names(files)
+        result = load_workspace_texts(files, path=resolved)
+        preview = (
+            _preview_payload(result.workspace, sample_text)
+            if result.workspace is not None
+            else None
+        )
+        return DraftPreviewResult(
+            path=resolved,
+            valid=result.ok,
+            diagnostics=result.diagnostics,
+            digest=bundle_digest(files),
+            preview=preview,
+        )
+
+    def _check_file_names(self, files: Mapping[str, str]) -> None:
+        unknown = sorted(set(files) - set(WORKSPACE_FILES.values()))
+        if unknown:
+            raise ApiError(
+                400,
+                "API.UNKNOWN_WORKSPACE_FILE",
+                f"unknown workspace file(s): {', '.join(unknown)}; "
+                f"expected only {', '.join(sorted(WORKSPACE_FILES.values()))}",
+            )
 
     def _resolve(self, raw_path: str) -> Path:
         """Resolve a client path and require containment under a root.
@@ -298,6 +352,36 @@ def _definitions(workspace: Workspace | None) -> dict[str, Any] | None:
     }
 
 
+def _preview_payload(workspace: Workspace, sample_text: str) -> dict[str, Any]:
+    """Run the core preview over the sample text and shape the response.
+
+    ``surrogatepass`` mirrors ``bundle_digest``: a stray surrogate in the
+    JSON-decoded string encodes here, then fails the UTF-8 decode inside the
+    preview as an ``INGEST.ENCODING_ERROR`` diagnostic — never a crash.
+    """
+    content = sample_text.encode("utf-8", errors="surrogatepass")
+    result = preview_snapshot(workspace, content)
+    observed_at = (
+        result.observed_at.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+        if result.observed_at is not None
+        else None
+    )
+    return {
+        "preview_id": result.preview_id,
+        "source": result.source,
+        "format": result.format,
+        "input_digest": result.content_digest,
+        "mapping_digest": result.mapping_digest,
+        "observed_at": observed_at,
+        "record_count": result.record_count,
+        "truncated": result.truncated,
+        "observations": [o.to_dict() for o in result.observations],
+        "diagnostics": [d.to_dict() for d in result.diagnostics],
+    }
+
+
 def contract_metadata() -> dict[str, Any]:
     """Versioned contract/schema metadata derived from the shared core.
 
@@ -322,12 +406,18 @@ def contract_metadata() -> dict[str, Any]:
             "open": f"POST /api/{API_VERSION}/workspaces/open",
             "validate_draft": f"POST /api/{API_VERSION}/workspaces/drafts/validate",
             "save": f"POST /api/{API_VERSION}/workspaces/save",
+            "preview_draft": f"POST /api/{API_VERSION}/workspaces/drafts/preview",
         },
         "contract": {
             "property_types": list(PROPERTY_TYPES),
             "scalar_types": list(SCALAR_TYPES),
             "cast_types": list(CAST_TYPES),
+            "time_casts": list(TIME_CASTS),
             "source_formats": list(SOURCE_FORMATS),
+            "preview_limits": {
+                "max_bytes": MAX_PREVIEW_BYTES,
+                "max_records": MAX_PREVIEW_RECORDS,
+            },
             "condition_operators": {
                 "comparison": sorted(COMPARISON_OPS),
                 "set": sorted(SET_OPS),

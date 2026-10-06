@@ -321,7 +321,7 @@ export function DraftDocGate({
   children,
 }: {
   file: WorkspaceFileName;
-  kind: "evaluation" | "agent";
+  kind: "evaluation" | "agent" | "mapping";
   parsed: DraftDocState;
   children?: ReactNode;
 }) {

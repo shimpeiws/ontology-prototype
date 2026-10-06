@@ -1,6 +1,8 @@
 import { useWorkspace } from "../workspace/context";
 import { DefinitionPage } from "../components/DefinitionPage";
 import { EmptyState } from "../components/states";
+import { MappingForm } from "../components/MappingForm";
+import { PreviewPanel } from "../components/PreviewPanel";
 import type { FieldAssignment } from "../lib/types";
 
 export function meta() {
@@ -15,12 +17,18 @@ function formatAssignment(a: FieldAssignment): string {
 export default function MappingPage() {
   const { state } = useWorkspace();
   const mapping = state.workspace?.definitions?.mapping;
+  const editor = (
+    <>
+      <MappingForm />
+      <PreviewPanel />
+    </>
+  );
   if (!mapping) {
-    return <DefinitionPage title="Mapping" file="mapping.yaml" />;
+    return <DefinitionPage title="Mapping" file="mapping.yaml" form={editor} />;
   }
 
   return (
-    <DefinitionPage title="Mapping" file="mapping.yaml">
+    <DefinitionPage title="Mapping" file="mapping.yaml" form={editor}>
       <p>
         <strong>{mapping.name}</strong>
         {mapping.description ? ` — ${mapping.description}` : null}

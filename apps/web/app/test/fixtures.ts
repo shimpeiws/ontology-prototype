@@ -11,6 +11,7 @@
 import type {
   ContractResponse,
   Diagnostic,
+  DraftPreviewResponse,
   DraftValidateResponse,
   OpenResponse,
   SaveResponse,
@@ -353,8 +354,15 @@ export const SYNTHETIC_CONTRACT_RESPONSE: ContractResponse = {
     ],
     scalar_types: ["string", "integer", "number", "boolean", "date", "datetime"],
     cast_types: ["string", "integer", "number", "boolean", "date", "datetime"],
+    time_casts: ["date", "datetime"],
     source_formats: ["csv", "json"],
-    condition_operators: {},
+    preview_limits: { max_bytes: 262144, max_records: 500 },
+    condition_operators: {
+      comparison: ["eq", "gt", "gte", "lt", "lte", "ne"],
+      set: ["in", "not_in"],
+      null: ["is_null", "not_null"],
+      logic: ["and", "not", "or"],
+    },
     evaluation: {
       metrics: ["duration"],
       aggregations: ["median", "mean", "min", "max", "count"],
@@ -382,6 +390,138 @@ export const SYNTHETIC_FORM_OPEN_RESPONSE: OpenResponse = {
     "mapping.yaml": SYNTHETIC_MAPPING_YAML,
     "evaluation.yaml": SYNTHETIC_FORM_EVALUATION_YAML,
     "agent.yaml": SYNTHETIC_FORM_AGENT_YAML,
+  },
+};
+
+/**
+ * SYNTHETIC FIXTURE — a richer mapping text for the structured mapping
+ * form (#17): two entity bindings, two gated events with `when`
+ * conditions, an optional observed_at assignment, and a comment proving
+ * form edits preserve untouched content.
+ */
+export const SYNTHETIC_MAPPING_FORM_YAML = `schema_version: 1
+kind: mapping
+# comment proving form edits preserve untouched content
+mapping:
+  name: jobs-csv
+  description: Jobs CSV to canonical entities and events.
+  source: { name: jobs, format: csv }
+  entities:
+    - entity: Job
+      id: { field: id }
+      properties:
+        status: { field: status, as: string }
+        assignee: { field: assignee }
+    - entity: Person
+      id: { field: assignee }
+      properties:
+        name: { field: assignee }
+  events:
+    - event: JobCompleted
+      subject: { entity: Job, id: { field: id } }
+      when:
+        op: and
+        args:
+          - { op: eq, field: status, value: completed }
+          - { op: not_null, field: completed_at }
+      occurred_at: { field: completed_at, as: datetime }
+    - event: InvoiceIssued
+      subject: { entity: Job, id: { field: id } }
+      when: { op: not_null, field: invoiced_at }
+      occurred_at: { field: invoiced_at, as: datetime }
+      observed_at: { field: observed_ts, as: datetime }
+`;
+
+/** Open response whose mapping.yaml is the form-test mapping. */
+export const SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE: OpenResponse = {
+  ...SYNTHETIC_FORM_OPEN_RESPONSE,
+  files: {
+    ...SYNTHETIC_FORM_OPEN_RESPONSE.files,
+    "mapping.yaml": SYNTHETIC_MAPPING_FORM_YAML,
+  },
+};
+
+/** SYNTHETIC FIXTURE — a preview response shaped after service._preview_payload. */
+export const SYNTHETIC_PREVIEW_RESPONSE: DraftPreviewResponse = {
+  api_version: "v1",
+  valid: true,
+  digest: "sha256:draft-bundle",
+  diagnostics: [],
+  preview: {
+    preview_id: "prev-aaaabbbbcccc-dddd",
+    source: "jobs",
+    format: "csv",
+    input_digest: "sha256:sample",
+    mapping_digest: "sha256:mapping",
+    observed_at: "2026-10-05T12:00:00Z",
+    record_count: 2,
+    truncated: false,
+    observations: [
+      {
+        observation_id: "obs-aaaa",
+        ingest_id: "prev-aaaabbbbcccc-dddd",
+        source: "jobs.csv",
+        row: 2,
+        status: "accepted",
+        observed_at: "2026-10-05T12:00:00Z",
+        content_digest: "sha256:sample",
+        mapping_digest: "sha256:mapping",
+        record: {
+          id: "101",
+          status: "completed",
+          assignee: "taro",
+          completed_at: "2026-10-01",
+          invoiced_at: null,
+        },
+        entities: [
+          {
+            entity: "Job",
+            id: "101",
+            properties: { status: "completed", assignee: "taro" },
+          },
+        ],
+        events: [
+          {
+            event: "JobCompleted",
+            subject: { entity: "Job", id: "101" },
+            occurred_at: "2026-10-01T00:00:00Z",
+            observed_at: "2026-10-05T12:00:00Z",
+          },
+        ],
+        diagnostics: [],
+      },
+      {
+        observation_id: "obs-bbbb",
+        ingest_id: "prev-aaaabbbbcccc-dddd",
+        source: "jobs.csv",
+        row: 3,
+        status: "rejected",
+        observed_at: "2026-10-05T12:00:00Z",
+        content_digest: "sha256:sample",
+        mapping_digest: "sha256:mapping",
+        record: {
+          id: "",
+          status: "in_progress",
+          assignee: "hanako",
+          completed_at: null,
+          invoiced_at: null,
+        },
+        entities: [],
+        events: [],
+        diagnostics: [
+          {
+            severity: "error",
+            code: "INGEST.MISSING_ID",
+            message: "entity 'Job' resolved no id",
+            file: "jobs.csv",
+            path: "record[3].id",
+            line: null,
+            hint: null,
+          },
+        ],
+      },
+    ],
+    diagnostics: [],
   },
 };
 

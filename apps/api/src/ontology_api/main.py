@@ -23,6 +23,8 @@ from .schemas import (
     API_VERSION,
     ContractResponse,
     DiagnosticOut,
+    DraftPreviewRequest,
+    DraftPreviewResponse,
     DraftValidateRequest,
     DraftValidateResponse,
     ErrorResponse,
@@ -209,6 +211,31 @@ def create_app(
             definitions=result.definitions,
             diagnostics=[DiagnosticOut(**d.to_dict()) for d in result.diagnostics],
             message=result.message,
+        )
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/drafts/preview",
+        response_model=DraftPreviewResponse,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def preview_draft(
+        payload: DraftPreviewRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> DraftPreviewResponse:
+        result = service.preview_draft(
+            payload.path, payload.files, payload.sample.text
+        )
+        return DraftPreviewResponse(
+            api_version=API_VERSION,
+            valid=result.valid,
+            digest=result.digest,
+            diagnostics=[DiagnosticOut(**d.to_dict()) for d in result.diagnostics],
+            preview=result.preview,
         )
 
     return app

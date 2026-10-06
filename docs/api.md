@@ -61,8 +61,8 @@ Contract and schema metadata for the frontend, derived from the core's
 authoritative constants: API version, core version, supported
 `schema_version`, the four workspace file names, diagnostic field names,
 the operation list, and the vocabularies the editors need
-(`property_types`, `scalar_types`, `cast_types`, `source_formats`,
-condition operators, evaluation
+(`property_types`, `scalar_types`, `cast_types`, `time_casts`,
+`source_formats`, `preview_limits`, condition operators, evaluation
 metrics/aggregations/units/comparators, deliverables).
 
 ### `POST /api/v1/workspaces/open`
@@ -165,6 +165,83 @@ files — never canonical state, observations, traces, proposals, or other
 files in the directory — and never creates the workspace directory
 itself. Activation semantics (staging, per-file rename, rollback) are in
 [workspace.md](workspace.md#saving).
+
+### `POST /api/v1/workspaces/drafts/preview`
+
+Resolve a draft mapping against a bounded in-memory source sample. The
+draft bundle is validated exactly like `drafts/validate`; only a valid
+bundle produces a `preview` payload. The preview is fully isolated: it
+reads nothing from disk (the posted `files` are the whole input), writes
+nothing to workspace files, `.ontology/` runtime artifacts, or the
+canonical store, and never runs arbitrary expressions — only the
+restricted condition language the core defines.
+
+```json
+{
+  "path": "job-invoicing",
+  "files": { "domain.yaml": "…", "mapping.yaml": "…", "evaluation.yaml": "…", "agent.yaml": "…" },
+  "sample": { "text": "id,status,assignee\n101,completed,taro" }
+}
+```
+
+The sample format is the draft's `mapping.source.format` (`csv` or
+`json`); there is no request-side format override. Bounds come from the
+core (`MAX_PREVIEW_BYTES`, `MAX_PREVIEW_RECORDS`, exposed under
+`contract.preview_limits`): an oversized sample is a `PREVIEW.*`
+diagnostic, not an HTTP error, and an over-long record list is truncated
+with `truncated: true` plus a warning.
+
+Response `200`:
+
+```json
+{
+  "api_version": "v1",
+  "valid": true,
+  "digest": "sha256:…",
+  "diagnostics": [],
+  "preview": {
+    "preview_id": "prev-…",
+    "source": "jobs",
+    "format": "csv",
+    "input_digest": "sha256:…",
+    "mapping_digest": "sha256:…",
+    "observed_at": "2026-10-05T12:00:00Z",
+    "record_count": 2,
+    "truncated": false,
+    "observations": [
+      {
+        "observation_id": "obs-…",
+        "ingest_id": "prev-…",
+        "source": "jobs.csv",
+        "row": 2,
+        "status": "accepted",
+        "observed_at": "…",
+        "content_digest": "sha256:…",
+        "mapping_digest": "sha256:…",
+        "record": { "id": "101", "invoiced_at": null },
+        "entities": [ { "entity": "Job", "id": "101", "properties": {…} } ],
+        "events": [ { "event": "JobCompleted", "subject": {…}, "occurred_at": "…", "observed_at": "…" } ],
+        "diagnostics": []
+      }
+    ],
+    "diagnostics": []
+  }
+}
+```
+
+- `preview` is `null` when the draft bundle did not validate; the draft
+  `diagnostics` explain why.
+- `input_digest`/`mapping_digest` and the derived `preview_id`/
+  `observation_id`s make the input and mapping versions of a result
+  explicit — a rerun over identical bytes reports identical ids.
+- `observations[].record` holds the normalized record (blanks/nulls as
+  `null`); rejected rows keep the record and the diagnostics that
+  rejected it — a record is accepted whole or rejected whole.
+- `diagnostics` at the payload level aggregates every finding — run-level
+  (`INGEST.ENCODING_ERROR`, `PREVIEW.TRUNCATED`, …) and per-record. Each
+  observation repeats its own findings under `observations[].diagnostics`,
+  so clients rendering per-row diagnostics should read that field instead
+  of filtering the payload list.
 
 ## Errors
 

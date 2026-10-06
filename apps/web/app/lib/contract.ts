@@ -22,11 +22,28 @@ export interface ContractVocabulary {
   guardrailComparators: string[];
   deliverables: string[];
   propertyTypes: string[];
+  sourceFormats: string[];
+  castTypes: string[];
+  /** Casts allowed on event time assignments (date/datetime). */
+  timeCasts: string[];
+  conditionOperators: {
+    comparison: string[];
+    set: string[];
+    null: string[];
+    logic: string[];
+  };
+  previewLimits: { maxBytes: number; maxRecords: number } | null;
 }
 
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((v): v is string => typeof v === "string");
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 /** Extract the editor vocabularies from a contract response. */
@@ -35,10 +52,9 @@ export function contractVocabulary(
 ): ContractVocabulary | null {
   if (!contract) return null;
   const c = contract.contract;
-  const evaluation =
-    typeof c["evaluation"] === "object" && c["evaluation"] !== null
-      ? (c["evaluation"] as Record<string, unknown>)
-      : {};
+  const evaluation = asRecord(c["evaluation"]);
+  const ops = asRecord(c["condition_operators"]);
+  const limits = asRecord(c["preview_limits"]);
   return {
     metrics: stringList(evaluation["metrics"]),
     aggregations: stringList(evaluation["aggregations"]),
@@ -47,6 +63,23 @@ export function contractVocabulary(
     guardrailComparators: stringList(evaluation["guardrail_comparators"]),
     deliverables: stringList(c["deliverables"]),
     propertyTypes: stringList(c["property_types"]),
+    sourceFormats: stringList(c["source_formats"]),
+    castTypes: stringList(c["cast_types"]),
+    timeCasts: stringList(c["time_casts"]),
+    conditionOperators: {
+      comparison: stringList(ops["comparison"]),
+      set: stringList(ops["set"]),
+      null: stringList(ops["null"]),
+      logic: stringList(ops["logic"]),
+    },
+    previewLimits:
+      typeof limits["max_bytes"] === "number" &&
+      typeof limits["max_records"] === "number"
+        ? {
+            maxBytes: limits["max_bytes"],
+            maxRecords: limits["max_records"],
+          }
+        : null,
   };
 }
 
