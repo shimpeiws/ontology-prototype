@@ -57,6 +57,70 @@ export interface ContractResponse {
   contract: Record<string, unknown>;
 }
 
+/* ---- Draft mapping preview (POST /workspaces/drafts/preview) ---- */
+
+export interface PreviewRequest {
+  path: string;
+  files: Record<string, string>;
+  sample: { text: string };
+}
+
+export interface PreviewEntity {
+  entity: string;
+  id: string;
+  properties: Record<string, unknown>;
+}
+
+export interface PreviewEvent {
+  event: string;
+  subject: { entity: string; id: string };
+  occurred_at: string;
+  observed_at: string;
+}
+
+/** One source record resolved by the draft mapping (core Observation). */
+export interface PreviewObservation {
+  observation_id: string;
+  ingest_id: string;
+  source: string;
+  row: number;
+  status: "accepted" | "rejected" | string;
+  observed_at: string;
+  content_digest: string;
+  mapping_digest: string;
+  /** Normalized record: blanks/nulls are null, casts already applied. */
+  record: Record<string, string | number | boolean | null>;
+  entities: PreviewEntity[];
+  events: PreviewEvent[];
+  diagnostics: Diagnostic[];
+}
+
+export interface PreviewPayload {
+  preview_id: string | null;
+  source: string;
+  format: string;
+  /** sha256 of the exact sample bytes — the input version. */
+  input_digest: string | null;
+  /** sha256 of the mapping definition — the mapping version. */
+  mapping_digest: string | null;
+  observed_at: string | null;
+  record_count: number;
+  truncated: boolean;
+  observations: PreviewObservation[];
+  /** Run-level + per-record diagnostics from the shared resolve path. */
+  diagnostics: Diagnostic[];
+}
+
+export interface DraftPreviewResponse {
+  api_version: string;
+  valid: boolean;
+  /** Digest of the draft bundle the preview ran against. */
+  digest: string;
+  diagnostics: Diagnostic[];
+  /** Null when the draft bundle did not validate. */
+  preview: PreviewPayload | null;
+}
+
 /* ---- Typed workspace definitions (mirrors ontology_core.model) ---- */
 
 export interface PropertySpec {

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "../lib/api";
 import {
   SYNTHETIC_OPEN_RESPONSE,
+  SYNTHETIC_PREVIEW_RESPONSE,
   SYNTHETIC_VALIDATE_RESPONSE,
   stubFetchJson,
 } from "./fixtures";
@@ -48,6 +49,28 @@ describe("api client", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       path: "job-invoicing",
       files: { "domain.yaml": "x" },
+    });
+  });
+
+  it("sends draft files and the sample to the preview endpoint", async () => {
+    const fetchStub = vi.fn(stubFetchJson(200, SYNTHETIC_PREVIEW_RESPONSE));
+    vi.stubGlobal("fetch", fetchStub);
+
+    const result = await api.previewDraft(
+      "job-invoicing",
+      { "mapping.yaml": "x" },
+      { text: "id,status\n101,done" },
+    );
+
+    expect(result.valid).toBe(true);
+    expect(result.preview?.preview_id).toBe("prev-aaaabbbbcccc-dddd");
+    expect(result.preview?.observations[0].row).toBe(2);
+    const [url, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/workspaces/drafts/preview");
+    expect(JSON.parse(init.body as string)).toEqual({
+      path: "job-invoicing",
+      files: { "mapping.yaml": "x" },
+      sample: { text: "id,status\n101,done" },
     });
   });
 

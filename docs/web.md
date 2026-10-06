@@ -38,13 +38,30 @@ The Web app is presentation only:
   authoring is an unassigned gap in authoring-flow.md.
 - Draft edits are made in two equivalent views: a raw-text editor and
   structured per-definition forms (evaluation and agent task from #18;
-  the domain form is part of the Domain editor above, and the mapping
-  form belongs to #17). The forms mutate the same draft YAML text via
+  the domain form is part of the Domain editor above; the mapping form
+  is described below). The forms mutate the same draft YAML text via
   the `yaml` Document API, so unexposed fields, comments, and ordering
   are preserved; a draft that does not parse degrades the form to a
   notice and leaves the raw editor usable. Select options come from
   `GET /api/v1/contract`; entity/event/projection suggestions come
   from the domain draft — the core remains the only validator.
+- The Mapping page carries the structured mapping form plus a preview
+  panel (#17). The form edits `mapping.yaml`'s restricted mapping
+  language: source name/format, entity bindings (id + property
+  `{field|literal, as}` assignments), and event bindings (subject,
+  `when` condition tree over the allowlisted operators, occurrence and
+  optional observation-time assignments restricted to the contract's
+  `time_casts`). The panel posts a pasted CSV/JSON sample plus the whole
+  draft bundle to `/api/v1/workspaces/drafts/preview`; the format is the
+  draft's `mapping.source.format`, and the byte/record bounds come from
+  `contract.preview_limits`. Results show each source row next to the
+  canonical entities/events it produced — normalized nulls and
+  timestamps, `accepted`/`rejected` status, evidence references
+  (observation id, preview id, row, input and mapping digests), and
+  per-record diagnostics. A displayed result is keyed to the draft
+  revision and sample text it ran against: editing the draft or the
+  sample marks it stale until re-run, so a preview can never present
+  results for an older mapping as current.
 
 ## Development
 

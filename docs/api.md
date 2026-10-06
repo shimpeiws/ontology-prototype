@@ -123,6 +123,81 @@ valid, and the cross-definition `diagnostics` — the same list the core
 produces for the equivalent on-disk bundle, so a draft and the CLI always
 agree.
 
+### `POST /api/v1/workspaces/drafts/preview`
+
+Resolve a draft mapping against a bounded in-memory source sample. The
+draft bundle is validated exactly like `drafts/validate`; only a valid
+bundle produces a `preview` payload. The preview is fully isolated: it
+reads nothing from disk (the posted `files` are the whole input), writes
+nothing to workspace files, `.ontology/` runtime artifacts, or the
+canonical store, and never runs arbitrary expressions — only the
+restricted condition language the core defines.
+
+```json
+{
+  "path": "job-invoicing",
+  "files": { "domain.yaml": "…", "mapping.yaml": "…", "evaluation.yaml": "…", "agent.yaml": "…" },
+  "sample": { "text": "id,status,assignee\n101,completed,taro" }
+}
+```
+
+The sample format is the draft's `mapping.source.format` (`csv` or
+`json`); there is no request-side format override. Bounds come from the
+core (`MAX_PREVIEW_BYTES`, `MAX_PREVIEW_RECORDS`, exposed under
+`contract.preview_limits`): an oversized sample is a `PREVIEW.*`
+diagnostic, not an HTTP error, and an over-long record list is truncated
+with `truncated: true` plus a warning.
+
+Response `200`:
+
+```json
+{
+  "api_version": "v1",
+  "valid": true,
+  "digest": "sha256:…",
+  "diagnostics": [],
+  "preview": {
+    "preview_id": "prev-…",
+    "source": "jobs",
+    "format": "csv",
+    "input_digest": "sha256:…",
+    "mapping_digest": "sha256:…",
+    "observed_at": "2026-10-05T12:00:00Z",
+    "record_count": 2,
+    "truncated": false,
+    "observations": [
+      {
+        "observation_id": "obs-…",
+        "ingest_id": "prev-…",
+        "source": "jobs.csv",
+        "row": 2,
+        "status": "accepted",
+        "observed_at": "…",
+        "content_digest": "sha256:…",
+        "mapping_digest": "sha256:…",
+        "record": { "id": "101", "invoiced_at": null },
+        "entities": [ { "entity": "Job", "id": "101", "properties": {…} } ],
+        "events": [ { "event": "JobCompleted", "subject": {…}, "occurred_at": "…", "observed_at": "…" } ],
+        "diagnostics": []
+      }
+    ],
+    "diagnostics": []
+  }
+}
+```
+
+- `preview` is `null` when the draft bundle did not validate; the draft
+  `diagnostics` explain why.
+- `input_digest`/`mapping_digest` and the derived `preview_id`/
+  `observation_id`s make the input and mapping versions of a result
+  explicit — a rerun over identical bytes reports identical ids.
+- `observations[].record` holds the normalized record (blanks/nulls as
+  `null`); rejected rows keep the record and the diagnostics that
+  rejected it — a record is accepted whole or rejected whole.
+- `diagnostics` at the payload level covers run-level findings
+  (`INGEST.ENCODING_ERROR`, `PREVIEW.TRUNCATED`, …); per-record findings
+  stay inside each observation.
+
 ## Errors
 
 API failures are structured errors, never diagnostics: the `diagnostics`
