@@ -9,6 +9,7 @@ reasons stay sanitized, and that the JSON artifact never overwrites.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -238,12 +239,14 @@ def test_evaluation_fault_preserves_requests_and_run_ids(
     assert [(u.provider, u.model) for u in un] == [("double-b", "eval/b")]
     assert un[0].provider_requests == 1
     assert len(un[0].run_ids) == 1
+    assert un[0].latency_seconds is not None
     # Both provider calls count toward the total, not just the
     # successful subject's.
     assert report.provider_requests == 2
     entry = json.loads(out.read_text())["unavailable"][0]
     assert entry["provider_requests"] == 1
     assert entry["run_ids"] == un[0].run_ids
+    assert entry["latency_seconds"] == un[0].latency_seconds
 
 
 def test_artifact_records_workspace_path(tmp_path: Path) -> None:
@@ -333,9 +336,72 @@ def test_interrupted_write_leaves_no_stranded_artifact(
     with pytest.raises(OSError):
         write_comparison_report(report, out)
     assert not out.exists()
-    assert not list(tmp_path.glob("report.json.*.tmp"))
+    assert not list(tmp_path.glob("*.tmp"))
 
     monkeypatch.setattr(os, "link", real_link)
+    write_comparison_report(report, out)
+    assert json.loads(out.read_text())["eval_version"] == (
+        report.eval_version
+    )
+
+
+def test_publish_falls_back_when_links_unsupported(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A filesystem that rejects hard links still gets the report via
+    an exclusive create — and the fallback still never overwrites."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    report = run_comparison(
+        tmp_path / "scratch",
+        _specs(("double-a", "eval/a")),
+        _resolver(**{"double-a": ScriptedProvider("double-a", golden)}),
+    )
+    out = tmp_path / "report.json"
+
+    def denied(src, dst):
+        raise PermissionError(errno.EPERM, "hard links unsupported")
+
+    monkeypatch.setattr(os, "link", denied)
+    write_comparison_report(report, out)
+    assert json.loads(out.read_text())["eval_version"] == (
+        report.eval_version
+    )
+    assert not list(tmp_path.glob("*.tmp"))
+    with pytest.raises(EvalError, match="already exists"):
+        write_comparison_report(report, out)
+
+
+def test_report_artifact_matches_create_permissions(
+    tmp_path: Path,
+) -> None:
+    """The published report carries the permission bits a plain create
+    would get — mkstemp's 0600 must not leak into a shared artifact."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    report = run_comparison(
+        tmp_path / "scratch",
+        _specs(("double-a", "eval/a")),
+        _resolver(**{"double-a": ScriptedProvider("double-a", golden)}),
+    )
+    out = tmp_path / "report.json"
+    write_comparison_report(report, out)
+    ref = tmp_path / "ref.json"
+    ref.write_text("{}", encoding="utf-8")
+    assert out.stat().st_mode & 0o777 == ref.stat().st_mode & 0o777
+
+
+def test_report_artifact_with_long_output_name(tmp_path: Path) -> None:
+    """An output basename near NAME_MAX still publishes — the temp
+    name is fixed-length, not derived from the destination name."""
+    probe = prepare(tmp_path / "probe")
+    golden = _golden_text(probe.candidates)
+    report = run_comparison(
+        tmp_path / "scratch",
+        _specs(("double-a", "eval/a")),
+        _resolver(**{"double-a": ScriptedProvider("double-a", golden)}),
+    )
+    out = tmp_path / ("r" * 240 + ".json")
     write_comparison_report(report, out)
     assert json.loads(out.read_text())["eval_version"] == (
         report.eval_version

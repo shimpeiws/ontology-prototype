@@ -25,6 +25,7 @@ recorded, never fabricated.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import tempfile
@@ -85,6 +86,7 @@ class UnavailableSubject:
     reason: str
     provider_requests: int = 0
     run_ids: list[str] = field(default_factory=list)
+    latency_seconds: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +96,7 @@ class UnavailableSubject:
             "reason": self.reason,
             "provider_requests": self.provider_requests,
             "run_ids": self.run_ids,
+            "latency_seconds": self.latency_seconds,
         }
 
 
@@ -307,6 +310,9 @@ def compare_subjects(
                     run_ids=_fault_run_ids(
                         run_ids, prepared, known_run_ids
                     ),
+                    latency_seconds=round(
+                        time.monotonic() - started, 3
+                    ),
                 )
             )
             continue
@@ -321,6 +327,9 @@ def compare_subjects(
                     provider_requests=len(counting.requests),
                     run_ids=_fault_run_ids(
                         run_ids, prepared, known_run_ids
+                    ),
+                    latency_seconds=round(
+                        time.monotonic() - started, 3
                     ),
                 )
             )
@@ -421,6 +430,20 @@ def _existing_report_error(dest: Path) -> EvalError:
     )
 
 
+# Errors that mean "this filesystem cannot hard-link", as opposed to a
+# real failure like ENOSPC — only these trigger the create fallback.
+_LINK_UNSUPPORTED = frozenset(
+    {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}
+)
+
+
+def _created_mode() -> int:
+    """The permission bits a plain create gets: 0o666 & ~umask."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return 0o666 & ~mask
+
+
 def write_comparison_report(
     report: ComparisonReport, path: str | Path
 ) -> Path:
@@ -432,20 +455,35 @@ def write_comparison_report(
     destination directory, then published with a hard link: an
     interrupted write can strand only a cleaned-up temp file, never a
     partial report at the final path, and a concurrent write to the
-    same path still fails instead of racing a check-then-create. Pass
-    a fresh path.
+    same path still fails instead of racing a check-then-create.
+    Filesystems that reject hard links fall back to an exclusive
+    create. Pass a fresh path.
     """
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(report.to_dict(), indent=2) + "\n"
+    # A fixed short prefix keeps the temp basename within NAME_MAX even
+    # when ``dest.name`` is near the limit.
     fd, tmp_name = tempfile.mkstemp(
-        dir=dest.parent, prefix=f"{dest.name}.", suffix=".tmp"
+        dir=dest.parent, prefix=".compare-", suffix=".tmp"
     )
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(payload)
-        os.link(tmp, dest)
+        # mkstemp creates the file 0600; a report is meant to be read
+        # by collaborators, so publish it with the mode a normal create
+        # would get under the umask.
+        os.chmod(tmp, _created_mode())
+        try:
+            os.link(tmp, dest)
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                raise _existing_report_error(dest) from None
+            if exc.errno not in _LINK_UNSUPPORTED:
+                raise
+            with dest.open("x", encoding="utf-8") as fh:
+                fh.write(payload)
     except FileExistsError:
         raise _existing_report_error(dest) from None
     finally:
