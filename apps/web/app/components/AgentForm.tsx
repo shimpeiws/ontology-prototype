@@ -171,22 +171,24 @@ export function AgentForm() {
                   path="agent.task.deliverables"
                 />
               ))}
-              {deliverableValues
-                .map((v, i) => ({ v, i }))
-                .filter(({ v }) => !knownDeliverables.includes(v))
-                .map(({ v, i }) => (
-                  <div key={`${v}-${i}`} className="form-field">
-                    <code>{v}</code>{" "}
+              {(deliverables?.items ?? [])
+                .map((item, i) => ({ item, i }))
+                .filter(({ item }) => {
+                  const v = scalarText(item);
+                  return v !== "" && !knownDeliverables.includes(v);
+                })
+                .map(({ item, i }) => (
+                  <div key={`${scalarText(item)}-${i}`} className="form-field">
+                    <code>{scalarText(item)}</code>{" "}
                     <span className="hint">unsupported deliverable</span>{" "}
                     <button
                       type="button"
                       onClick={() =>
-                        update((d) =>
-                          seqAt(d, [ROOT, "task", "deliverables"])?.items.splice(
-                            i,
-                            1,
-                          ),
-                        )
+                        update((d) => {
+                          const seq = seqAt(d, [ROOT, "task", "deliverables"]);
+                          const idx = seq ? seq.items.indexOf(item) : -1;
+                          if (idx >= 0) seq?.items.splice(idx, 1);
+                        })
                       }
                     >
                       Remove
@@ -238,10 +240,13 @@ export function AgentForm() {
             const params = spec ? mapAt(spec, ["params"]) : null;
 
             // Ensure the action spec is a map so field writes never hit a
-            // scalar node; returns null when the pair no longer exists.
+            // scalar node. The pair is located by node identity at commit
+            // time so a remove in the same render cycle cannot shift this
+            // write onto a sibling; returns null when the pair is gone.
             const specMap = (d: typeof doc): YAMLMap | null => {
               const m = mapAt(d, ACTIONS);
-              const p = m?.items[i];
+              const idx = m ? m.items.indexOf(pair) : -1;
+              const p = idx >= 0 ? m?.items[idx] : undefined;
               if (!p) return null;
               if (!isMap(p.value)) p.value = d.createNode({});
               return p.value as YAMLMap;
@@ -299,7 +304,8 @@ export function AgentForm() {
                       const pspecMap = (d: typeof doc): YAMLMap | null => {
                         const m = specMap(d);
                         const p = m ? mapAt(m, ["params"]) : null;
-                        const pp = p?.items[j];
+                        const idx = p ? p.items.indexOf(ppair) : -1;
+                        const pp = idx >= 0 ? p?.items[idx] : undefined;
                         if (!pp) return null;
                         if (!isMap(pp.value)) pp.value = d.createNode({});
                         return pp.value as YAMLMap;
@@ -326,7 +332,8 @@ export function AgentForm() {
                               update((d) => {
                                 const s = specMap(d);
                                 const p = s ? mapAt(s, ["params"]) : null;
-                                if (p) renamePairKey(p, j, text);
+                                const idx = p ? p.items.indexOf(ppair) : -1;
+                                if (p && idx >= 0) renamePairKey(p, idx, text);
                                 return text;
                               }) ?? text
                             }
@@ -375,7 +382,9 @@ export function AgentForm() {
                             onClick={() =>
                               update((d) => {
                                 const s = specMap(d);
-                                if (s) mapAt(s, ["params"])?.items.splice(j, 1);
+                                const p = s ? mapAt(s, ["params"]) : null;
+                                const idx = p ? p.items.indexOf(ppair) : -1;
+                                if (idx >= 0) p?.items.splice(idx, 1);
                               })
                             }
                           >
@@ -412,7 +421,9 @@ export function AgentForm() {
                   type="button"
                   onClick={() =>
                     update((d) => {
-                      mapAt(d, ACTIONS)?.items.splice(i, 1);
+                      const m = mapAt(d, ACTIONS);
+                      const idx = m ? m.items.indexOf(pair) : -1;
+                      if (idx >= 0) m?.items.splice(idx, 1);
                     })
                   }
                 >

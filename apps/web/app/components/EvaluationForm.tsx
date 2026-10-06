@@ -22,6 +22,7 @@ import {
 } from "../lib/draftDoc";
 import {
   DraftDocGate,
+  FieldDiagnostics,
   FormSection,
   SelectField,
   TextField,
@@ -211,6 +212,12 @@ export function EvaluationForm() {
         ) : (
           guardrails.items.map((item, i) => {
             const itemPath = `evaluation.guardrails[${i}]`;
+            // Locate the item by node identity at commit time so a remove in
+            // the same render cycle cannot shift this write onto a sibling.
+            const liveIndex = (d: typeof doc): number => {
+              const seq = seqAt(d, [ROOT, "guardrails"]);
+              return seq ? seq.items.indexOf(item) : -1;
+            };
             // Writes go into the item map directly; a malformed (non-map)
             // item is replaced by an empty map so the field stays editable
             // instead of throwing on setIn against a scalar.
@@ -219,11 +226,12 @@ export function EvaluationForm() {
               (text: string): string =>
                 update((d) => {
                   const seq = seqAt(d, [ROOT, "guardrails"]);
-                  if (!seq || i >= seq.items.length) return text;
-                  if (!isMap(seq.items[i])) {
-                    seq.items[i] = d.createNode({});
+                  const idx = liveIndex(d);
+                  if (!seq || idx < 0) return text;
+                  if (!isMap(seq.items[idx])) {
+                    seq.items[idx] = d.createNode({});
                   }
-                  const host = seq.items[i] as YAMLMap;
+                  const host = seq.items[idx] as YAMLMap;
                   return numeric
                     ? commitNumber(host, [key], text)
                     : commitText(host, [key], text);
@@ -231,6 +239,7 @@ export function EvaluationForm() {
             return (
               <fieldset className="form-card" key={i}>
                 <legend>Guardrail {i + 1}</legend>
+                <FieldDiagnostics diagnostics={diagnostics} path={itemPath} />
                 <TextField
                   label={`Guardrail ${i + 1} name`}
                   value={scalarText(memberValue(item, "name"))}
@@ -272,7 +281,9 @@ export function EvaluationForm() {
                   type="button"
                   onClick={() =>
                     update((d) => {
-                      d.deleteIn([ROOT, "guardrails", i]);
+                      const seq = seqAt(d, [ROOT, "guardrails"]);
+                      const idx = seq ? seq.items.indexOf(item) : -1;
+                      if (idx >= 0) seq?.items.splice(idx, 1);
                     })
                   }
                 >

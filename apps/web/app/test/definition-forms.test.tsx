@@ -187,6 +187,82 @@ describe("EvaluationForm", () => {
     expect(screen.queryByText("Guardrail 2")).toBeNull();
   });
 
+  it("after removing a guardrail, edits target the surviving item (FIND-001)", async () => {
+    const response: OpenResponse = {
+      ...SYNTHETIC_FORM_OPEN_RESPONSE,
+      files: {
+        ...SYNTHETIC_FORM_OPEN_RESPONSE.files,
+        "evaluation.yaml":
+          SYNTHETIC_FORM_OPEN_RESPONSE.files["evaluation.yaml"] +
+          "    - name: second-guardrail\n      metric: other_metric\n      comparator: lt\n      value: 2\n",
+      },
+    };
+    const user = userEvent.setup();
+    renderForm(<EvaluationForm />, response);
+    await waitForContract();
+    expect(screen.getByLabelText("Guardrail 2 name")).toHaveValue(
+      "second-guardrail",
+    );
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Remove guardrail" })[0],
+    );
+    expect(draftText()).not.toContain("invoice-error-rate");
+
+    // The survivor is now "Guardrail 1"; editing it must write to it.
+    const survivor = screen.getByLabelText("Guardrail 1 name");
+    await user.clear(survivor);
+    await user.type(survivor, "renamed-guardrail");
+    expect(draftText()).toContain("name: renamed-guardrail");
+    expect(draftText()).toContain("other_metric");
+  });
+
+  it("renders an item-level diagnostic inside its guardrail card (FIND-003)", async () => {
+    const response: OpenResponse = {
+      ...SYNTHETIC_FORM_OPEN_RESPONSE,
+      diagnostics: [
+        {
+          severity: "error",
+          code: "EVAL.BAD_GUARDRAIL",
+          message: "guardrail item must be a mapping",
+          file: "evaluation.yaml",
+          path: "evaluation.guardrails[0]",
+          line: null,
+          hint: null,
+        },
+      ],
+    };
+    renderForm(<EvaluationForm />, response);
+    await waitForContract();
+    const card = screen.getByText("Guardrail 1").closest(".form-card");
+    expect(card).toHaveTextContent("EVAL.BAD_GUARDRAIL");
+  });
+
+  it("an empty vocabulary degrades the select to free text (FIND-002)", async () => {
+    contractMock.mockResolvedValue({
+      ...SYNTHETIC_CONTRACT_RESPONSE,
+      contract: {
+        ...SYNTHETIC_CONTRACT_RESPONSE.contract,
+        evaluation: {
+          ...(SYNTHETIC_CONTRACT_RESPONSE.contract["evaluation"] as Record<
+            string,
+            unknown
+          >),
+          aggregations: [],
+        },
+      },
+    } as typeof SYNTHETIC_CONTRACT_RESPONSE);
+    const user = userEvent.setup();
+    renderForm(<EvaluationForm />);
+    await waitFor(() =>
+      expect(screen.getByLabelText("Aggregation").tagName).toBe("INPUT"),
+    );
+    const aggregation = screen.getByLabelText("Aggregation");
+    await user.clear(aggregation);
+    await user.type(aggregation, "mean");
+    expect(draftText()).toContain("aggregation: mean");
+  });
+
   it("attaches field-level diagnostics to the owning field", async () => {
     const response: OpenResponse = {
       ...SYNTHETIC_FORM_OPEN_RESPONSE,

@@ -197,11 +197,14 @@ export function SelectField({
   path: string;
 }) {
   const id = useId();
-  const unsupported = value !== "" && options !== null && !options.includes(value);
+  // An empty option list is indistinguishable from a missing contract key —
+  // degrade to free text instead of a select that can only unset the value.
+  const unavailable = options === null || options.length === 0;
+  const unsupported = value !== "" && !unavailable && !options.includes(value);
   return (
     <div className="form-field">
       <label htmlFor={id}>{label}</label>
-      {options === null ? (
+      {unavailable ? (
         <input
           id={id}
           type="text"
@@ -227,7 +230,7 @@ export function SelectField({
           ) : null}
         </select>
       )}
-      {options === null ? (
+      {unavailable ? (
         <p className="hint">Contract vocabulary unavailable — free text.</p>
       ) : null}
       <FieldDiagnostics diagnostics={diagnostics} path={path} />
