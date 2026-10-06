@@ -1,0 +1,177 @@
+/**
+ * Client-side types for the v1 API contract (docs/api.md).
+ *
+ * These describe the transport shapes the API returns — the authoritative
+ * definitions live in `ontology_core` and `ontology_api.schemas`. The Web
+ * app never re-validates; it renders what the API returns.
+ */
+
+/** One core diagnostic, serialized field-for-field by the API. */
+export interface Diagnostic {
+  severity: string;
+  code: string;
+  message: string;
+  file: string | null;
+  path: string | null;
+  line: number | null;
+  hint: string | null;
+}
+
+/** Structured API failure body: `{ error: { code, message } }`. */
+export interface ApiErrorBody {
+  code: string;
+  message: string;
+  detail?: unknown;
+}
+
+export interface WorkspaceRef {
+  path: string;
+  /** Null when the on-disk bundle could not be fully represented. */
+  digest: string | null;
+}
+
+export interface OpenResponse {
+  api_version: string;
+  valid: boolean;
+  workspace: WorkspaceRef;
+  files: Record<string, string>;
+  definitions: WorkspaceDefinitions | null;
+  diagnostics: Diagnostic[];
+}
+
+export interface DraftValidateResponse {
+  api_version: string;
+  valid: boolean;
+  digest: string;
+  definitions: WorkspaceDefinitions | null;
+  diagnostics: Diagnostic[];
+}
+
+export interface ContractResponse {
+  api_version: string;
+  core_version: string;
+  schema_version: number;
+  workspace_files: Record<string, string>;
+  diagnostic_fields: string[];
+  operations: Record<string, string>;
+  contract: Record<string, unknown>;
+}
+
+/* ---- Typed workspace definitions (mirrors ontology_core.model) ---- */
+
+export interface PropertySpec {
+  name: string;
+  type: string;
+  required: boolean;
+  ref: string | null;
+  description: string | null;
+}
+
+export interface EntityType {
+  name: string;
+  properties: Record<string, PropertySpec>;
+  description: string | null;
+}
+
+export interface EventType {
+  name: string;
+  subject: string;
+  properties: Record<string, PropertySpec>;
+  description: string | null;
+}
+
+export interface ProjectionSpec {
+  name: string;
+  subject: string;
+  description: string | null;
+}
+
+export interface DomainDefinition {
+  name: string;
+  description: string | null;
+  policies: {
+    entity_id_type: string;
+    event_times: {
+      occurrence_field: string;
+      observation_field: string;
+      date_only_timezone: string;
+    };
+  };
+  entities: Record<string, EntityType>;
+  events: Record<string, EventType>;
+  projections: Record<string, ProjectionSpec>;
+}
+
+export interface FieldAssignment {
+  field: string | null;
+  literal: string | number | boolean | null;
+  cast: string | null;
+}
+
+export interface EntityBinding {
+  entity: string;
+  id: FieldAssignment;
+  properties: Record<string, FieldAssignment>;
+}
+
+export interface EventBinding {
+  event: string;
+  subject: { entity: string; id: FieldAssignment };
+  when: { raw: Record<string, unknown> } | null;
+  occurred_at: FieldAssignment;
+  observed_at: FieldAssignment | null;
+}
+
+export interface MappingDefinition {
+  name: string;
+  description: string | null;
+  source: { name: string; format: string };
+  entities: EntityBinding[];
+  events: EventBinding[];
+}
+
+export interface EvaluationDefinition {
+  name: string;
+  description: string | null;
+  interval: { start_event: string; end_event: string };
+  metric: string;
+  aggregation: string;
+  unit: string;
+  baseline: number;
+  target: { comparator: string; value: number };
+  guardrails: {
+    name: string;
+    metric: string;
+    comparator: string;
+    value: number | null;
+    description: string | null;
+  }[];
+}
+
+export interface AgentDefinition {
+  name: string;
+  description: string | null;
+  projection: string;
+  task: { goal: string; deliverables: string[] };
+  permitted_actions: Record<
+    string,
+    { name: string; params: Record<string, PropertySpec>; description: string | null }
+  >;
+}
+
+export interface WorkspaceDefinitions {
+  domain: DomainDefinition;
+  mapping: MappingDefinition;
+  evaluation: EvaluationDefinition;
+  agent: AgentDefinition;
+}
+
+/** The four workspace definition file names, in canonical order. */
+export const WORKSPACE_FILE_NAMES = [
+  "domain.yaml",
+  "mapping.yaml",
+  "evaluation.yaml",
+  "agent.yaml",
+] as const;
+
+export type WorkspaceFileName = (typeof WORKSPACE_FILE_NAMES)[number];
