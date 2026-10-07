@@ -171,6 +171,36 @@ class TestCliParity:
         assert body["trace"]["subject"] == {"entity": "Job", "id": "C01"}
         assert body["trace"]["evaluations"]
 
+    def test_trace_subject_long_id(
+        self, workspace, roots, capsys, tmp_path
+    ) -> None:
+        """Ingestion stores subject ids verbatim — an id longer than the
+        former request cap still resolves through the API."""
+        long_id = "C" * 2000
+        csv = tmp_path / "long-subject.csv"
+        csv.write_text(
+            "id,status,assignee,completed_at,invoiced_at\n"
+            f"{long_id},completed,taro,2026-10-01,2026-10-09\n"
+        )
+        cli(
+            capsys, "ingest", str(workspace), str(csv),
+            "--source", "jobs",
+        )
+        subject = f"Job/{long_id}"
+        expected = cli_json(
+            capsys,
+            "trace", str(workspace), "--subject", subject, "--json",
+        )
+        body = post(
+            make_client(roots),
+            "trace/subject",
+            path=str(workspace),
+            subject=subject,
+        )
+        assert body == {"api_version": "v1", **expected}
+        assert body["ok"] is True
+        assert body["trace"]["subject"]["id"] == long_id
+
     def test_trace_run(self, walked, roots, capsys) -> None:
         # `trace --run` anchors any recorded artifact id, not only runs.
         for anchor in (
@@ -403,6 +433,15 @@ class TestContractFailures:
                 "TRACE.INVALID_SUBJECT"
             )
 
+        # The subject value is echoed into the diagnostic but bounded —
+        # an unbounded echo would balloon the payload on bad input.
+        body = post(
+            client, "trace/subject", path=path, subject="x" * 5000
+        )
+        assert body["ok"] is False
+        assert body["diagnostics"][0]["code"] == "TRACE.INVALID_SUBJECT"
+        assert len(body["diagnostics"][0]["message"]) < 500
+
     def test_corrupt_store(self, walked, roots, capsys) -> None:
         # A damaged canon.db must degrade to the core's store-error
         # diagnostics (200 + ok:false), never a 500.
@@ -567,8 +606,151 @@ class TestContractFailures:
         assert "proposals" not in body
 
 
+class TestLegacyStoreCompat:
+    """A ``canon.db`` written before the history tables existed degrades
+    to empty sections, not store errors — a read-only open never
+    migrates the schema."""
+
+    def test_missing_history_tables(self, walked, roots) -> None:
+        db = walked.workspace / ".ontology" / "canon.db"
+        conn = sqlite3.connect(db)
+        try:
+            for table in (
+                "fact_links",
+                "executions",
+                "decisions",
+                "proposals",
+                "diagnosis_runs",
+                "evaluation_runs",
+            ):
+                conn.execute(f"DROP TABLE {table}")
+            # Columns added by migration are absent on the same older
+            # revision.
+            conn.execute(
+                "ALTER TABLE entities DROP COLUMN properties_changed_at"
+            )
+            conn.execute("ALTER TABLE entities DROP COLUMN last_ingest_id")
+            conn.commit()
+        finally:
+            conn.close()
+
+        before = fingerprint(walked.workspace / ".ontology")
+        client = make_client(roots)
+        path = str(walked.workspace)
+
+        runs = post(client, "evaluations", path=path)
+        assert runs == {
+            "api_version": "v1",
+            "workspace": path,
+            "ok": True,
+            "evaluation_runs": [],
+        }
+
+        run = post(
+            client,
+            "evaluations/run",
+            path=path,
+            run_id=walked.evaluation_run_id,
+        )
+        assert run["ok"] is False
+        assert run["diagnostics"][0]["code"] == "EVALUATION.UNKNOWN_RUN"
+
+        proposals = post(client, "proposals", path=path)
+        assert proposals["ok"] is True
+        assert proposals["proposals"] == []
+
+        proposal = post(
+            client,
+            "proposals/show",
+            path=path,
+            proposal_id=walked.proposal_id,
+        )
+        assert proposal["ok"] is False
+        assert proposal["diagnostics"][0]["code"] == (
+            "DECISION.UNKNOWN_PROPOSAL"
+        )
+
+        overview = post(client, "trace", path=path)
+        assert overview["ok"] is True
+        assert overview["canonical"]["entities"] > 0
+        assert overview["evaluation_runs"] == []
+        assert not any(
+            d["code"] == "TRACE.STORE_ERROR"
+            for d in overview["diagnostics"]
+        )
+
+        subject = post(
+            client, "trace/subject", path=path, subject="Job/C01"
+        )
+        assert subject["ok"] is True
+        assert "trace" in subject
+
+        # Read-only inspection never writes the missing schema back.
+        assert fingerprint(walked.workspace / ".ontology") == before
+
+    def test_missing_table_is_not_a_store_error(
+        self, walked, roots, capsys
+    ) -> None:
+        """CLI parity: the CLI's read-only trace path degrades the same
+        way on a pre-upgrade database."""
+        db = walked.workspace / ".ontology" / "canon.db"
+        conn = sqlite3.connect(db)
+        try:
+            conn.execute("DROP TABLE evaluation_runs")
+            conn.commit()
+        finally:
+            conn.close()
+
+        expected = cli_json(capsys, "trace", str(walked.workspace), "--json")
+        body = post(
+            make_client(roots), "trace", path=str(walked.workspace)
+        )
+        assert body == {"api_version": "v1", **expected}
+        assert body["ok"] is True
+        assert body["evaluation_runs"] == []
+
+
 class TestPathGuards:
     """Transport-level failures keep the ``{error}`` shape."""
+
+    def test_runtime_symlink_escape(self, walked, roots, tmp_path) -> None:
+        """``.ontology`` resolving outside the roots is refused — reads
+        never follow a planted symlink into external runtime state."""
+        runtime = walked.workspace / ".ontology"
+        external = tmp_path / "outside-roots" / ".ontology"
+        external.parent.mkdir()
+        runtime.rename(external)
+        try:
+            runtime.symlink_to(external)
+        except OSError:
+            pytest.skip("symlinks not supported on this platform")
+
+        client = make_client(roots)
+        for route, body in (
+            ("trace", {"path": str(walked.workspace)}),
+            ("evaluations", {"path": str(walked.workspace)}),
+            ("proposals", {"path": str(walked.workspace)}),
+        ):
+            response = client.post(
+                f"/api/v1/workspaces/{route}", json=body
+            )
+            assert response.status_code == 403, route
+            assert response.json()["error"]["code"] == (
+                "API.RUNTIME_OUTSIDE_ROOTS"
+            )
+
+        # A symlinked entry inside a real runtime dir is refused too.
+        runtime.unlink()
+        runtime.mkdir()
+        (runtime / "canon.db").symlink_to(external / "canon.db")
+        response = client.post(
+            "/api/v1/workspaces/trace",
+            json={"path": str(walked.workspace)},
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == (
+            "API.RUNTIME_OUTSIDE_ROOTS"
+        )
 
     def test_path_outside_roots(self, roots, tmp_path) -> None:
         outside = apisupport.copy_example(tmp_path, "outside")
@@ -629,7 +811,7 @@ class TestPathGuards:
             ("trace", {"path": ""}),
             ("trace/subject", {"path": "x"}),
             ("trace/subject", {"path": "x", "subject": ""}),
-            ("trace/subject", {"path": "x", "subject": "J/1" * 600}),
+            ("trace/subject", {"path": "x", "subject": 4}),
             ("trace/run", {"path": "x"}),
             ("trace/run", {"path": "x", "run_id": 4}),
             ("trace/run", {"path": "x", "run_id": "r" * 2000}),

@@ -9,6 +9,7 @@ can inject a different implementation without touching the transport.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import timezone
@@ -278,7 +279,8 @@ class CoreWorkspaceService:
             return _failure(
                 resolved,
                 "TRACE.INVALID_SUBJECT",
-                f"invalid --subject {subject!r}: expected 'Entity/Id'",
+                f"invalid --subject {_bounded(subject)!r}: "
+                "expected 'Entity/Id'",
             )
         asm, view = self._trace_view(
             resolved, lambda a: traceview.trace_subject(a, entity, subject_id)
@@ -320,6 +322,8 @@ class CoreWorkspaceService:
                 runs = store.evaluation_runs()
             finally:
                 store.close()
+        except ApiError:
+            raise
         except Exception as exc:
             return _failure(
                 resolved,
@@ -346,6 +350,8 @@ class CoreWorkspaceService:
                 record = get_evaluation_run(resolved, run_id, store=store)
             finally:
                 store.close()
+        except ApiError:
+            raise
         except Exception as exc:
             return _failure(
                 resolved,
@@ -379,6 +385,8 @@ class CoreWorkspaceService:
                 views = proposal_view(loaded.workspace, store=store)
             finally:
                 store.close()
+        except ApiError:
+            raise
         except Exception as exc:
             return _failure(
                 resolved,
@@ -408,6 +416,8 @@ class CoreWorkspaceService:
                 views = proposal_view(loaded.workspace, store=store)
             finally:
                 store.close()
+        except ApiError:
+            raise
         except Exception as exc:
             return _failure(
                 resolved,
@@ -428,7 +438,43 @@ class CoreWorkspaceService:
         return {"workspace": str(resolved), "ok": True, "proposal": view}
 
     def _readonly_store(self, resolved: Path) -> SqliteCanonicalStore:
-        return SqliteCanonicalStore(resolved / RUNTIME_DIR, readonly=True)
+        """A workspace's store without creating it. Every ``.ontology``
+        entry must resolve inside the configured roots — a symlink
+        planted there would otherwise let inspection read arbitrary
+        external runtime state."""
+        self._check_runtime(resolved / RUNTIME_DIR)
+        return SqliteCanonicalStore(
+            resolved / RUNTIME_DIR, readonly=True
+        )
+
+    def _check_runtime(self, runtime: Path) -> None:
+        """Reject a runtime tree that escapes the configured roots.
+
+        ``os.walk`` does not follow directory symlinks, so a symlinked
+        child is checked by its own resolution rather than traversed.
+        """
+        entries = [runtime]
+        try:
+            if runtime.is_dir():
+                for dirpath, dirnames, filenames in os.walk(runtime):
+                    entries += [
+                        Path(dirpath) / name
+                        for name in (*dirnames, *filenames)
+                    ]
+        except OSError:
+            pass
+        for entry in entries:
+            real = _resolve(entry)
+            if real is None or not any(
+                real.is_relative_to(root) for root in self._roots
+            ):
+                raise ApiError(
+                    403,
+                    "API.RUNTIME_OUTSIDE_ROOTS",
+                    f"{entry.relative_to(runtime.parent)} resolves "
+                    "outside the configured roots; refusing to read "
+                    "runtime state",
+                )
 
     def _trace_view(
         self, resolved: Path, view
@@ -559,6 +605,11 @@ def _failure(
         "ok": False,
         "diagnostics": [diagnostic.to_dict()],
     }
+
+
+def _bounded(value: str, limit: int = 256) -> str:
+    """Bound a user-supplied value echoed into a diagnostic message."""
+    return value if len(value) <= limit else value[:limit] + "…"
 
 
 def _resolve(candidate: Path) -> Path | None:

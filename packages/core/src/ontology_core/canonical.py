@@ -525,6 +525,7 @@ class SqliteCanonicalStore:
         self.db_path = self.root / CANON_DB
         self.readonly = readonly
         self._conn: sqlite3.Connection | None = None
+        self._entity_cols: set[str] | None = None
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -577,6 +578,7 @@ class SqliteCanonicalStore:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+            self._entity_cols = None
 
     def apply(self, ingest_id: str, observations: Iterable[Any]) -> ApplyResult:
         conn = self._connect()
@@ -722,6 +724,44 @@ class SqliteCanonicalStore:
         """
         return self._conn is not None or self.db_path.exists()
 
+    def _has_table(self, conn: sqlite3.Connection, name: str) -> bool:
+        """True when ``name`` exists in the open database.
+
+        Read paths check this so a ``canon.db`` written by a schema
+        revision before ``name`` was introduced — a valid older
+        workspace, not a corrupt one — degrades to empty instead of
+        raising a store error. A genuinely broken table still raises on
+        query.
+        """
+        return (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master"
+                " WHERE type = 'table' AND name = ?",
+                (name,),
+            ).fetchone()
+            is not None
+        )
+
+    def _entity_select(
+        self, conn: sqlite3.Connection, columns: Iterable[str]
+    ) -> str:
+        """SELECT fragment for ``entities`` reads.
+
+        A readonly connection never runs ``_migrate``, so a ``canon.db``
+        that predates the migrated columns reads them as the same ``''``
+        the migration default carries. ``columns`` is a fixed literal at
+        every call site — never user input.
+        """
+        if self._entity_cols is None:
+            self._entity_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(entities)")
+            }
+        return ", ".join(
+            name if name in self._entity_cols else f"'' AS {name}"
+            for name in columns
+        )
+
     def entity_state(self, entity_type: str, entity_id: str) -> dict[str, Any] | None:
         if not self._has_db():
             return None
@@ -744,11 +784,14 @@ class SqliteCanonicalStore:
     def entities(self) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
-            """
-            SELECT entity_type, entity_id, properties,
-                   first_observation_id, last_observation_id,
-                   last_ingest_id, updated_at, properties_changed_at
+        conn = self._connect()
+        rows = conn.execute(
+            f"""
+            SELECT {self._entity_select(conn, (
+                "entity_type", "entity_id", "properties",
+                "first_observation_id", "last_observation_id",
+                "last_ingest_id", "updated_at", "properties_changed_at",
+            ))}
             FROM entities ORDER BY entity_type, entity_id
             """
         ).fetchall()
@@ -769,10 +812,14 @@ class SqliteCanonicalStore:
     def entities_of_type(self, entity_type: str) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
-            """
-            SELECT entity_id, properties, first_observation_id,
-                   last_observation_id, updated_at, properties_changed_at
+        conn = self._connect()
+        rows = conn.execute(
+            f"""
+            SELECT {self._entity_select(conn, (
+                "entity_id", "properties", "first_observation_id",
+                "last_observation_id", "updated_at",
+                "properties_changed_at",
+            ))}
             FROM entities WHERE entity_type = ? ORDER BY entity_id
             """,
             (entity_type,),
@@ -869,8 +916,11 @@ class SqliteCanonicalStore:
     def fact_links(self, fact_key: str) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
+        conn = self._connect()
+        if not self._has_table(conn, "fact_links"):
+            return []
         return _link_rows(
-            self._connect().execute(
+            conn.execute(
                 """
                 SELECT fact_key, relation, target, ingest_id,
                        observation_id, created_at
@@ -884,8 +934,11 @@ class SqliteCanonicalStore:
     def links_for_target(self, target: str) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
+        conn = self._connect()
+        if not self._has_table(conn, "fact_links"):
+            return []
         return _link_rows(
-            self._connect().execute(
+            conn.execute(
                 """
                 SELECT fact_key, relation, target, ingest_id,
                        observation_id, created_at
@@ -1024,7 +1077,10 @@ class SqliteCanonicalStore:
     def proposal(self, proposal_id: str) -> dict[str, Any] | None:
         if not self._has_db():
             return None
-        row = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "proposals"):
+            return None
+        row = conn.execute(
             """
             SELECT diagnosis_run_id, proposal_index, action, params, reason,
                    subject_entity, subject_id, related_entities, evidence,
@@ -1053,7 +1109,10 @@ class SqliteCanonicalStore:
     def proposals(self) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "proposals"):
+            return []
+        rows = conn.execute(
             """
             SELECT proposal_id, diagnosis_run_id, proposal_index, action,
                    params, reason, subject_entity, subject_id,
@@ -1103,7 +1162,10 @@ class SqliteCanonicalStore:
     def decisions_for(self, proposal_id: str) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "decisions"):
+            return []
+        rows = conn.execute(
             """
             SELECT decision_id, decision, reviewer, reason, payload_digest,
                    decided_at
@@ -1156,7 +1218,10 @@ class SqliteCanonicalStore:
     ) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "executions"):
+            return []
+        rows = conn.execute(
             """
             SELECT execution_id, proposal_id, action, adapter, attempt,
                    status, receipt, error, created_at
@@ -1186,7 +1251,10 @@ class SqliteCanonicalStore:
     ) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "executions"):
+            return []
+        rows = conn.execute(
             """
             SELECT execution_id, idempotency_key, action, adapter,
                    attempt, status, receipt, error, created_at
@@ -1214,7 +1282,10 @@ class SqliteCanonicalStore:
     def diagnosis_run(self, run_id: str) -> dict[str, Any] | None:
         if not self._has_db():
             return None
-        row = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "diagnosis_runs"):
+            return None
+        row = conn.execute(
             """
             SELECT projection_run_id, provider, model, prompt_version, prompt,
                    status, input_digest, provider_called, output,
@@ -1246,7 +1317,10 @@ class SqliteCanonicalStore:
     def diagnosis_runs(self) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "diagnosis_runs"):
+            return []
+        rows = conn.execute(
             """
             SELECT run_id, projection_run_id, provider, model,
                    prompt_version, prompt, status, input_digest,
@@ -1310,7 +1384,10 @@ class SqliteCanonicalStore:
     def evaluation_run(self, run_id: str) -> dict[str, Any] | None:
         if not self._has_db():
             return None
-        row = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "evaluation_runs"):
+            return None
+        row = conn.execute(
             """
             SELECT evaluation, as_of, boundary, created_at,
                    contract_digest, report
@@ -1333,7 +1410,10 @@ class SqliteCanonicalStore:
     def evaluation_runs(self) -> list[dict[str, Any]]:
         if not self._has_db():
             return []
-        rows = self._connect().execute(
+        conn = self._connect()
+        if not self._has_table(conn, "evaluation_runs"):
+            return []
+        rows = conn.execute(
             """
             SELECT run_id, evaluation, as_of, boundary, created_at,
                    contract_digest, report

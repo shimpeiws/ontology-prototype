@@ -98,8 +98,10 @@ class TraceSubjectRequest(WorkspacePathRequest):
     """Follow one subject through the recorded run — like the CLI's
     ``trace --subject Entity/Id``."""
 
-    # Bounded because the value is echoed into diagnostic messages.
-    subject: str = Field(min_length=1, max_length=1024)
+    # Ingestion stores ids verbatim with no length cap, so a request cap
+    # would reject valid stored subjects; the echo into diagnostic
+    # messages is bounded in the service instead.
+    subject: str = Field(min_length=1)
 
 
 class TraceRunRequest(WorkspacePathRequest):

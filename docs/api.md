@@ -271,7 +271,12 @@ responses, while `{error}` stays reserved for transport failures. All
 canonical reads go through a `readonly=True` store — these endpoints
 never create `.ontology/` or `canon.db` and never mutate runtime state,
 so a workspace with no recorded history reports an empty view rather
-than an error.
+than an error. The same applies to a `canon.db` written by an older
+schema revision: a read-only open never migrates, so history tables or
+columns the older store lacks read as empty sections instead of a
+store error. Every `.ontology/` entry must also resolve inside the
+configured roots — a symlink escaping them is refused with
+`API.RUNTIME_OUTSIDE_ROOTS` rather than read.
 
 All seven take `{"path": "<workspace under a configured root>"}` plus
 the extra field listed; `path` follows the same root-containment rules
@@ -313,6 +318,15 @@ frozen report or recorded run stays inspectable after a later edit
 breaks the workspace; only proposal inspection validates the bundle,
 matching what `ontology proposals` requires.
 
+One divergence from the CLI is deliberate: proposals recorded only in a
+diagnosis run — never indexed into the `proposals` table, e.g. by a
+store predating the index — are not backfilled by `proposals` or
+`proposals/show`, because the read-only store cannot write them. The
+CLI's `proposals` backfills them on first read. The API reports the
+index as-is (`proposals` omits them, `proposals/show` returns
+`DECISION.UNKNOWN_PROPOSAL`) while `trace` still surfaces them under
+`proposals.unindexed`; run `ontology proposals` once to index them.
+
 ## Errors
 
 API failures are structured errors, never diagnostics: the `diagnostics`
@@ -328,6 +342,7 @@ never masquerade as a validation result.
 | 400 | `API.INVALID_PATH` | Path could not be resolved |
 | 400 | `API.UNKNOWN_WORKSPACE_FILE` | Draft `files` contained a name outside the four definitions |
 | 403 | `API.PATH_OUTSIDE_ROOTS` | Resolved path escapes every configured root |
+| 403 | `API.RUNTIME_OUTSIDE_ROOTS` | A `.ontology/` entry resolves outside every configured root |
 | 404 | `API.WORKSPACE_NOT_FOUND` | Resolved path is not a directory |
 | 404 | `API.NOT_FOUND` | Unknown route |
 | 405 | `API.METHOD_NOT_ALLOWED` | Method not allowed on a known route |
