@@ -1,0 +1,28 @@
+schema_version: 1
+kind: agent
+agent:
+  name: sla-breach-diagnosis
+  description: Diagnose tickets past the first-response SLA and propose a reminder.
+  projection: OpenedWithoutFirstResponse
+  task:
+    goal: Identify likely causes of first-response delay and suggest an intervention.
+    deliverables:
+      - explanation
+      - hypotheses
+      - follow_up_questions
+      - action_proposals
+  permitted_actions:
+    SendReminder:
+      description: Send a response-SLA reminder to the ticket's assignee.
+      params:
+        target:
+          type: ref
+          ref: Agent
+          required: true
+        related_entity:
+          type: ref
+          ref: Ticket
+          required: true
+        reason:
+          type: string
+          required: true

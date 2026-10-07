@@ -37,6 +37,8 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 | [docs/authoring-flow.md](docs/authoring-flow.md) | v0.2 authoring flow and UI state contract |
 | [docs/api.md](docs/api.md) | Local API: startup, endpoints, error model, and root enforcement |
 | [docs/web.md](docs/web.md) | Local Web app: development workflow, boundaries, and testing notes |
+| [docs/ticket-sla-walkthrough.md](docs/ticket-sla-walkthrough.md) | Second workflow (v0.3): support-ticket first-response SLA, runnable and blocked stages |
+| [docs/generality-gaps.md](docs/generality-gaps.md) | Gap log from the second workflow — scopes #55, #56, #57 |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 
 ## Install

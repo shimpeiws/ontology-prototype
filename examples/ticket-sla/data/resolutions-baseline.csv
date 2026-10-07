@@ -1,0 +1,4 @@
+id,ticket,resolved_at,reopened
+R-B01,T-B01,2026-10-12T09:00:00Z,false
+R-B02,T-B02,2026-10-13T10:00:00Z,false
+R-B03,T-B03,2026-10-14T08:00:00Z,true
