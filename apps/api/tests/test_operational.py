@@ -51,8 +51,11 @@ def walked(tmp_path, capsys, roots, workspace) -> SimpleNamespace:
     """The job-invoicing walkthrough state, driven through the CLI:
     ingest -> project -> diagnose (stub) -> approve -> execute ->
     re-ingest -> evaluate."""
-    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-baseline.csv"))
-    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-current.csv"))
+    for name in ("jobs-baseline", "jobs-current"):
+        cli(
+            capsys, "ingest", str(workspace),
+            str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+        )
     project = cli_json(
         capsys, "project", str(workspace),
         "--as-of", "2026-10-21T00:00:00Z", "--json",
@@ -71,7 +74,15 @@ def walked(tmp_path, capsys, roots, workspace) -> SimpleNamespace:
         "--approve", "--reviewer", "fde-sato",
     )
     cli(capsys, "execute", str(workspace), pid)
-    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-followup.csv"))
+    cli(
+        capsys, "ingest", str(workspace),
+        str(DEMO_DATA / "jobs-followup.csv"), "--source", "jobs",
+    )
+    for name in ("invoices-baseline", "invoices-followup"):
+        cli(
+            capsys, "ingest", str(workspace),
+            str(DEMO_DATA / f"{name}.csv"), "--source", "invoices",
+        )
     evaluation = cli_json(
         capsys,
         "evaluate", str(workspace),
