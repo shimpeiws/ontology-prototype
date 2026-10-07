@@ -3,11 +3,15 @@
 `ontology ingest <workspace> <snapshot>` reads a CSV or JSON snapshot, normalizes every record through one boundary, records each record as an observation with immutable evidence, and persists accepted entities/events into the canonical store (see [canonical.md](canonical.md)).
 
 ```bash
-ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs.csv
-ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs.csv --json
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs.csv --source jobs
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs.csv --source jobs --json
 ```
 
-The snapshot format comes from `mapping.source.format` (`csv` or `json`), not from the file extension. The command exits `0` only when the run completes with no error-severity diagnostics; an invalid workspace, an unreadable/unparseable source, or any rejected record exits `1`.
+The snapshot format comes from the selected source's `format` (`csv` or `json`) in `mapping.sources[]`, not from the file extension. A mapping declaring a single source needs no flag; a multi-source mapping requires `--source <name>` (`INGEST.SOURCE_REQUIRED` when omitted), and an unknown name is `INGEST.UNKNOWN_SOURCE`. Each source's entity/event bindings apply only to snapshots ingested under that source.
+
+Entity references cross source boundaries by design: a `ref` property or event subject resolves against the entities accepted in the same run plus every entity already in the canonical store — so an `invoices` row can reference a `Job` ingested earlier from `jobs`. The match is the exact (entity type, stable id) pair; a miss emits an `INGEST.UNRESOLVED_REF` warning on the record's observation and is never guessed.
+
+The command exits `0` only when the run completes with no error-severity diagnostics; an invalid workspace, an unreadable/unparseable source, or any rejected record exits `1`.
 
 ## The normalization boundary
 
@@ -46,7 +50,7 @@ Evidence lands under `<workspace>/.ontology/`:
 The same command re-observes a source after it changes — run it again with the newer file (`examples/job-invoicing/data/jobs-later.csv` shows job 101 after its invoice was issued):
 
 ```bash
-ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-later.csv
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-later.csv --source jobs
 ```
 
 Re-ingestion goes through the identical normalization and mapping path; only *new* facts append to `events` (the fact key covers event, subject, and `occurred_at`), while every observation — including repeats — lands in `event_observations` for provenance. A record absent from the later snapshot deletes nothing. When a later snapshot asserts an event the store already knows at a *different* `occurred_at`, the new fact is appended alongside the old one, the pair is linked in `fact_links` (`possibly_corrects`), and the run surfaces a `CANON.POSSIBLE_CORRECTION` warning — a corrected timestamp and a distinct occurrence are ambiguous, so both stay and a human resolves it. New facts also link to interventions on the same subject (`correlated_intervention`), keeping correlation explicitly distinct from causation. See [canonical.md](canonical.md#re-observation-corrections-and-intervention-links).
@@ -55,6 +59,8 @@ Re-ingestion goes through the identical normalization and mapping path; only *ne
 
 Ingestion diagnostics reuse the workspace diagnostic shape: `file` is the snapshot name and `path` is `record[<n>].<field>` (1-based record index). Codes:
 
+- `INGEST.SOURCE_REQUIRED` — the mapping declares multiple sources and no `--source` was given.
+- `INGEST.UNKNOWN_SOURCE` — `--source` names a source the mapping does not declare.
 - `INGEST.UNREADABLE_SOURCE`, `INGEST.SOURCE_TOO_LARGE`, `INGEST.ENCODING_ERROR` — the snapshot cannot be read.
 - `INGEST.INVALID_SOURCE` — unparseable JSON (including `NaN`/`Infinity` literals, which reject the whole snapshot rather than a single record), a non-array JSON top level, or a CSV without a header row.
 - `INGEST.DUPLICATE_COLUMN` — a CSV header declares a column twice.
@@ -66,6 +72,7 @@ Ingestion diagnostics reuse the workspace diagnostic shape: `file` is the snapsh
 - `INGEST.MISSING_TIME` — an applicable event has no `occurred_at`.
 - `INGEST.INVALID_VALUE` — a cast fails (bad number, boolean, or type mismatch).
 - `INGEST.INVALID_TIMESTAMP` — a malformed or timezone-less timestamp.
+- `INGEST.UNRESOLVED_REF` — warning: a `ref` property value or event subject id matches no entity accepted in this run or stored in the canonical model; references resolve by exact stable id only, never by name or guess.
 - `INGEST.STORE_ERROR` — evidence could not be persisted.
 - `INGEST.EMPTY` — warning: the snapshot parsed but contained no records.
 - `CANON.STORE_ERROR` — canonical entity/event persistence failed ([canonical.md](canonical.md)).

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import apisupport
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from ontology_api import (
@@ -107,6 +108,16 @@ class TestOpen:
             "agent",
         }
         assert "Job" in body["definitions"]["domain"]["entities"]
+        # Pin the normalized mapping shape: `definitions.mapping` always
+        # reports `sources[]`, never the legacy `source` + top-level
+        # bindings form.
+        mapping_def = body["definitions"]["mapping"]
+        assert "source" not in mapping_def
+        assert [s["name"] for s in mapping_def["sources"]] == [
+            "jobs",
+            "invoices",
+        ]
+        assert mapping_def["sources"][0]["format"] == "csv"
         assert body["workspace"]["digest"] == bundle_digest(
             apisupport.workspace_texts(workspace)
         )
@@ -693,7 +704,7 @@ class TestDraftPreview:
             json={
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": self.SAMPLE},
+                "sample": {"text": self.SAMPLE, "source": "jobs"},
             },
         )
         assert response.status_code == 200
@@ -719,9 +730,11 @@ class TestDraftPreview:
         # Blank cells normalize to null on the record.
         assert first["record"]["invoiced_at"] is None
 
-    def test_preview_parity_with_core(
+    def test_preview_requires_source_for_multi_source_draft(
         self, roots: Path, workspace: Path
     ) -> None:
+        # The example draft declares two sources; omitting `sample.source`
+        # is a diagnostic inside the preview, not a transport error.
         files = apisupport.workspace_texts(workspace)
         client = make_client(roots)
         body = client.post(
@@ -732,9 +745,105 @@ class TestDraftPreview:
                 "sample": {"text": self.SAMPLE},
             },
         ).json()
+        assert body["valid"] is True
+        preview = body["preview"]
+        assert preview is not None
+        assert preview["source"] is None
+        assert preview["observations"] == []
+        assert "INGEST.SOURCE_REQUIRED" in codes(preview["diagnostics"])
+
+    def test_preview_single_source_draft_needs_no_source(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        # A legacy single-source draft resolves to its one source when
+        # `sample.source` is omitted — the API transport must not require
+        # the field.
+        files = apisupport.workspace_texts(workspace)
+        mapping_doc = yaml.safe_load(files["mapping.yaml"])
+        mapping = mapping_doc["mapping"]
+        src = mapping.pop("sources")[0]
+        mapping["source"] = {"name": src["name"], "format": src["format"]}
+        mapping["entities"] = src["entities"]
+        mapping["events"] = src["events"]
+        files["mapping.yaml"] = yaml.safe_dump(mapping_doc, sort_keys=False)
+
+        client = make_client(roots)
+        body = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE},
+            },
+        ).json()
+        preview = body["preview"]
+        assert preview["source"] == "jobs"
+        assert preview["format"] == "csv"
+        assert preview["record_count"] == 2
+        assert "INGEST.SOURCE_REQUIRED" not in codes(preview["diagnostics"])
+
+    def test_preview_unknown_source_is_a_diagnostic(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        body = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE, "source": "bogus"},
+            },
+        ).json()
+        preview = body["preview"]
+        assert preview["observations"] == []
+        assert "INGEST.UNKNOWN_SOURCE" in codes(preview["diagnostics"])
+
+    def test_preview_second_source(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        body = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {
+                    "text": "id,job,issued_at,error\n"
+                    "INV-1,101,2026-10-05,false\n",
+                    "source": "invoices",
+                },
+            },
+        ).json()
+        preview = body["preview"]
+        assert preview["source"] == "invoices"
+        assert preview["format"] == "csv"
+        obs = preview["observations"][0]
+        assert obs["status"] == "accepted"
+        entities = {e["entity"]: e for e in obs["entities"]}
+        assert entities["Invoice"]["id"] == "INV-1"
+        # Preview has no canonical store — the Job ref warns.
+        assert "INGEST.UNRESOLVED_REF" in codes(obs["diagnostics"])
+
+    def test_preview_parity_with_core(
+        self, roots: Path, workspace: Path
+    ) -> None:
+        files = apisupport.workspace_texts(workspace)
+        client = make_client(roots)
+        body = client.post(
+            "/api/v1/workspaces/drafts/preview",
+            json={
+                "path": str(workspace),
+                "files": files,
+                "sample": {"text": self.SAMPLE, "source": "jobs"},
+            },
+        ).json()
         core = load_workspace_texts(files, path=workspace)
         assert core.workspace is not None
-        expected = preview_snapshot(core.workspace, self.SAMPLE.encode())
+        expected = preview_snapshot(
+            core.workspace, self.SAMPLE.encode(), source="jobs"
+        )
         assert body["preview"]["input_digest"] == expected.content_digest
         assert body["preview"]["mapping_digest"] == expected.mapping_digest
         # observed_at is the run timestamp — volatile by design; everything
@@ -764,8 +873,8 @@ class TestDraftPreview:
         # Draft-only edit, still valid: Person's id reads a `worker` column
         # the sample lacks. The on-disk mapping still maps `assignee`.
         files["mapping.yaml"] = files["mapping.yaml"].replace(
-            "field: assignee\n      properties:\n        name:",
-            "field: worker\n      properties:\n        name:",
+            "field: assignee\n          properties:\n            name:",
+            "field: worker\n          properties:\n            name:",
         )
         client = make_client(roots)
         body = client.post(
@@ -773,7 +882,7 @@ class TestDraftPreview:
             json={
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": self.SAMPLE},
+                "sample": {"text": self.SAMPLE, "source": "jobs"},
             },
         ).json()
         assert body["valid"] is True
@@ -798,7 +907,7 @@ class TestDraftPreview:
             json={
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": self.SAMPLE},
+                "sample": {"text": self.SAMPLE, "source": "jobs"},
             },
         )
         assert response.status_code == 200
@@ -822,7 +931,7 @@ class TestDraftPreview:
             json={
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": bad},
+                "sample": {"text": bad, "source": "jobs"},
             },
         ).json()
         assert body["valid"] is True
@@ -844,7 +953,10 @@ class TestDraftPreview:
             json={
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": "x" * (MAX_PREVIEW_BYTES + 1)},
+                "sample": {
+                    "text": "x" * (MAX_PREVIEW_BYTES + 1),
+                    "source": "jobs",
+                },
             },
         )
         # A bounded-input violation is a preview diagnostic, not a transport
@@ -868,7 +980,7 @@ class TestDraftPreview:
             {
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": "\ud800"},
+                "sample": {"text": "\ud800", "source": "jobs"},
             }
         )
         response = client.post(
@@ -901,7 +1013,8 @@ class TestDraftPreview:
                     "text": (
                         '[{"id": "\\ud800", "status": "completed", '
                         '"assignee": "taro", "completed_at": "2026-10-01"}]'
-                    )
+                    ),
+                    "source": "jobs",
                 },
             },
         )
@@ -922,7 +1035,7 @@ class TestDraftPreview:
             json={
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": self.SAMPLE},
+                "sample": {"text": self.SAMPLE, "source": "jobs"},
             },
         )
         assert response.status_code == 400
@@ -938,7 +1051,7 @@ class TestDraftPreview:
             json={
                 "path": str(tmp_path),
                 "files": files,
-                "sample": {"text": self.SAMPLE},
+                "sample": {"text": self.SAMPLE, "source": "jobs"},
             },
         )
         assert response.status_code == 403
@@ -988,7 +1101,7 @@ class TestDraftPreview:
             json={
                 "path": str(workspace),
                 "files": files,
-                "sample": {"text": self.SAMPLE},
+                "sample": {"text": self.SAMPLE, "source": "jobs"},
             },
         )
         assert response.status_code == 200

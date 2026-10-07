@@ -96,6 +96,11 @@ Response `200`:
   draft baseline the UI edits (no newline normalization).
 - `definitions` is the parsed typed workspace (entities, bindings,
   contract, agent task); `null` when the workspace has errors.
+  `definitions.mapping` is always returned in normalized `sources[]`
+  form — a legacy single-source `mapping.yaml` (`source:` + top-level
+  `entities`/`events`) is reported as a one-element `sources` list. This
+  normalized shape applies to every response that carries `definitions`
+  (`open`, `validate`, `save`, `preview`).
 - `workspace.digest` is `bundle_digest` over the four files — the active
   digest the save flow (#19) checks drafts against. It is `null` when
   any file present on disk could not be returned (oversized,
@@ -186,12 +191,18 @@ restricted condition language the core defines.
 {
   "path": "job-invoicing",
   "files": { "domain.yaml": "…", "mapping.yaml": "…", "evaluation.yaml": "…", "agent.yaml": "…" },
-  "sample": { "text": "id,status,assignee\n101,completed,taro" }
+  "sample": { "text": "id,status,assignee\n101,completed,taro", "source": "jobs" }
 }
 ```
 
-The sample format is the draft's `mapping.source.format` (`csv` or
-`json`); there is no request-side format override. Bounds come from the
+`sample.source` selects which declared `mapping.sources[]` entry the
+sample resolves through; it is optional when the draft declares a single
+source and required for a multi-source draft (`INGEST.SOURCE_REQUIRED`,
+`INGEST.UNKNOWN_SOURCE` otherwise). The sample format is the selected
+source's `format` (`csv` or `json`); there is no request-side format
+override. The response echoes the selection in `preview.source` and
+`preview.format` — both `null` when the draft declared no usable source.
+Bounds come from the
 core (`MAX_PREVIEW_BYTES`, `MAX_PREVIEW_RECORDS`, exposed under
 `contract.preview_limits`): an oversized sample is a `PREVIEW.*`
 diagnostic, not an HTTP error, and an over-long record list is truncated
@@ -238,8 +249,10 @@ Response `200`:
 - `preview` is `null` when the draft bundle did not validate; the draft
   `diagnostics` explain why.
 - `input_digest`/`mapping_digest` and the derived `preview_id`/
-  `observation_id`s make the input and mapping versions of a result
-  explicit — a rerun over identical bytes reports identical ids.
+  `observation_id`s make the input, mapping versions, and selected source
+  of a result explicit — a rerun over identical bytes under the same
+  source reports identical ids, while identical bytes under a different
+  source do not.
 - `observations[].record` holds the normalized record (blanks/nulls as
   `null`); rejected rows keep the record and the diagnostics that
   rejected it — a record is accepted whole or rejected whole.

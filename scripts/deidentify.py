@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="create a new random key file (owner-only) and exit")
     parser.add_argument("--key", type=Path, help="key file from --generate-key")
     parser.add_argument("--format", choices=("csv", "json"),
-                        help="snapshot format (the workspace's mapping.source.format)")
+                        help="snapshot format (the format of the selected mapping source)")
     for action in ACTIONS:
         parser.add_argument(f"--{action}", action="append", metavar="COLS",
                             help=f"comma-separated columns to {action}")

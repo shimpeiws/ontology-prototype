@@ -228,7 +228,10 @@ def create_app(
         service: WorkspaceService = Depends(get_service),
     ) -> DraftPreviewResponse:
         result = service.preview_draft(
-            payload.path, payload.files, payload.sample.text
+            payload.path,
+            payload.files,
+            payload.sample.text,
+            payload.sample.source,
         )
         return DraftPreviewResponse(
             api_version=API_VERSION,

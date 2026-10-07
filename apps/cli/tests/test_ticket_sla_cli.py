@@ -33,12 +33,18 @@ def copy_example(tmp_path: Path) -> Path:
 
 
 def copy_snapshots(tmp_path: Path) -> dict[str, Path]:
-    return {
+    snapshots = {
         name: shutil.copy(
             EXAMPLE_DATA / f"tickets-{name}.csv", tmp_path / f"tickets-{name}.csv"
         )
         for name in ("baseline", "current", "followup")
     }
+    for name in ("baseline", "followup"):
+        snapshots[f"resolutions-{name}"] = shutil.copy(
+            EXAMPLE_DATA / f"resolutions-{name}.csv",
+            tmp_path / f"resolutions-{name}.csv",
+        )
+    return snapshots
 
 
 def run_json(capsys, args: list[str]) -> dict:
@@ -57,14 +63,30 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     capsys.readouterr()
 
     baseline = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["baseline"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["baseline"]),
+            "--source",
+            "tickets",
+            "--json",
+        ],
     )
     assert baseline["accepted"] == 3
     assert baseline["rejected"] == 0
     assert baseline["canonical"]["events_appended"] == 9
 
     current = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["current"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["current"]),
+            "--source",
+            "tickets",
+            "--json",
+        ],
     )
     assert current["accepted"] == 5
     assert current["rejected"] == 0
@@ -101,7 +123,15 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     assert diagnosis["candidate_count"] == 1
 
     followup = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["followup"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["followup"]),
+            "--source",
+            "tickets",
+            "--json",
+        ],
     )
     assert followup["accepted"] == 6
     assert followup["rejected"] == 0
@@ -111,7 +141,15 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     # Re-ingesting the same snapshot is idempotent: every row is
     # re-observed and no new events are appended.
     repeat = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["followup"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["followup"]),
+            "--source",
+            "tickets",
+            "--json",
+        ],
     )
     assert repeat["accepted"] == 6
     assert repeat["rejected"] == 0
@@ -150,3 +188,81 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     assert report["overall"]["status"] == "unverified"
     pending = {p["subject_id"] for p in report["cohorts"]["after"]["pending"]}
     assert pending == {"T-C05"}
+
+
+def test_ticket_sla_resolutions_source(tmp_path, capsys) -> None:
+    """The second `resolutions` source ingests reopen evidence (#57).
+
+    Resolution rows bind `Resolution` entities and assert TicketResolved
+    subjects that resolve cross-source against canonical Tickets by
+    exact stable id. The exports report the same resolved_at values as
+    the tickets snapshots, so every event is re-observed, not appended.
+    """
+    workspace = copy_example(tmp_path)
+    snapshots = copy_snapshots(tmp_path)
+
+    for name in ("baseline", "followup"):
+        run_json(
+            capsys,
+            [
+                "ingest",
+                str(workspace),
+                str(snapshots[name]),
+                "--source",
+                "tickets",
+                "--json",
+            ],
+        )
+
+    baseline = run_json(
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["resolutions-baseline"]),
+            "--source",
+            "resolutions",
+            "--json",
+        ],
+    )
+    assert baseline["accepted"] == 3
+    assert baseline["rejected"] == 0
+    assert baseline["canonical"]["entities_upserted"] == 3
+    assert baseline["canonical"]["events_appended"] == 0
+    assert baseline["canonical"]["events_reobserved"] == 3
+    assert not [
+        d for d in baseline["diagnostics"] if "UNRESOLVED_REF" in d["code"]
+    ]
+
+    followup = run_json(
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["resolutions-followup"]),
+            "--source",
+            "resolutions",
+            "--json",
+        ],
+    )
+    assert followup["accepted"] == 5
+    assert followup["rejected"] == 0
+    assert followup["canonical"]["entities_upserted"] == 5
+    assert followup["canonical"]["events_appended"] == 0
+    assert followup["canonical"]["events_reobserved"] == 5
+
+    # Re-ingesting an unchanged resolutions snapshot is idempotent.
+    repeat = run_json(
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["resolutions-followup"]),
+            "--source",
+            "resolutions",
+            "--json",
+        ],
+    )
+    assert repeat["accepted"] == 5
+    assert repeat["canonical"]["events_appended"] == 0
+    assert repeat["canonical"]["events_reobserved"] == 5

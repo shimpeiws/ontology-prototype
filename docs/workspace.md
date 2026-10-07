@@ -5,7 +5,7 @@ A workspace is a directory containing four YAML definition files. The FDE checks
 | File | Content |
 | --- | --- |
 | `domain.yaml` | Typed entity/event model, projections, and explicit policies |
-| `mapping.yaml` | Declarative mapping from a source snapshot to entities and events |
+| `mapping.yaml` | Declarative mapping from source snapshots to entities and events |
 | `evaluation.yaml` | Outcome contract: interval, aggregation, baseline, strict target, guardrails |
 | `agent.yaml` | Diagnosis task: projection to inspect, deliverables, permitted action schemas |
 
@@ -64,22 +64,38 @@ domain:
 
 ```yaml
 mapping:
-  source: { name: jobs, format: csv }   # csv | json
-  entities:
-    - entity: Job
-      id: { field: id }                  # id stays a string; 'as' is forbidden here
-      properties:
-        status:   { field: status }
-        assignee: { field: assignee }    # ref target: the raw string id
-        amount:   { field: amount, as: number }
-  events:
-    - event: JobCompleted
-      subject: { entity: Job, id: { field: id } }
-      when: { op: and, args: [ { op: eq, field: status, value: completed }, { op: not_null, field: completed_at } ] }
-      occurred_at: { field: completed_at, as: datetime }
-      observed_at: { field: seen_at, as: datetime }   # optional
+  sources:
+    - name: jobs                         # stable source name; selected at ingest
+      format: csv                        # csv | json
+      entities:
+        - entity: Job
+          id: { field: id }              # id stays a string; 'as' is forbidden here
+          properties:
+            status:   { field: status }
+            assignee: { field: assignee }    # ref target: the raw string id
+            amount:   { field: amount, as: number }
+      events:
+        - event: JobCompleted
+          subject: { entity: Job, id: { field: id } }
+          when: { op: and, args: [ { op: eq, field: status, value: completed }, { op: not_null, field: completed_at } ] }
+          occurred_at: { field: completed_at, as: datetime }
+          observed_at: { field: seen_at, as: datetime }   # optional
+    - name: invoices
+      format: csv
+      entities:
+        - entity: Invoice
+          id: { field: id }
+          properties:
+            job: { field: job }          # ref to a Job id ingested from any source
+      events:
+        - event: InvoiceIssued
+          subject: { entity: Job, id: { field: job } }
+          occurred_at: { field: issued_at, as: datetime }
 ```
 
+- `sources` is a non-empty list; each entry carries its own `name`, `format`, `entities`, and `events`. Source names must be unique (`MAPPING.DUPLICATE_SOURCE`).
+- The earlier single-source form — top-level `source: { name, format }` plus top-level `entities`/`events` — still loads unchanged and is normalized to a one-element `sources` list. Mixing the two forms is an error (`MAPPING.MIXED_SOURCES`).
+- Entity `ref` properties and event subjects may point at entities bound by a *different* source; at ingest the reference resolves against the canonical store by exact stable id, with unresolved references reported as `INGEST.UNRESOLVED_REF` warnings (see [ingestion.md](ingestion.md)).
 - An assignment is `{ field: <column> }` or `{ literal: <scalar> }` — exactly one — plus optional `as` cast.
 - `as` must equal the target property's type and is required for non-`string` scalar properties. It is forbidden on `ref` properties and on entity ids.
 - Literals for entity ids, subject ids, and event times must be strings — ids and times are never numeric literals.

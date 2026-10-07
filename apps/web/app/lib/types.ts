@@ -80,7 +80,9 @@ export interface ContractResponse {
 export interface PreviewRequest {
   path: string;
   files: Record<string, string>;
-  sample: { text: string };
+  /** `source` selects the declared mapping source the sample resolves
+   *  through; omitted means the draft's single source. */
+  sample: { text: string; source?: string };
 }
 
 export interface PreviewEntity {
@@ -115,8 +117,9 @@ export interface PreviewObservation {
 
 export interface PreviewPayload {
   preview_id: string | null;
-  source: string;
-  format: string;
+  /** Null when no source could be selected (see diagnostics). */
+  source: string | null;
+  format: string | null;
   /** sha256 of the exact sample bytes — the input version. */
   input_digest: string | null;
   /** sha256 of the mapping definition — the mapping version. */
@@ -219,12 +222,17 @@ export interface EventBinding {
   observed_at: FieldAssignment | null;
 }
 
+export interface SourceMapping {
+  name: string;
+  format: string;
+  entities: EntityBinding[];
+  events: EventBinding[];
+}
+
 export interface MappingDefinition {
   name: string;
   description: string | null;
-  source: { name: string; format: string };
-  entities: EntityBinding[];
-  events: EventBinding[];
+  sources: SourceMapping[];
 }
 
 export interface EvaluationDefinition {

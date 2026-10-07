@@ -15,7 +15,7 @@ from .model import (
     FieldAssignment,
     MappingDefinition,
     PropertySpec,
-    SourceSpec,
+    SourceMapping,
     SubjectRef,
 )
 from .schema import err_at, get_list, get_map, get_str, unknown_keys, warn_at
@@ -190,7 +190,7 @@ def validate_mapping(
         return None
     unknown_keys(
         section,
-        {"name", "description", "source", "entities", "events"},
+        {"name", "description", "source", "sources", "entities", "events"},
         err,
         "mapping",
     )
@@ -201,16 +201,114 @@ def validate_mapping(
         err("SCHEMA.INVALID_TYPE", "mapping.description", "'description' must be a string")
         description = None
 
-    source = _validate_source(section.get("source"), err)
     entity_names = list(domain.entities) if domain is not None else []
     event_names = list(domain.events) if domain is not None else []
 
+    has_legacy = "source" in section
+    has_sources = "sources" in section
+    has_top_bindings = "entities" in section or "events" in section
+
+    sources: list[SourceMapping] = []
+    if has_sources and has_legacy:
+        err(
+            "MAPPING.MIXED_SOURCES",
+            "mapping",
+            "declare either 'source' (with top-level 'entities'/'events') "
+            "or 'sources', not both",
+        )
+    elif has_sources and has_top_bindings:
+        err(
+            "MAPPING.MIXED_SOURCES",
+            "mapping",
+            "top-level 'entities'/'events' belong to the single-source "
+            "'source' form; nest them inside each 'sources' entry",
+        )
+    elif has_sources:
+        sources_node = get_list(section, "sources", err, "mapping")
+        if sources_node is not None:
+            if not sources_node:
+                err(
+                    "MAPPING.NO_SOURCES",
+                    "mapping.sources",
+                    "'sources' must declare at least one source",
+                )
+            seen_sources: set[str] = set()
+            for index, item in enumerate(sources_node):
+                path = f"mapping.sources[{index}]"
+                source = _validate_source_bindings(
+                    item,
+                    diag,
+                    file,
+                    path,
+                    domain,
+                    entity_names,
+                    event_names,
+                )
+                if source is None:
+                    continue
+                if source.name in seen_sources:
+                    err(
+                        "MAPPING.DUPLICATE_SOURCE",
+                        f"{path}.name",
+                        f"source {source.name!r} is declared more than once",
+                    )
+                    continue
+                seen_sources.add(source.name)
+                sources.append(source)
+    elif has_legacy:
+        spec = _validate_source(section.get("source"), err, "mapping.source")
+        bindings = _validate_entities(
+            section, diag, file, "mapping", domain, entity_names
+        )
+        event_bindings = _validate_events(
+            section, diag, file, "mapping", domain, event_names
+        )
+        if spec is not None:
+            source_name, source_format = spec
+            sources.append(
+                SourceMapping(
+                    name=source_name,
+                    format=source_format,
+                    entities=bindings,
+                    events=event_bindings,
+                )
+            )
+    else:
+        err(
+            "SCHEMA.MISSING_FIELD",
+            "mapping.source",
+            "mapping requires 'source' or a 'sources' list",
+        )
+
+    if not any(source.entities or source.events for source in sources):
+        warn("MAPPING.EMPTY", "mapping", "mapping binds no entities and no events")
+
+    own_errors = any(d.severity == "error" for d in diag.items[start:])
+    if own_errors or name is None or not sources:
+        return None
+    return MappingDefinition(
+        name=name,
+        description=description,
+        sources=sources,
+    )
+
+
+def _validate_entities(
+    section: dict,
+    diag: Diagnostics,
+    file: str,
+    base: str,
+    domain: DomainDefinition | None,
+    entity_names: list[str],
+) -> list[EntityBinding]:
+    """Validate one ``entities`` list at ``base``.``entities``."""
+    err = err_at(diag, file)
     bindings: list[EntityBinding] = []
-    entities_node = get_list(section, "entities", err, "mapping")
+    entities_node = get_list(section, "entities", err, base)
     seen_entities: set[str] = set()
     if entities_node is not None:
         for index, item in enumerate(entities_node):
-            path = f"mapping.entities[{index}]"
+            path = f"{base}.entities[{index}]"
             if not isinstance(item, dict):
                 err("SCHEMA.INVALID_TYPE", path, "entity binding must be a mapping")
                 continue
@@ -287,9 +385,21 @@ def validate_mapping(
                 bindings.append(
                     EntityBinding(entity=entity_name, id=id_assignment, properties=prop_assignments)
                 )
+    return bindings
 
+
+def _validate_events(
+    section: dict,
+    diag: Diagnostics,
+    file: str,
+    base: str,
+    domain: DomainDefinition | None,
+    event_names: list[str],
+) -> list[EventBinding]:
+    """Validate one ``events`` list at ``base``.``events``."""
+    err = err_at(diag, file)
     event_bindings: list[EventBinding] = []
-    events_node = get_list(section, "events", err, "mapping")
+    events_node = get_list(section, "events", err, base)
     # Event time keys are the names pinned by the domain's explicit policy.
     occurrence_key = (
         domain.policies.event_times.occurrence_field if domain else OCCURRENCE_FIELD
@@ -299,7 +409,7 @@ def validate_mapping(
     )
     if events_node is not None:
         for index, item in enumerate(events_node):
-            path = f"mapping.events[{index}]"
+            path = f"{base}.events[{index}]"
             if not isinstance(item, dict):
                 err("SCHEMA.INVALID_TYPE", path, "event binding must be a mapping")
                 continue
@@ -368,40 +478,61 @@ def validate_mapping(
                         observed_at=observed_at,
                     )
                 )
+    return event_bindings
 
-    if not bindings and not event_bindings:
-        warn("MAPPING.EMPTY", "mapping", "mapping binds no entities and no events")
 
-    own_errors = any(d.severity == "error" for d in diag.items[start:])
-    if own_errors or name is None or source is None:
+def _validate_source_bindings(
+    node: Any,
+    diag: Diagnostics,
+    file: str,
+    path: str,
+    domain: DomainDefinition | None,
+    entity_names: list[str],
+    event_names: list[str],
+) -> SourceMapping | None:
+    """Validate one ``mapping.sources`` entry: format plus its own bindings."""
+    err = err_at(diag, file)
+    if not isinstance(node, dict):
+        err("SCHEMA.INVALID_TYPE", path, "source entry must be a mapping")
         return None
-    return MappingDefinition(
+    unknown_keys(node, {"name", "format", "entities", "events"}, err, path)
+    header = _validate_name_format(node, err, path)
+    bindings = _validate_entities(node, diag, file, path, domain, entity_names)
+    event_bindings = _validate_events(node, diag, file, path, domain, event_names)
+    if header is None:
+        return None
+    name, source_format = header
+    return SourceMapping(
         name=name,
-        description=description,
-        source=source,
+        format=source_format,
         entities=bindings,
         events=event_bindings,
     )
 
 
-def _validate_source(node: Any, err) -> SourceSpec | None:
+def _validate_source(node: Any, err, path: str) -> tuple[str, str] | None:
+    """Validate the single-source ``source: {name, format}`` mapping."""
     if not isinstance(node, dict):
-        err("SCHEMA.INVALID_TYPE", "mapping.source", "'source' must be a mapping")
+        err("SCHEMA.INVALID_TYPE", path, "'source' must be a mapping")
         return None
-    unknown_keys(node, {"name", "format"}, err, "mapping.source")
-    source_name = get_str(node, "name", err, "mapping.source")
-    source_format = get_str(node, "format", err, "mapping.source")
+    unknown_keys(node, {"name", "format"}, err, path)
+    return _validate_name_format(node, err, path)
+
+
+def _validate_name_format(node: dict, err, path: str) -> tuple[str, str] | None:
+    source_name = get_str(node, "name", err, path)
+    source_format = get_str(node, "format", err, path)
     if source_format is not None and source_format not in SOURCE_FORMATS:
         err(
             "MAPPING.UNKNOWN_FORMAT",
-            "mapping.source.format",
+            f"{path}.format",
             f"unsupported source format {source_format!r}",
             hint=f"supported formats: {', '.join(SOURCE_FORMATS)}",
         )
         source_format = None
     if source_name is None or source_format is None:
         return None
-    return SourceSpec(name=source_name, format=source_format)
+    return source_name, source_format
 
 
 def _validate_subject(

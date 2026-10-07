@@ -280,19 +280,69 @@ export function domainEntityProperties(
   return spec ? Object.keys(spec.properties) : [];
 }
 
-/** The draft mapping's declared source format — which parser a preview
- *  sample goes through. Draft-first like `domainReferenceNames`. */
+/**
+ * Source names declared by the draft mapping — `mapping.sources[i].name`
+ * or the single-source `mapping.source.name`. Draft-first like
+ * `domainReferenceNames`.
+ */
+export function draftSourceNames(
+  draftText: string | null,
+  fallback: MappingDefinition | null,
+): string[] {
+  const parsed = draftText !== null ? parseDraftDoc(draftText) : null;
+  if (parsed?.status === "ready") {
+    const mapping = mapAt(parsed.doc, ["mapping"]);
+    if (mapping) {
+      const sources = seqAt(mapping, ["sources"]);
+      if (sources) {
+        return sources.items.map((item) =>
+          scalarText(memberValue(item, "name")),
+        );
+      }
+      const source = mapAt(mapping, ["source"]);
+      if (source) return [scalarText(source.get("name", true))];
+      return [];
+    }
+  }
+  return (fallback?.sources ?? []).map((s) => s.name);
+}
+
+/** The draft's declared format for one source — which parser a preview
+ *  sample goes through. `name` selects among `sources[]`; unset means the
+ *  first (or only) declared source. Draft-first like
+ *  `domainReferenceNames`. */
 export function draftSourceFormat(
   draftText: string | null,
   fallback: MappingDefinition | null,
+  name?: string | null,
 ): string | null {
   const parsed = draftText !== null ? parseDraftDoc(draftText) : null;
   if (parsed?.status === "ready") {
-    const source = mapAt(parsed.doc, ["mapping", "source"]);
-    const format = source ? scalarText(source.get("format", true)) : "";
-    if (format) return format;
+    const mapping = mapAt(parsed.doc, ["mapping"]);
+    if (mapping) {
+      const sources = seqAt(mapping, ["sources"]);
+      if (sources) {
+        const item =
+          name == null
+            ? sources.items[0]
+            : sources.items.find(
+                (s) => scalarText(memberValue(s, "name")) === name,
+              );
+        const format = scalarText(memberValue(item, "format"));
+        return format || null;
+      }
+      const source = mapAt(mapping, ["source"]);
+      if (source) {
+        const format = scalarText(source.get("format", true));
+        return format || null;
+      }
+      return null;
+    }
   }
-  return fallback?.source.format ?? null;
+  const list = fallback?.sources ?? [];
+  const source =
+    name == null ? list[0] : list.find((s) => s.name === name);
+  return source?.format ?? null;
 }
 
 /** Event-time field names pinned by the domain's explicit policy. The

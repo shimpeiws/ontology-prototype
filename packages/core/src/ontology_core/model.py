@@ -164,17 +164,25 @@ class EventBinding:
 
 
 @dataclass(frozen=True)
-class SourceSpec:
+class SourceMapping:
+    """One declared source: its snapshot format and the bindings its records
+    resolve through.
+
+    A workspace mapping declares one or more of these; ingest and preview
+    select the source per snapshot, so a record is only ever resolved
+    through its own source's ``entities``/``events``.
+    """
+
     name: str
     format: str
+    entities: list[EntityBinding] = field(default_factory=list)
+    events: list[EventBinding] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class MappingDefinition:
     name: str
-    source: SourceSpec
-    entities: list[EntityBinding] = field(default_factory=list)
-    events: list[EventBinding] = field(default_factory=list)
+    sources: list[SourceMapping]
     description: str | None = None
 
 
