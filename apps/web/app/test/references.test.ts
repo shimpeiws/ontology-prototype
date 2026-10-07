@@ -269,6 +269,62 @@ describe("applyRename", () => {
     ]);
   });
 
+  it("detaches an aliased where condition instead of editing the shared anchor", () => {
+    // PersonDone anchors a condition over its own subject's property;
+    // CompletedButNotInvoiced borrows it via *filter. Renaming Job.status
+    // must update only the Job projection's copy — mutating the anchored
+    // node would corrupt the Person projection (status is a Person field
+    // there).
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SYNTHETIC_BUNDLE_FILES["domain.yaml"]!.replace(
+        `    CompletedButNotInvoiced:`,
+        `    PersonDone:
+      subject: Person
+      select:
+        required_events: [JobCompleted]
+        where: &filter { op: eq, field: status, value: open }
+    CompletedButNotInvoiced:`,
+      ).replace(
+        `        elapsed: { event: JobCompleted, comparator: gt, value: 2, unit: days }`,
+        `        elapsed: { event: JobCompleted, comparator: gt, value: 2, unit: days }
+        where: *filter`,
+      ),
+    };
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Job",
+      name: "status",
+    };
+    const result = applyRename(drafts, concept, "state");
+    const text = result.files["domain.yaml"]!;
+    // The anchored condition on PersonDone is untouched.
+    expect(text).toContain("&filter { op: eq, field: status, value: open }");
+    // The Job projection's alias position now holds a detached copy with
+    // the renamed field.
+    expect(text).toContain("field: state");
+    // Person.status still resolves to PersonDone's condition alone.
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Person", name: "status" },
+        ),
+      ),
+    ).toEqual(["domain.yaml:domain.projections.PersonDone.select.where"]);
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Job", name: "state" },
+        ),
+      ),
+    ).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.where",
+    ]);
+  });
+
   it("does not touch a same-named scalar elsewhere", () => {
     // mapping `field: status` value must not be renamed — only keys.
     const concept: Concept = {

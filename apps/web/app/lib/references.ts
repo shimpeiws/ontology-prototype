@@ -23,7 +23,7 @@
  */
 
 import { isAlias, isMap, isScalar, isSeq, parseDocument } from "yaml";
-import type { Document, YAMLMap } from "yaml";
+import type { Document, YAMLMap, YAMLSeq } from "yaml";
 
 import type { Concept } from "./domainEdit";
 import { mapValue, renameMapKey } from "./domainEdit";
@@ -334,10 +334,52 @@ export function findReferences(drafts: Drafts, concept: Concept): ScanResult {
  * Resolve a YAML alias to its anchored node; other nodes pass through.
  * `findReferences` operates on `toJS()` output where aliases are already
  * resolved — the retarget side must resolve them too, or an aliased
- * reference is reported but never renamed.
+ * reference is reported but never renamed. Read-only: never mutate a
+ * dereferenced node, it may be shared through an anchor — use `editAt`
+ * / `editItemAt` for writes.
  */
 function deref(doc: Document, node: unknown): unknown {
   return isAlias(node) ? node.resolve(doc) : node;
+}
+
+/**
+ * Run `edit` on the container at `map[key]`. When the position holds a
+ * YAML alias, `edit` runs on a detached deep copy first and the alias is
+ * replaced by the copy only if something actually changed — a shared
+ * anchor (e.g. a `where` condition borrowed from another projection) is
+ * never mutated in place.
+ */
+function editAt(
+  doc: Document,
+  map: YAMLMap,
+  key: string,
+  edit: (node: unknown) => boolean,
+): boolean {
+  const node = map.get(key, true);
+  if (!isAlias(node)) return edit(node);
+  const resolved = node.resolve(doc);
+  if (resolved === undefined) return false;
+  const copy = doc.createNode(resolved.toJS(doc));
+  if (!edit(copy)) return false;
+  map.set(key, copy);
+  return true;
+}
+
+/** `editAt` for a seq item position. */
+function editItemAt(
+  doc: Document,
+  seq: YAMLSeq,
+  i: number,
+  edit: (node: unknown) => boolean,
+): boolean {
+  const item = seq.items[i];
+  if (!isAlias(item)) return edit(item);
+  const resolved = item.resolve(doc);
+  if (resolved === undefined) return false;
+  const copy = doc.createNode(resolved.toJS(doc));
+  if (!edit(copy)) return false;
+  seq.set(i, copy);
+  return true;
 }
 
 function scalarIs(doc: Document, map: YAMLMap, key: string, value: string): boolean {
@@ -361,12 +403,13 @@ function retarget(
   oldName: string,
   newName: string,
 ): boolean {
-  const node = deref(doc, map.get(key, true));
-  if (!isScalar(node) || !scalarEq(node.value, oldName)) return false;
-  // Keep any anchor on the replaced node — an alias elsewhere may resolve
-  // through it.
+  const node = map.get(key, true);
+  const resolved = deref(doc, node);
+  if (!isScalar(resolved) || !scalarEq(resolved.value, oldName)) return false;
   const rep = doc.createNode(newName);
-  rep.anchor = node.anchor;
+  // Keep the anchor only when the position's own node carries it — a
+  // resolved alias target's anchor belongs to the shared node elsewhere.
+  if (isScalar(node) && node.anchor) rep.anchor = node.anchor;
   map.set(key, rep);
   return true;
 }
@@ -378,18 +421,17 @@ function retargetSeqItems(
   oldName: string,
   newName: string,
 ): boolean {
-  const seq = deref(doc, node);
-  if (!isSeq(seq)) return false;
+  if (!isSeq(node)) return false;
   let changed = false;
-  for (let i = 0; i < seq.items.length; i++) {
-    const item = seq.items[i];
+  for (let i = 0; i < node.items.length; i++) {
+    const item = node.items[i];
     const resolved = deref(doc, item);
     if (isScalar(resolved) && scalarEq(resolved.value, oldName)) {
-      // Keep any anchor on the replaced scalar; a bare alias item is
-      // replaced by a literal since the anchor lives elsewhere.
+      // Keep the anchor only when the item itself carries it; a bare
+      // alias is replaced by a literal since the anchor lives elsewhere.
       const rep = doc.createNode(newName);
-      if (isScalar(item)) rep.anchor = item.anchor;
-      seq.set(i, rep);
+      if (isScalar(item) && item.anchor) rep.anchor = item.anchor;
+      node.set(i, rep);
       changed = true;
     }
   }
@@ -403,17 +445,29 @@ function retargetConditionFields(
   oldName: string,
   newName: string,
 ): boolean {
-  const map = deref(doc, node);
-  if (!isMap(map)) return false;
-  let changed = retarget(doc, map, "field", oldName, newName);
-  const args = deref(doc, map.get("args"));
-  if (isSeq(args)) {
-    for (const arg of args.items) {
-      if (retargetConditionFields(doc, arg, oldName, newName))
-        changed = true;
-    }
-  }
-  if (retargetConditionFields(doc, map.get("arg"), oldName, newName))
+  if (!isMap(node)) return false;
+  let changed = retarget(doc, node, "field", oldName, newName);
+  if (
+    editAt(doc, node, "args", (seq) => {
+      if (!isSeq(seq)) return false;
+      let c = false;
+      for (let i = 0; i < seq.items.length; i++) {
+        if (
+          editItemAt(doc, seq, i, (m) =>
+            retargetConditionFields(doc, m, oldName, newName),
+          )
+        )
+          c = true;
+      }
+      return c;
+    })
+  )
+    changed = true;
+  if (
+    editAt(doc, node, "arg", (m) =>
+      retargetConditionFields(doc, m, oldName, newName),
+    )
+  )
     changed = true;
   return changed;
 }
@@ -425,38 +479,38 @@ function retargetSelect(
   concept: Concept,
   newName: string,
 ): boolean {
-  const select = deref(doc, spec.get("select"));
-  if (!isMap(select)) return false;
-  let changed = false;
-  if (concept.kind === "event") {
-    for (const key of ["required_events", "absent_events"] as const) {
+  return editAt(doc, spec, "select", (select) => {
+    if (!isMap(select)) return false;
+    let changed = false;
+    if (concept.kind === "event") {
+      for (const key of ["required_events", "absent_events"] as const) {
+        if (
+          editAt(doc, select, key, (seq) =>
+            retargetSeqItems(doc, seq, concept.name, newName),
+          )
+        )
+          changed = true;
+      }
       if (
-        retargetSeqItems(doc, select.get(key), concept.name, newName)
+        editAt(doc, select, "elapsed", (m) =>
+          isMap(m) ? retarget(doc, m, "event", concept.name, newName) : false,
+        )
+      )
+        changed = true;
+    } else if (
+      concept.kind === "property" &&
+      concept.ownerKind === "entities" &&
+      scalarIs(doc, spec, "subject", concept.owner)
+    ) {
+      if (
+        editAt(doc, select, "where", (m) =>
+          retargetConditionFields(doc, m, concept.name, newName),
+        )
       )
         changed = true;
     }
-    const elapsed = deref(doc, select.get("elapsed"));
-    if (
-      isMap(elapsed) &&
-      retarget(doc, elapsed, "event", concept.name, newName)
-    )
-      changed = true;
-  } else if (
-    concept.kind === "property" &&
-    concept.ownerKind === "entities" &&
-    scalarIs(doc, spec, "subject", concept.owner)
-  ) {
-    if (
-      retargetConditionFields(
-        doc,
-        select.get("where"),
-        concept.name,
-        newName,
-      )
-    )
-      changed = true;
-  }
-  return changed;
+    return changed;
+  });
 }
 
 function renamePropertyRefs(
