@@ -174,9 +174,23 @@ def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) 
 
 
 def test_contract_exposes_no_action_authority(roots) -> None:
-    """The authoring API grants no approval or write-back capability."""
+    """The API grants no approval or write-back capability."""
     body = make_client(roots).get("/api/v1/contract").json()
     operations = set(body["operations"])
-    assert operations == {"open", "validate_draft", "save", "preview_draft"}
-    forbidden = {"decide", "execute", "diagnose", "proposals", "approve"}
+    assert operations == {
+        "open",
+        "validate_draft",
+        "save",
+        "preview_draft",
+        # Issue #61: read-only operational inspection. These add views
+        # over `.ontology/`, not action authority.
+        "trace_overview",
+        "trace_subject",
+        "trace_run",
+        "evaluation_runs",
+        "evaluation_run",
+        "proposals",
+        "proposal",
+    }
+    forbidden = {"decide", "execute", "diagnose", "approve"}
     assert not (operations & forbidden)

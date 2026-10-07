@@ -248,6 +248,58 @@ Response `200`:
   so clients rendering per-row diagnostics should read that field instead
   of filtering the payload list.
 
+## Operational inspection
+
+Read-only views over a workspace's `.ontology/` runtime, added under
+[ADR 0003](adr/0003-api-operational-boundary.md). Every payload is the
+CLI's `--json` output for the same query verbatim, plus `api_version`;
+domain outcomes (`ok: false` with core `diagnostics`) are `200`
+responses, while `{error}` stays reserved for transport failures. All
+canonical reads go through a `readonly=True` store — these endpoints
+never create `.ontology/` or `canon.db` and never mutate runtime state,
+so a workspace with no recorded history reports an empty view rather
+than an error.
+
+All seven take `{"path": "<workspace under a configured root>"}` plus
+the extra field listed; `path` follows the same root-containment rules
+as every other endpoint.
+
+| Endpoint | CLI equivalent | Success payload |
+| --- | --- | --- |
+| `POST /api/v1/workspaces/trace` | `ontology trace --json` | Trace overview sections (`journal`, `evidence`, `canonical`, `projection_runs`, `diagnosis_runs`, `proposals`, `decisions`, `executions`, `evaluation_runs`, `links`, `diagnostics`) |
+| `POST /api/v1/workspaces/trace/subject` | `trace --subject Entity/Id --json` | `trace` — the subject's artifacts and timeline |
+| `POST /api/v1/workspaces/trace/run` | `trace --run <id> --json` | `trace` — the anchored artifact (any recorded run, proposal, ingest, or execution id) |
+| `POST /api/v1/workspaces/evaluations` | — (no CLI equivalent) | `evaluation_runs` — every frozen evaluation report record, in the same shape `evaluations/run` returns |
+| `POST /api/v1/workspaces/evaluations/run` | `evaluate --run <id> --json` | `run` — the frozen evaluation report |
+| `POST /api/v1/workspaces/proposals` | `proposals --json` | `proposals` — every persisted proposal with `status`, `decisions`, and `executions` |
+| `POST /api/v1/workspaces/proposals/show` | `proposals --show <id> --json` | `proposal` — one proposal with `status`, `decisions`, and `executions` |
+
+Extra request fields:
+
+- `trace/subject`: `{"subject": "Job/101"}` — a malformed subject returns
+  `ok: false` with `TRACE.INVALID_SUBJECT`.
+- `trace/run`: `{"run_id": "<id>"}`.
+- `evaluations/run`: `{"run_id": "<id>"}`.
+- `proposals/show`: `{"proposal_id": "<id>"}`.
+
+Domain failures the payload can report (`ok: false`, `diagnostics`):
+
+| Code | When |
+| --- | --- |
+| `TRACE.INVALID_SUBJECT` | `subject` is not `Entity/Id` |
+| `TRACE.UNKNOWN_ID` | No recorded artifact with that `run_id` |
+| `TRACE.JOURNAL_CORRUPT` | A journal line is unreadable — a warning; the rest of the history still assembles |
+| `EVALUATION.STORE_ERROR` | The canonical store could not be opened for reading |
+| `EVALUATION.UNKNOWN_RUN` | No frozen evaluation report with that `run_id` |
+| `DECISION.STORE_ERROR` | The canonical store could not be opened for reading |
+| `DECISION.UNKNOWN_PROPOSAL` | No persisted proposal with that `proposal_id` |
+| `WORKSPACE.*` | Proposal inspection loads the workspace bundle (like the CLI), so invalid definitions surface their own diagnostics |
+
+Trace and evaluation endpoints never load the definition files — a
+frozen report or recorded run stays inspectable after a later edit
+breaks the workspace; only proposal inspection validates the bundle,
+matching what `ontology proposals` requires.
+
 ## Errors
 
 API failures are structured errors, never diagnostics: the `diagnostics`
