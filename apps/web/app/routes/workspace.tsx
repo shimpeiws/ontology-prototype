@@ -3,6 +3,7 @@ import { Navigate, NavLink, Outlet, useBlocker } from "react-router";
 
 import { useWorkspace } from "../workspace/context";
 import { isDraftDirty } from "../workspace/store";
+import type { OpenedWorkspace } from "../workspace/store";
 import { DraftStatusBadge } from "../components/DraftStatus";
 import { SaveNoticeView } from "../components/SaveNotice";
 import { ErrorState } from "../components/states";
@@ -38,17 +39,25 @@ export default function WorkspaceLayout() {
   const blocker = useBlocker(useCallback(() => dirtyRef.current, []));
   const [confirmingClose, setConfirmingClose] = useState(false);
   // "Revert all" discards every draft file, so it arms an explicit
-  // confirmation first — never a one-click discard. An arm is moot once
-  // the draft is clean, and it must not survive a save round-trip: the
-  // baseline the confirmation described may move when the save lands, so
-  // a save starting disarms it rather than letting it reappear after.
-  const [confirmingRevertAll, setConfirmingRevertAll] = useState(false);
+  // confirmation first — never a one-click discard. The arm is bound to
+  // the active baseline it described: the reducer replaces the workspace
+  // object whenever that baseline moves (a landed save or a reload), so
+  // an arm taken against the old baseline can never fire a revert-all
+  // against different on-disk text. An arm is moot once the draft is
+  // clean, and a save starting disarms it rather than letting it
+  // reappear after — the baseline may move when the save lands.
+  const [armedRevertAll, setArmedRevertAll] =
+    useState<OpenedWorkspace | null>(null);
+  const confirmingRevertAll =
+    armedRevertAll !== null && armedRevertAll === state.workspace;
   useEffect(() => {
+    if (!confirmingRevertAll || !dirty || state.saving) {
+      setArmedRevertAll(null);
+    }
     if (!dirty || state.saving) {
       setConfirmingClose(false);
-      setConfirmingRevertAll(false);
     }
-  }, [dirty, state.saving]);
+  }, [confirmingRevertAll, dirty, state.saving]);
 
   // Warn on tab close / reload with unsaved drafts — useBlocker only covers
   // in-app navigation.
@@ -84,7 +93,7 @@ export default function WorkspaceLayout() {
     if (state.saving) return;
     if (dirty && !confirmingClose) {
       setConfirmingClose(true);
-      setConfirmingRevertAll(false);
+      setArmedRevertAll(null);
       return;
     }
     setConfirmingClose(false);
@@ -135,7 +144,7 @@ export default function WorkspaceLayout() {
                   // Same guard as the other discard paths: a save already
                   // sent cannot be recalled.
                   if (state.saving) return;
-                  setConfirmingRevertAll(false);
+                  setArmedRevertAll(null);
                   revertAll();
                 }}
               >
@@ -143,7 +152,7 @@ export default function WorkspaceLayout() {
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmingRevertAll(false)}
+                onClick={() => setArmedRevertAll(null)}
               >
                 Keep draft
               </button>
@@ -153,7 +162,7 @@ export default function WorkspaceLayout() {
               type="button"
               onClick={() => {
                 setConfirmingClose(false);
-                setConfirmingRevertAll(true);
+                setArmedRevertAll(state.workspace);
               }}
               disabled={!dirty || state.saving}
               title={

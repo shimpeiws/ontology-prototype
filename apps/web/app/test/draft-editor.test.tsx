@@ -32,14 +32,17 @@ vi.mock("../lib/api", async (importOriginal) => {
     api: {
       ...mod.api,
       saveWorkspace: vi.fn(),
+      openWorkspace: vi.fn(),
     },
   };
 });
 
 const saveWorkspace = vi.mocked(api.saveWorkspace);
+const openWorkspace = vi.mocked(api.openWorkspace);
 
 afterEach(() => {
   saveWorkspace.mockReset();
+  openWorkspace.mockReset();
 });
 
 function Harness({
@@ -118,6 +121,18 @@ function SaveProbe() {
       type="button"
       data-testid="save-draft"
       onClick={() => void saveDraft()}
+    />
+  );
+}
+
+/** Triggers the real reloadActive path (api.openWorkspace is mocked). */
+function ReloadProbe() {
+  const { reloadActive } = useWorkspace();
+  return (
+    <button
+      type="button"
+      data-testid="reload-active"
+      onClick={() => void reloadActive()}
     />
   );
 }
@@ -292,6 +307,75 @@ describe("DraftEditor", () => {
     expect(
       screen.queryByRole("button", { name: "Discard changes" }),
     ).toBeNull();
+    expect(screen.getByText("unsaved")).toBeInTheDocument();
+  });
+
+  it("an armed confirmation does not survive a reload of the active files", async () => {
+    saveWorkspace.mockResolvedValue({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "conflict",
+      digest: "on-disk-now",
+      message: "workspace files changed on disk",
+    });
+    openWorkspace.mockResolvedValue({
+      ...SYNTHETIC_OPEN_RESPONSE,
+      workspace: {
+        ...SYNTHETIC_OPEN_RESPONSE.workspace,
+        digest: "on-disk-now",
+      },
+      files: {
+        ...SYNTHETIC_OPEN_RESPONSE.files,
+        "domain.yaml": "# changed outside the UI\n",
+      },
+    });
+    const user = userEvent.setup();
+    render(
+      <WorkspaceProvider>
+        <Harness>
+          <DraftEditor file="domain.yaml" />
+          <SaveProbe />
+          <ReloadProbe />
+        </Harness>
+      </WorkspaceProvider>,
+    );
+    const textarea = screen.getByLabelText("domain.yaml draft YAML");
+    await user.type(textarea, "# edit");
+
+    // The save conflicts — the on-disk bundle moved under the draft.
+    await user.click(screen.getByTestId("save-draft"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Revert to active" }),
+      ).toBeEnabled(),
+    );
+
+    // Arm the revert against the pre-reload baseline, then reload the new
+    // on-disk text the conflict reported.
+    await user.click(
+      screen.getByRole("button", { name: "Revert to active" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Discard changes" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("reload-active"));
+    await waitFor(() =>
+      expect(openWorkspace).toHaveBeenCalledWith("job-invoicing"),
+    );
+
+    // The baseline the confirmation described is gone — the arm must not
+    // fire a revert against the reloaded active text. The draft itself is
+    // preserved and still dirty, and the control can be re-armed against
+    // the new baseline.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Discard changes" }),
+      ).toBeNull(),
+    );
+    expect(screen.queryByText(/will be discarded/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Revert to active" }),
+    ).toBeEnabled();
     expect(screen.getByText("unsaved")).toBeInTheDocument();
   });
 

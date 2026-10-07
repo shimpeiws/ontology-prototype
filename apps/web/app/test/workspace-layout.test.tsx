@@ -331,6 +331,63 @@ describe("workspace layout", () => {
     expect(screen.getByText("unsaved draft")).toBeInTheDocument();
   });
 
+  it("an armed Revert all confirmation does not survive an active reload", async () => {
+    saveWorkspace.mockResolvedValue({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "conflict",
+      digest: "on-disk-now",
+      message: "workspace files changed on disk",
+    });
+    openWorkspace.mockResolvedValue({
+      ...SYNTHETIC_OPEN_RESPONSE,
+      workspace: {
+        ...SYNTHETIC_OPEN_RESPONSE.workspace,
+        digest: "on-disk-now",
+      },
+      files: {
+        ...SYNTHETIC_OPEN_RESPONSE.files,
+        "agent.yaml": "# changed outside the UI\n",
+      },
+    });
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    // The save conflicts — the on-disk bundle moved under the draft.
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("alert");
+
+    // Arm Revert all against the pre-reload baseline, then reload the
+    // new on-disk bundle for review.
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Reload active bundle" }),
+    );
+    await waitFor(() =>
+      expect(openWorkspace).toHaveBeenCalledWith("job-invoicing"),
+    );
+
+    // The baseline the confirmation described is gone — the arm must not
+    // fire a revert against the reloaded active files. The draft is
+    // preserved and still dirty, and the control can be re-armed against
+    // the new baseline.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Discard all changes" }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.queryByText(
+        /Unsaved draft changes in every file will be discarded/,
+      ),
+    ).toBeNull();
+    expect(screen.getByText("unsaved draft")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Revert all" })).toBeEnabled();
+  });
+
   it("a shown validation result goes stale after Revert all", async () => {
     let state = dirtyState();
     state = workspaceReducer(state, {

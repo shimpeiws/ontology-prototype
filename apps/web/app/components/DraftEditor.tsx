@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 
 import { useWorkspace } from "../workspace/context";
 import { isFileDirty } from "../workspace/store";
+import type { OpenedWorkspace } from "../workspace/store";
 import type { WorkspaceFileName } from "../lib/types";
 
 export function DraftEditor({ file }: { file: WorkspaceFileName }) {
@@ -24,14 +25,21 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
     Object.hasOwn(state.workspace.activeFiles, file);
   const labelId = `draft-editor-${file}`;
   // Revert discards the draft text, so it arms a confirmation first — the
-  // same two-step pattern as closing a dirty workspace. The arm is moot
-  // once the file is clean (a revert-all or a landed save), and it must
-  // not survive a save round-trip either: the baseline the confirmation
-  // described may move when the save lands, so a settling save disarms it.
-  const [confirmingRevert, setConfirmingRevert] = useState(false);
+  // same two-step pattern as closing a dirty workspace. The arm is bound
+  // to the active baseline it described: the reducer replaces the
+  // workspace object whenever that baseline moves (a landed save or a
+  // reload), so an arm taken against the old baseline can never fire a
+  // revert against different on-disk text. It is moot once the file is
+  // clean (a revert-all or a landed save), and a settling save disarms it
+  // too — the baseline the confirmation described may move when the save
+  // lands.
+  const [armedBaseline, setArmedBaseline] =
+    useState<OpenedWorkspace | null>(null);
+  const confirmingRevert =
+    armedBaseline !== null && armedBaseline === state.workspace;
   useEffect(() => {
-    if (!dirty || state.saving) setConfirmingRevert(false);
-  }, [dirty, state.saving]);
+    if (!confirmingRevert || !dirty || state.saving) setArmedBaseline(null);
+  }, [confirmingRevert, dirty, state.saving]);
 
   return (
     <section className="draft-editor" aria-labelledby={labelId}>
@@ -69,14 +77,14 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
                   // sent cannot be recalled.
                   if (state.saving) return;
                   revertFile(file);
-                  setConfirmingRevert(false);
+                  setArmedBaseline(null);
                 }}
               >
                 Discard changes
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmingRevert(false)}
+                onClick={() => setArmedBaseline(null)}
               >
                 Keep editing
               </button>
@@ -84,7 +92,7 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
           ) : (
             <button
               type="button"
-              onClick={() => setConfirmingRevert(true)}
+              onClick={() => setArmedBaseline(state.workspace)}
               disabled={!dirty || state.saving}
               title={
                 state.saving
