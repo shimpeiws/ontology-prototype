@@ -171,6 +171,20 @@ def test_source_entry_unknown_format_rejected(tmp_path: Path) -> None:
     assert diag.path == "mapping.sources[1].format"
 
 
+def test_bindings_without_any_source_rejected(tmp_path: Path) -> None:
+    # A mapping that declares bindings but neither `source` nor `sources`
+    # reports SCHEMA.MISSING_FIELD at mapping.source — pinned since the
+    # sources change switched this path from SCHEMA.INVALID_TYPE.
+    docs = support.base_docs()
+    del docs["mapping"]["mapping"]["source"]
+    result = load_workspace(support.make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(
+        d for d in result.diagnostics if d.code == "SCHEMA.MISSING_FIELD"
+    )
+    assert diag.path == "mapping.source"
+
+
 def test_source_entry_missing_name_rejected(tmp_path: Path) -> None:
     docs = multi_docs()
     del docs["mapping"]["mapping"]["sources"][0]["name"]

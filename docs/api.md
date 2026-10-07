@@ -90,6 +90,11 @@ Response `200`:
   draft baseline the UI edits (no newline normalization).
 - `definitions` is the parsed typed workspace (entities, bindings,
   contract, agent task); `null` when the workspace has errors.
+  `definitions.mapping` is always returned in normalized `sources[]`
+  form — a legacy single-source `mapping.yaml` (`source:` + top-level
+  `entities`/`events`) is reported as a one-element `sources` list. This
+  normalized shape applies to every response that carries `definitions`
+  (`open`, `validate`, `save`, `preview`).
 - `workspace.digest` is `bundle_digest` over the four files — the active
   digest the save flow (#19) checks drafts against. It is `null` when
   any file present on disk could not be returned (oversized,

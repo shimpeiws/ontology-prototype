@@ -78,7 +78,8 @@ The Web app is presentation only:
   format is the selected source's declared `format`, and the
   byte/record bounds come from `contract.preview_limits`. A draft with
   several sources shows a source picker and sends the choice as
-  `sample.source`; single-source drafts send none. Results show each
+  `sample.source`; single-source drafts resolve to that one source and
+  send its name the same way. Results show each
   source row next to the canonical entities/events it produced —
   normalized nulls and timestamps, `accepted`/`rejected` status,
   evidence references (observation id, preview id, row, input and
