@@ -26,12 +26,12 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
   // Revert discards the draft text, so it arms a confirmation first — the
   // same two-step pattern as closing a dirty workspace. The arm is moot
   // once the file is clean (a revert-all or a landed save), and it must
-  // not fire while a save is in flight: a save already sent cannot be
-  // recalled, so the discarded edits would still reach disk.
+  // not survive a save round-trip either: the baseline the confirmation
+  // described may move when the save lands, so a settling save disarms it.
   const [confirmingRevert, setConfirmingRevert] = useState(false);
   useEffect(() => {
-    if (!dirty) setConfirmingRevert(false);
-  }, [dirty]);
+    if (!dirty || state.saving) setConfirmingRevert(false);
+  }, [dirty, state.saving]);
 
   return (
     <section className="draft-editor" aria-labelledby={labelId}>
@@ -47,7 +47,16 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
             </span>
           ) : null}
           {draft !== null ? (
-            <button type="button" onClick={() => removeFile(file)}>
+            <button
+              type="button"
+              onClick={() => removeFile(file)}
+              disabled={state.saving}
+              title={
+                state.saving
+                  ? "A save is in flight — wait for it to settle before discarding edits."
+                  : undefined
+              }
+            >
               Remove from draft
             </button>
           ) : null}
@@ -56,6 +65,9 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
               <button
                 type="button"
                 onClick={() => {
+                  // Same guard as the other discard paths: a save already
+                  // sent cannot be recalled.
+                  if (state.saving) return;
                   revertFile(file);
                   setConfirmingRevert(false);
                 }}

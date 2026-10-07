@@ -38,15 +38,17 @@ export default function WorkspaceLayout() {
   const blocker = useBlocker(useCallback(() => dirtyRef.current, []));
   const [confirmingClose, setConfirmingClose] = useState(false);
   // "Revert all" discards every draft file, so it arms an explicit
-  // confirmation first — never a one-click discard. The arm is moot once
-  // the draft is clean (e.g. a save landed), so it clears itself.
+  // confirmation first — never a one-click discard. An arm is moot once
+  // the draft is clean, and it must not survive a save round-trip: the
+  // baseline the confirmation described may move when the save lands, so
+  // a save starting disarms it rather than letting it reappear after.
   const [confirmingRevertAll, setConfirmingRevertAll] = useState(false);
   useEffect(() => {
-    if (!dirty) {
+    if (!dirty || state.saving) {
       setConfirmingClose(false);
       setConfirmingRevertAll(false);
     }
-  }, [dirty]);
+  }, [dirty, state.saving]);
 
   // Warn on tab close / reload with unsaved drafts — useBlocker only covers
   // in-app navigation.
@@ -130,6 +132,9 @@ export default function WorkspaceLayout() {
               <button
                 type="button"
                 onClick={() => {
+                  // Same guard as the other discard paths: a save already
+                  // sent cannot be recalled.
+                  if (state.saving) return;
                   setConfirmingRevertAll(false);
                   revertAll();
                 }}

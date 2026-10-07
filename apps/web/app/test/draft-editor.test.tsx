@@ -3,10 +3,11 @@
  */
 
 import { useEffect } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../lib/api";
 import { DraftEditor } from "../components/DraftEditor";
 import { useWorkspace, WorkspaceProvider } from "../workspace/context";
 import {
@@ -14,8 +15,32 @@ import {
   workspaceReducer,
 } from "../workspace/store";
 import type { WorkspaceState } from "../workspace/store";
-import type { OpenResponse, WorkspaceFileName } from "../lib/types";
-import { SYNTHETIC_OPEN_RESPONSE } from "./fixtures";
+import type {
+  OpenResponse,
+  SaveResponse,
+  WorkspaceFileName,
+} from "../lib/types";
+import {
+  SYNTHETIC_OPEN_RESPONSE,
+  SYNTHETIC_SAVE_RESPONSE,
+} from "./fixtures";
+
+vi.mock("../lib/api", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../lib/api")>();
+  return {
+    ...mod,
+    api: {
+      ...mod.api,
+      saveWorkspace: vi.fn(),
+    },
+  };
+});
+
+const saveWorkspace = vi.mocked(api.saveWorkspace);
+
+afterEach(() => {
+  saveWorkspace.mockReset();
+});
 
 function Harness({
   children,
@@ -70,6 +95,31 @@ function dirtyEditorState(): WorkspaceState {
     file: "domain.yaml",
     text: "changed: true",
   });
+}
+
+/** Reverts a file through the store directly — exercises the "clean via
+ *  another path" disarm without going through the editor's own confirm. */
+function RevertProbe({ file }: { file: WorkspaceFileName }) {
+  const { revertFile } = useWorkspace();
+  return (
+    <button
+      type="button"
+      data-testid={`revert-${file}`}
+      onClick={() => revertFile(file)}
+    />
+  );
+}
+
+/** Triggers the real saveDraft path (api.saveWorkspace is mocked). */
+function SaveProbe() {
+  const { saveDraft } = useWorkspace();
+  return (
+    <button
+      type="button"
+      data-testid="save-draft"
+      onClick={() => void saveDraft()}
+    />
+  );
 }
 
 describe("DraftEditor", () => {
@@ -144,6 +194,105 @@ describe("DraftEditor", () => {
     expect(
       screen.getByRole("button", { name: "Revert to active" }),
     ).toBeDisabled();
+  });
+
+  it("Remove from draft is disabled while a save is in flight", () => {
+    const state = workspaceReducer(dirtyEditorState(), {
+      type: "saveStarted",
+      requestId: 1,
+    });
+    renderEditorWithState(state);
+    expect(
+      screen.getByRole("button", { name: "Remove from draft" }),
+    ).toBeDisabled();
+  });
+
+  it("clears the armed confirmation when the file becomes clean another way", async () => {
+    const user = userEvent.setup();
+    render(
+      <WorkspaceProvider>
+        <Harness>
+          <DraftEditor file="domain.yaml" />
+          <RevertProbe file="domain.yaml" />
+        </Harness>
+      </WorkspaceProvider>,
+    );
+    const textarea = screen.getByLabelText("domain.yaml draft YAML");
+    await user.type(textarea, "# edit");
+
+    await user.click(
+      screen.getByRole("button", { name: "Revert to active" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Discard changes" }),
+    ).toBeInTheDocument();
+
+    // The file became clean via a path other than this confirm (here a
+    // store-level revert — in the app, e.g. Revert all). The arm must not
+    // stay around to fire later against a different baseline.
+    await user.click(screen.getByTestId("revert-domain.yaml"));
+    expect(
+      screen.queryByRole("button", { name: "Discard changes" }),
+    ).toBeNull();
+    expect(
+      screen.queryByText(/will be discarded/),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Revert to active" }),
+    ).toBeDisabled();
+  });
+
+  it("an armed confirmation does not reappear after a save settles", async () => {
+    let resolveSave!: (r: SaveResponse) => void;
+    saveWorkspace.mockReturnValue(
+      new Promise<SaveResponse>((r) => {
+        resolveSave = r;
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <WorkspaceProvider>
+        <Harness>
+          <DraftEditor file="domain.yaml" />
+          <SaveProbe />
+        </Harness>
+      </WorkspaceProvider>,
+    );
+    const textarea = screen.getByLabelText("domain.yaml draft YAML");
+    await user.type(textarea, "# edit");
+
+    await user.click(
+      screen.getByRole("button", { name: "Revert to active" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Discard changes" }),
+    ).toBeInTheDocument();
+
+    // The save disarms the pending confirmation: the baseline it described
+    // may move when the save lands, so it must not pop back on its own.
+    await user.click(screen.getByTestId("save-draft"));
+    expect(
+      screen.queryByRole("button", { name: "Discard changes" }),
+    ).toBeNull();
+
+    // A conflicted save leaves the draft dirty — but the confirm stays
+    // disarmed; reverting now would target the post-save baseline, not
+    // the one the FDE armed against.
+    resolveSave({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "conflict",
+      digest: "on-disk-now",
+      message: "workspace files changed on disk",
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Revert to active" }),
+      ).toBeEnabled(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Discard changes" }),
+    ).toBeNull();
+    expect(screen.getByText("unsaved")).toBeInTheDocument();
   });
 
   it("removing an on-disk file from the draft says 'removed from draft'", async () => {
