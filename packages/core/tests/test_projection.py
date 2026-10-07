@@ -439,6 +439,53 @@ def test_multiple_required_events(tmp_path: Path) -> None:
     assert inputs["A01"]["required_fact_keys"] == {"JobInspected": []}
 
 
+def test_future_required_event_warning_names_event(tmp_path: Path) -> None:
+    # A non-anchor required event occurring after as_of excludes the
+    # subject; the warning names the event so the cause is identifiable.
+    docs = support.base_docs()
+    docs["domain"]["domain"]["events"]["JobInspected"] = {"subject": "Job"}
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"][
+        "select"
+    ]["required_events"] = ["JobCompleted", "JobInspected"]
+    docs["mapping"]["mapping"]["events"].append(
+        {
+            "event": "JobInspected",
+            "subject": {"entity": "Job", "id": {"field": "id"}},
+            "when": {"op": "not_null", "field": "inspected_at"},
+            "occurred_at": {"field": "inspected_at", "as": "date"},
+        }
+    )
+    ws_dir = support.make_workspace(tmp_path / "ws", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok, [d.format() for d in loaded.diagnostics]
+    snapshot = write_snapshot(
+        tmp_path,
+        "jobs.csv",
+        "id,status,assignee,amount,completed_at,invoiced_at,inspected_at\n"
+        "A01,completed,taro,1,2026-10-01,,2026-10-10\n",
+    )
+    assert ingest_snapshot(
+        loaded.workspace, snapshot, observed_at=FIXED_NOW
+    ).ok
+
+    result = run_projection(
+        loaded.workspace, "CompletedButNotInvoiced", as_of=AS_OF
+    )
+
+    assert result.candidates == []
+    warnings = [
+        d for d in result.diagnostics if d.code == "PROJECTION.FUTURE_EVENT"
+    ]
+    assert len(warnings) == 1
+    assert "JobInspected" in warnings[0].message
+    assert "A01" in warnings[0].message
+    inputs = {i["subject_id"]: i for i in result.inputs}
+    assert (
+        inputs["A01"]["excluded"]
+        == "required event 'JobInspected' had not occurred"
+    )
+
+
 def test_selection_without_elapsed(tmp_path: Path) -> None:
     # With no elapsed check, any completed-but-uninvoiced job counts.
     docs = support.base_docs()

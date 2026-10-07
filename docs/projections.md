@@ -23,7 +23,7 @@ Each candidate carries the canonical subject, the subject entity's latest observ
 Every run persists into `projection_runs` (append-only, like `events`):
 
 - the projection definition digest — schema version, the full projection declaration (including its `select`), the evaluator version, the full evaluation contract, the referenced events' declarations, and the date-only timezone policy;
-- the input references examined — per subject, the start/end fact keys and the exclusion reason;
+- the input references examined — per subject, the anchor start fact keys (`start_fact_keys`), the absent/end fact keys (`end_fact_keys`, `future_end_fact_keys`), the per-required-event fact keys (`required_fact_keys`) when the selection names more than the anchor event, and the exclusion reason;
 - the full candidate set as computed.
 
 A historical run is therefore inspectable with `project --run <id>` and unchanged by later ingestion or configuration edits; a definition or contract edit changes the digest even when the candidate list stays the same.

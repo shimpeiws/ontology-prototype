@@ -300,3 +300,20 @@ def test_select_where_fields_are_subject_properties(tmp_path: Path) -> None:
     assert diag.file == "domain.yaml"
     assert diag.path == "domain.projections.CompletedButNotInvoiced.select.where"
     assert diag.hint == "did you mean 'assignee'?"
+
+
+def test_select_where_fields_skip_when_subject_undeclared(
+    tmp_path: Path,
+) -> None:
+    # With an undeclared subject there is no property vocabulary to check
+    # `where` fields against: UNKNOWN_SUBJECT alone reports the problem and
+    # subject-dependent checks (field names, event subjects) do not cascade.
+    docs = base_docs()
+    projection = docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]
+    projection["subject"] = "NoSuchEntity"
+    projection["select"]["where"] = {"op": "eq", "field": "anything", "value": 1}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "DOMAIN.UNKNOWN_SUBJECT" in codes(result)
+    assert "DOMAIN.UNKNOWN_FIELD" not in codes(result)
+    assert "DOMAIN.EVENT_SUBJECT_MISMATCH" not in codes(result)
