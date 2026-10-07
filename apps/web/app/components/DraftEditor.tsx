@@ -4,9 +4,11 @@
  * This is the free-form companion to the structured per-definition forms
  * (#16/#17/#18) and remains the escape hatch for content the forms do not
  * expose: edits mark the file dirty, "Revert to active" restores the exact
- * on-disk text, and diagnostics for the file sit beside it. It never
+ * on-disk text after an explicit confirmation, and diagnostics for the file sit beside it. It never
  * validates locally — "Validate draft" sends the whole bundle to the API.
  */
+
+import { useEffect, useState } from "react";
 
 import { useWorkspace } from "../workspace/context";
 import { isFileDirty } from "../workspace/store";
@@ -20,6 +22,13 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
     state.workspace !== null &&
     Object.hasOwn(state.workspace.activeFiles, file);
   const labelId = `draft-editor-${file}`;
+  const [confirmingRevert, setConfirmingRevert] = useState(false);
+
+  // A confirmation only makes sense while there is something to discard;
+  // a save or another revert path that cleans the file dismisses it.
+  useEffect(() => {
+    if (!dirty) setConfirmingRevert(false);
+  }, [dirty]);
 
   return (
     <section className="draft-editor" aria-labelledby={labelId}>
@@ -41,13 +50,42 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
           ) : null}
           <button
             type="button"
-            onClick={() => revertFile(file)}
-            disabled={!dirty}
+            onClick={() => setConfirmingRevert(true)}
+            disabled={!dirty || state.saving || confirmingRevert}
+            title={
+              state.saving
+                ? "A save is in flight — wait for it to settle before discarding the draft."
+                : undefined
+            }
           >
             Revert to active
           </button>
         </div>
       </div>
+      {confirmingRevert ? (
+        <div role="alert" className="state state-error">
+          <p>
+            Discard unsaved changes to <code>{file}</code> and restore the
+            active text?
+          </p>
+          <button
+            type="button"
+            disabled={state.saving}
+            onClick={() => {
+              // A save already sent cannot be recalled; discarding now
+              // would let the discarded edits still reach disk.
+              if (state.saving) return;
+              setConfirmingRevert(false);
+              revertFile(file);
+            }}
+          >
+            Discard changes
+          </button>
+          <button type="button" onClick={() => setConfirmingRevert(false)}>
+            Keep editing
+          </button>
+        </div>
+      ) : null}
       <label className="sr-only" htmlFor={`${labelId}-textarea`}>
         {file} draft YAML
       </label>

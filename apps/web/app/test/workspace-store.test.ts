@@ -181,6 +181,16 @@ describe("workspace store", () => {
       file: "domain.yaml",
       text: "changed: true",
     });
+    state = workspaceReducer(state, { type: "validationStarted", requestId: 1 });
+    state = workspaceReducer(state, {
+      type: "validationFinished",
+      requestId: 1,
+      revision: state.draftRevision,
+      valid: true,
+      digest: "draft-digest",
+      diagnostics: [],
+    });
+    expect(isValidationStale(state)).toBe(false);
     state = workspaceReducer(state, {
       type: "fileRemoved",
       file: "agent.yaml",
@@ -189,6 +199,8 @@ describe("workspace store", () => {
 
     state = workspaceReducer(state, { type: "revertedAll" });
     expect(isDraftDirty(state)).toBe(false);
+    // The shown validation described the discarded draft, not this one.
+    expect(isValidationStale(state)).toBe(true);
     expect(state.drafts["domain.yaml"]).toBe(
       SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"],
     );

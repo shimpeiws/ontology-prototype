@@ -1,7 +1,7 @@
 # ADR 0002: Default diagnosis model for v0.1
 
-- Status: Pending evidence
-- Date: 2026-10-06
+- Status: Accepted
+- Date: 2026-10-06 (opened); decided 2026-10-07
 - Decision owner: repository maintainer
 
 ## Context
@@ -11,8 +11,9 @@ v0.1 needs one default diagnosis configuration, so a fresh install can run
 to come from a comparison against the implemented task. An agent must not guess
 it.
 
-`DEFAULT_MODEL` in `apps/cli/src/ontology_cli/providers.py` currently holds
-`openai/gpt-4o-mini`. That value predates any comparison. One live run against
+`DEFAULT_MODEL` in `apps/cli/src/ontology_cli/providers.py` held
+`openai/gpt-4o-mini` while this record was pending. That value predated any
+comparison. One live run against
 it succeeded on the job-invoicing example (see [Live run
 evidence](../diagnosis.md#live-run-evidence)), which shows the pipeline works end
 to end. It does not show that this model is the best of the available
@@ -27,11 +28,21 @@ credentials. Issue #33 owns the decision recorded here.
 
 ## Decision
 
-Pending. Until #36 produces a comparison report, the repository keeps
-`openai/gpt-4o-mini` as a provisional default, and
-[docs/diagnosis.md](../diagnosis.md) marks it provisional.
+The default is `openrouter` with model id `anthropic/claude-haiku-4.5`.
+`DEFAULT_MODEL` holds that id, and [docs/diagnosis.md](../diagnosis.md)
+documents it as the default.
 
-The selection rule is fixed now, so the outcome of #36 is mechanical.
+The comparison in
+[diagnosis-comparison-2026-10-06.md](../diagnosis-comparison-2026-10-06.md)
+(issue #36) evaluated three configurations on one shared frozen input. All
+three passed all nine checks, so the human rubric decided. It ranked
+`anthropic/claude-haiku-4.5` first, `google/gemini-2.5-flash` second, and
+`openai/gpt-4o-mini` third. Issue #51 records the outcome here. The v0.1
+live run ([v0.1-live-model-run.md](../v0.1-live-model-run.md)) already used
+this configuration through an explicit `--model`.
+
+The selection rule below was fixed before #36 ran, so the outcome was
+mechanical.
 
 A configuration must pass all nine checks that `score_run` scores:
 `contract_valid`, `deliverables_complete`, `permitted_actions_only`,
@@ -52,9 +63,9 @@ every diagnosis run. The consequence is that the provider can change the weights
 behind the id, which is why T2 below exists. The value that ships is
 `DEFAULT_MODEL`. The `--model` flag and `$ONTOLOGY_MODEL` override it.
 
-If no configuration passes the nine checks, this record stays Pending evidence,
-issue #33 stays open, issue #11 stays blocked, and no document describes the
-provisional default as evidence-backed.
+Had no configuration passed the nine checks, this record would have stayed
+Pending evidence, and no document would have described the provisional default
+as evidence-backed.
 
 ## Alternatives
 
@@ -74,10 +85,24 @@ why. Each rejected entry also carries a revisit tag: `revisitable` (a model
 update or a price change could change the outcome) or `structural` (the
 configuration does not fit this task).
 
-This section names the candidates and their tags once #36 reports them. The raw
-measurements, latency, provider request counts, and per-check results, stay in
-the report at `docs/diagnosis-comparison-<YYYY-MM-DD>.md`, so that the two
-documents do not carry the same numbers twice.
+The candidates from the 2026-10-06 report:
+
+| provider | model | state | reason | revisit |
+| --- | --- | --- | --- | --- |
+| `openrouter` | `anthropic/claude-haiku-4.5` | selected | — | — |
+| `openrouter` | `google/gemini-2.5-flash` | rejected | `rubric-lost` | `revisitable` |
+| `openrouter` | `openai/gpt-4o-mini` | rejected | `rubric-lost` | `revisitable` |
+
+No candidate was unavailable or not run. Both rejected configurations passed
+every check; they lost on the rubric, so a model update or a price change could
+change the outcome. `google/gemini-2.5-flash` was the fastest and cheaper per
+call than the selected model, which makes it the first candidate to re-check
+when T2 or T3 fires.
+
+The raw measurements, latency, provider request counts, and per-check results,
+stay in the report at
+[diagnosis-comparison-2026-10-06.md](../diagnosis-comparison-2026-10-06.md), so
+that the two documents do not carry the same numbers twice.
 
 ## Revisit conditions
 
@@ -100,10 +125,10 @@ record's Status to `Superseded by #NNNN`. Do not reopen #33.
 
 ## Consequences
 
-- The default stays provisional and the documentation says so.
-  `apps/cli/tests/test_adr_default_model.py` fails if `docs/diagnosis.md` and
-  `DEFAULT_MODEL` disagree, and fails if the provisional wording and this
-  record's Status disagree.
+- `DEFAULT_MODEL` is `anthropic/claude-haiku-4.5`, and the documentation no
+  longer calls it provisional. `apps/cli/tests/test_adr_default_model.py` fails
+  if `docs/diagnosis.md` and `DEFAULT_MODEL` disagree, and fails if the
+  provisional wording and this record's Status disagree.
 - Changing the default is a change to one constant. Candidate selection,
   canonical state, proposal validation, approval, write-back, and outcome
   evaluation are unaffected, which the `provider-substitution` scenario proves
@@ -115,9 +140,11 @@ record's Status to `Superseded by #NNNN`. Do not reopen #33.
 
 ## Evidence
 
-- Issue #33 records this decision. Issue #35 builds the comparison runner, #36
-  runs it, and #11 links the result before v0.1 is declared complete.
-- Report: `docs/diagnosis-comparison-<YYYY-MM-DD>.md`, committed by #36.
+- Issue #35 built the comparison runner and #36 ran it. Issue #33 was closed
+  without recording the outcome; issue #51 records it here.
+- Report: [diagnosis-comparison-2026-10-06.md](../diagnosis-comparison-2026-10-06.md),
+  committed by #36, with the recorded runs in
+  `diagnosis-comparison-2026-10-06-runs.json`.
 - Reproduction: `ontology diagnose <workspace> --as-of <time> --provider
   openrouter --model <selected id>`, with `OPENROUTER_API_KEY` set. The
   comparison itself runs through the runner from #35.

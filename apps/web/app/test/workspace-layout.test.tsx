@@ -198,11 +198,29 @@ describe("workspace layout", () => {
     await screen.findByText("home route");
   });
 
-  it("Revert all clears the draft so navigation is no longer blocked", async () => {
+  it("Revert all asks first and Keep editing keeps the draft", async () => {
     const user = userEvent.setup();
     renderLayout(dirtyState());
 
     await user.click(screen.getByRole("button", { name: "Revert all" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Discard all unsaved draft changes and restore the active bundle?",
+    );
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("a confirmed Revert all clears the draft so navigation is no longer blocked", async () => {
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    await user.click(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    );
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     await user.click(screen.getByRole("link", { name: "Domain" }));
     await screen.findByText("domain page");
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -289,8 +307,12 @@ describe("workspace layout", () => {
     const user = userEvent.setup();
     renderLayout(dirtyState());
 
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(screen.getByRole("button", { name: "Revert all" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    ).toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Close workspace" }),
     ).toBeDisabled();
@@ -303,6 +325,22 @@ describe("workspace layout", () => {
 
     await user.click(screen.getByRole("button", { name: "Stay" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("a save that cleans the draft dismisses a pending Revert all confirmation", async () => {
+    saveWorkspace.mockResolvedValue(SYNTHETIC_SAVE_RESPONSE);
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Discard all changes" }),
+      ).toBeNull(),
+    );
+    expect(screen.getByRole("button", { name: "Revert all" })).toBeDisabled();
   });
 
   it("a conflicted save offers an explicit reload that preserves the draft", async () => {

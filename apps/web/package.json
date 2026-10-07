@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Local FDE workspace authoring UI over the ontology API",
+  "license": "MIT",
   "scripts": {
     "dev": "react-router dev --host 127.0.0.1",
     "build": "react-router build",

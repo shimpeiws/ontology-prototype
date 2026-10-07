@@ -132,3 +132,7 @@ if not result.ok:
 ```
 
 The core never imports CLI/API/Web code; apps call `load_workspace` and present the returned diagnostics, so every app accepts and rejects identical configurations.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The pre-publication content audit is recorded in [docs/publication-audit.md](docs/publication-audit.md).

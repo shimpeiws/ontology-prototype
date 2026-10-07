@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "ontology-cli"
 version = "0.0.1"
 description = "CLI application for the FDE operational loop; delegates all workspace logic to ontology-core."
 readme = { text = "CLI application for the ontology-prototype monorepo.", content-type = "text/plain" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["ontology-core>=0.0.1"]
 
