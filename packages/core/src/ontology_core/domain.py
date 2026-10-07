@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import math
 from typing import Any
 
 from .conditions import validate_condition
@@ -434,9 +435,13 @@ def _validate_select(
         )
         ok = False
 
-    elapsed = _validate_elapsed(node.get("elapsed"), err, f"{path}.elapsed", required)
-    if "elapsed" in node and elapsed is None:
-        ok = False
+    elapsed = None
+    if "elapsed" in node:
+        # An explicit `elapsed:` key must hold a mapping — a null value would
+        # silently drop the projection below, so it is a schema error.
+        elapsed = _validate_elapsed(node["elapsed"], err, f"{path}.elapsed", required)
+        if elapsed is None:
+            ok = False
 
     where = None
     if "where" in node:
@@ -545,8 +550,6 @@ def _validate_elapsed(
     node: Any, err, path: str, required_events: list[str]
 ) -> ElapsedSpec | None:
     """Validate the optional ``elapsed`` as-of-relative duration check."""
-    if node is None:
-        return None
     if not isinstance(node, dict):
         err("SCHEMA.INVALID_TYPE", path, "'elapsed' must be a mapping")
         return None
@@ -585,11 +588,11 @@ def _validate_elapsed(
         ok = False
 
     value = get_num(node, "value", err, path)
-    if value is not None and value < 0:
+    if value is not None and (not math.isfinite(value) or value < 0):
         err(
             "DOMAIN.INVALID_VALUE",
             f"{path}.value",
-            "elapsed value must be non-negative",
+            "elapsed value must be a finite, non-negative number",
         )
         ok = False
 

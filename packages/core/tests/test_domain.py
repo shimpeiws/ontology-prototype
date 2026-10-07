@@ -279,6 +279,47 @@ def test_select_elapsed_validation(tmp_path: Path) -> None:
     assert "DOMAIN.ELAPSED_EVENT" in codes(result)
 
 
+def test_select_elapsed_null_is_an_error(tmp_path: Path) -> None:
+    # An explicit `elapsed:` key with a null value must fail loudly —
+    # silently treating it as "no elapsed" would drop the projection
+    # from an otherwise valid workspace.
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "elapsed"
+    ] = None
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(d for d in result.diagnostics if d.code == "SCHEMA.INVALID_TYPE")
+    assert diag.file == "domain.yaml"
+    assert diag.path == "domain.projections.CompletedButNotInvoiced.select.elapsed"
+
+
+def test_select_elapsed_value_must_be_finite(tmp_path: Path) -> None:
+    # YAML `.nan`/`.inf` parse as float; a non-finite threshold would make
+    # every elapsed comparison silently true or false at run time.
+    select = base_docs()["domain"]["domain"]["projections"][
+        "CompletedButNotInvoiced"
+    ]["select"]
+
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"] = {
+        **select,
+        "elapsed": {"comparator": "gt", "value": float("nan"), "unit": "days"},
+    }
+    result = load_workspace(make_workspace(tmp_path / "nan", docs))
+    assert not result.ok
+    assert "DOMAIN.INVALID_VALUE" in codes(result)
+
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"] = {
+        **select,
+        "elapsed": {"comparator": "gt", "value": float("inf"), "unit": "days"},
+    }
+    result = load_workspace(make_workspace(tmp_path / "inf", docs))
+    assert not result.ok
+    assert "DOMAIN.INVALID_VALUE" in codes(result)
+
+
 def test_select_where_must_be_a_condition(tmp_path: Path) -> None:
     docs = base_docs()
     docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][

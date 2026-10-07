@@ -22,7 +22,7 @@
  * about (INV-005).
  */
 
-import { isMap, isScalar, isSeq, parseDocument } from "yaml";
+import { isAlias, isMap, isScalar, isSeq, parseDocument } from "yaml";
 import type { Document, YAMLMap } from "yaml";
 
 import type { Concept } from "./domainEdit";
@@ -330,8 +330,19 @@ export function findReferences(drafts: Drafts, concept: Concept): ScanResult {
 
 /* ---- cross-file rename (YAML node edits) ---- */
 
-function scalarIs(map: YAMLMap, key: string, value: string): boolean {
-  return scalarEq(map.get(key), value);
+/**
+ * Resolve a YAML alias to its anchored node; other nodes pass through.
+ * `findReferences` operates on `toJS()` output where aliases are already
+ * resolved — the retarget side must resolve them too, or an aliased
+ * reference is reported but never renamed.
+ */
+function deref(doc: Document, node: unknown): unknown {
+  return isAlias(node) ? node.resolve(doc) : node;
+}
+
+function scalarIs(doc: Document, map: YAMLMap, key: string, value: string): boolean {
+  const node = deref(doc, map.get(key, true));
+  return isScalar(node) && scalarEq(node.value, value);
 }
 
 /** Iterate `[path, valueMap]` pairs of a map-valued node. */
@@ -350,8 +361,13 @@ function retarget(
   oldName: string,
   newName: string,
 ): boolean {
-  if (!scalarIs(map, key, oldName)) return false;
-  map.set(key, doc.createNode(newName));
+  const node = deref(doc, map.get(key, true));
+  if (!isScalar(node) || !scalarEq(node.value, oldName)) return false;
+  // Keep any anchor on the replaced node — an alias elsewhere may resolve
+  // through it.
+  const rep = doc.createNode(newName);
+  rep.anchor = node.anchor;
+  map.set(key, rep);
   return true;
 }
 
@@ -362,12 +378,18 @@ function retargetSeqItems(
   oldName: string,
   newName: string,
 ): boolean {
-  if (!isSeq(node)) return false;
+  const seq = deref(doc, node);
+  if (!isSeq(seq)) return false;
   let changed = false;
-  for (let i = 0; i < node.items.length; i++) {
-    const item = node.items[i];
-    if (isScalar(item) && scalarEq(item.value, oldName)) {
-      node.set(i, doc.createNode(newName));
+  for (let i = 0; i < seq.items.length; i++) {
+    const item = seq.items[i];
+    const resolved = deref(doc, item);
+    if (isScalar(resolved) && scalarEq(resolved.value, oldName)) {
+      // Keep any anchor on the replaced scalar; a bare alias item is
+      // replaced by a literal since the anchor lives elsewhere.
+      const rep = doc.createNode(newName);
+      if (isScalar(item)) rep.anchor = item.anchor;
+      seq.set(i, rep);
       changed = true;
     }
   }
@@ -381,16 +403,17 @@ function retargetConditionFields(
   oldName: string,
   newName: string,
 ): boolean {
-  if (!isMap(node)) return false;
-  let changed = retarget(doc, node, "field", oldName, newName);
-  const args = node.get("args");
+  const map = deref(doc, node);
+  if (!isMap(map)) return false;
+  let changed = retarget(doc, map, "field", oldName, newName);
+  const args = deref(doc, map.get("args"));
   if (isSeq(args)) {
     for (const arg of args.items) {
       if (retargetConditionFields(doc, arg, oldName, newName))
         changed = true;
     }
   }
-  if (retargetConditionFields(doc, node.get("arg"), oldName, newName))
+  if (retargetConditionFields(doc, map.get("arg"), oldName, newName))
     changed = true;
   return changed;
 }
@@ -402,7 +425,7 @@ function retargetSelect(
   concept: Concept,
   newName: string,
 ): boolean {
-  const select = spec.get("select");
+  const select = deref(doc, spec.get("select"));
   if (!isMap(select)) return false;
   let changed = false;
   if (concept.kind === "event") {
@@ -412,7 +435,7 @@ function retargetSelect(
       )
         changed = true;
     }
-    const elapsed = select.get("elapsed");
+    const elapsed = deref(doc, select.get("elapsed"));
     if (
       isMap(elapsed) &&
       retarget(doc, elapsed, "event", concept.name, newName)
@@ -421,7 +444,7 @@ function retargetSelect(
   } else if (
     concept.kind === "property" &&
     concept.ownerKind === "entities" &&
-    scalarIs(spec, "subject", concept.owner)
+    scalarIs(doc, spec, "subject", concept.owner)
   ) {
     if (
       retargetConditionFields(
@@ -548,7 +571,7 @@ function renameInMapping(
       } else if (
         concept.kind === "property" &&
         concept.ownerKind === "entities" &&
-        scalarIs(item, "entity", concept.owner)
+        scalarIs(doc, item, "entity", concept.owner)
       ) {
         const props = item.get("properties");
         if (isMap(props) && renameMapKey(doc, props, concept.name, newName))

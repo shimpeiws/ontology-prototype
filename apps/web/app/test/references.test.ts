@@ -211,6 +211,64 @@ describe("applyRename", () => {
     expect(result.files).toEqual({});
   });
 
+  it("retargets aliased event references inside select", () => {
+    // `findReferences` works on toJS() where aliases are already resolved,
+    // so an alias is reported as a hit — the rename must update it too.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SYNTHETIC_BUNDLE_FILES["domain.yaml"]!.replace(
+        "        absent_events: [InvoiceIssued]",
+        "        absent_events: [*evt]",
+      ).replace(
+        "        required_events: [JobCompleted]",
+        "        required_events: [&evt JobCompleted]",
+      ),
+    };
+    const concept: Concept = { kind: "event", name: "JobCompleted" };
+    const result = applyRename(drafts, concept, "JobDone");
+    const text = result.files["domain.yaml"]!;
+    // The anchored scalar is renamed and keeps its anchor, so *evt in
+    // absent_events now resolves to JobDone — no dangling reference.
+    expect(text).toContain("&evt JobDone");
+    expect(text).toContain("*evt");
+    expect(text).not.toContain("JobCompleted");
+    // Round-trip: the scanner sees the renamed name through the alias.
+    expect(
+      paths(findReferences({ "domain.yaml": text }, { kind: "event", name: "JobDone" })),
+    ).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.absent_events[0]",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.elapsed.event",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.required_events[0]",
+    ]);
+  });
+
+  it("retargets an alias to an anchored non-reference scalar", () => {
+    // The anchor lives on a description (not a reference position), so the
+    // aliased list item itself must be replaced with a literal.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SYNTHETIC_BUNDLE_FILES["domain.yaml"]!.replace(
+        "  description: Minimal model.",
+        "  description: &evt JobCompleted",
+      ).replace(
+        "        required_events: [JobCompleted]",
+        "        required_events: [*evt]",
+      ),
+    };
+    const concept: Concept = { kind: "event", name: "JobCompleted" };
+    const result = applyRename(drafts, concept, "JobDone");
+    const text = result.files["domain.yaml"]!;
+    // The alias position now holds the literal new name; the anchored
+    // description is not a reference and is left alone.
+    expect(text).toContain("description: &evt JobCompleted");
+    expect(
+      paths(findReferences({ "domain.yaml": text }, { kind: "event", name: "JobDone" })),
+    ).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.elapsed.event",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.required_events[0]",
+    ]);
+  });
+
   it("does not touch a same-named scalar elsewhere", () => {
     // mapping `field: status` value must not be renamed — only keys.
     const concept: Concept = {
