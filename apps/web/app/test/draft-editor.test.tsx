@@ -9,6 +9,11 @@ import { describe, expect, it } from "vitest";
 
 import { DraftEditor } from "../components/DraftEditor";
 import { useWorkspace, WorkspaceProvider } from "../workspace/context";
+import {
+  initialWorkspaceState,
+  workspaceReducer,
+} from "../workspace/store";
+import type { WorkspaceState } from "../workspace/store";
 import type { OpenResponse, WorkspaceFileName } from "../lib/types";
 import { SYNTHETIC_OPEN_RESPONSE } from "./fixtures";
 
@@ -41,6 +46,32 @@ function renderEditor(
   );
 }
 
+/** Renders the editor against a pre-built store state (e.g. a save in
+ *  flight) — the Harness' open() would reset it. */
+function renderEditorWithState(
+  state: WorkspaceState,
+  file: WorkspaceFileName = "domain.yaml",
+) {
+  return render(
+    <WorkspaceProvider initial={state}>
+      <DraftEditor file={file} />
+    </WorkspaceProvider>,
+  );
+}
+
+function dirtyEditorState(): WorkspaceState {
+  const opened = workspaceReducer(initialWorkspaceState, {
+    type: "opened",
+    requestedPath: "job-invoicing",
+    response: SYNTHETIC_OPEN_RESPONSE,
+  });
+  return workspaceReducer(opened, {
+    type: "edited",
+    file: "domain.yaml",
+    text: "changed: true",
+  });
+}
+
 describe("DraftEditor", () => {
   it("starts with the active file text and is labeled", () => {
     renderEditor();
@@ -50,21 +81,69 @@ describe("DraftEditor", () => {
     );
   });
 
-  it("editing shows unsaved badge and revert restores active text", async () => {
+  it("editing shows unsaved badge and confirmed revert restores active text", async () => {
     const user = userEvent.setup();
     renderEditor();
     const textarea = screen.getByLabelText("domain.yaml draft YAML");
 
     await user.type(textarea, "# edit");
     expect(screen.getByText("unsaved")).toBeInTheDocument();
+    const editedText = (textarea as HTMLTextAreaElement).value;
 
+    // The first click only arms the confirmation — nothing is reverted.
     await user.click(
       screen.getByRole("button", { name: "Revert to active" }),
+    );
+    expect(
+      screen.getByText(/Unsaved changes to.*will be discarded/),
+    ).toBeInTheDocument();
+    expect(textarea).toHaveValue(editedText);
+
+    await user.click(
+      screen.getByRole("button", { name: "Discard changes" }),
     );
     expect(textarea).toHaveValue(
       SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"],
     );
     expect(screen.queryByText("unsaved")).toBeNull();
+  });
+
+  it("cancelling the revert confirmation keeps the draft byte-for-byte", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    const textarea = screen.getByLabelText("domain.yaml draft YAML");
+
+    await user.type(textarea, "# edit");
+    const editedText = (textarea as HTMLTextAreaElement).value;
+
+    await user.click(
+      screen.getByRole("button", { name: "Revert to active" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Keep editing" }),
+    );
+
+    expect(textarea).toHaveValue(editedText);
+    expect(screen.getByText("unsaved")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Unsaved changes to.*will be discarded/),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Revert to active" }),
+    ).toBeEnabled();
+  });
+
+  it("revert is disabled while a save is in flight", () => {
+    // A save already sent cannot be recalled — discarding edits now would
+    // let them still reach disk, so the discard path waits for it.
+    const state = workspaceReducer(dirtyEditorState(), {
+      type: "saveStarted",
+      requestId: 1,
+    });
+    renderEditorWithState(state);
+    expect(
+      screen.getByRole("button", { name: "Revert to active" }),
+    ).toBeDisabled();
   });
 
   it("removing an on-disk file from the draft says 'removed from draft'", async () => {

@@ -95,7 +95,7 @@ Called out, not silently invented:
 - **Workspace creation.** No issue covers creating a new, initially empty workspace from the UI; the flow assumes opening an existing workspace (e.g., the example). If desired, this is new scope.
 - **Workspace listing/switching.** #14 requires configured roots but no issue defines enumerating or switching between multiple workspaces.
 - **Projection definition editing.** Domain `projections:` are referenced by #16 (visualization) and consumed by #18 (agent input), but no issue explicitly assigns a dedicated projection-editing control; per #18 the bundle must round-trip fields the UI does not expose.
-- **Draft discard.** A "revert to active" control is implied by draft/active state and the reload path in #19 but is not named in any issue.
+- **Draft discard.** A "revert to active" control is implied by draft/active state and the reload path in #19 — assigned to #53 (per-file and whole-bundle revert behind an explicit confirmation, invalidating shown validation/preview output like an edit).
 - **Draft restore after restart.** Whether an unsaved draft survives a browser restart is unspecified by #14–#20.
 
 These gaps are documentation of uncovered requirements, not commitments.

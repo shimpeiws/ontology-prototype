@@ -23,6 +23,10 @@ The Web app is presentation only:
 - Draft edits live in browser memory: a draft layer over the byte-exact
   active bundle. Editing marks a file `unsaved`, never mutates the active
   baseline, and invalidates any displayed draft-validation result.
+  "Revert to active" (per file) and "Revert all" (whole bundle) restore the
+  byte-exact active text behind an explicit, cancellable confirmation; a
+  revert bumps the draft revision, so shown validation and preview results
+  go stale exactly like an edit.
   "Validate draft" posts the whole bundle to `/api/v1/workspaces/drafts/validate`.
   "Save" is explicit only (never autosave): it posts the draft with the
   active digest as `base_digest` to `/api/v1/workspaces/save`, and the four

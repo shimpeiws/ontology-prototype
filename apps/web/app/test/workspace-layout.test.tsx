@@ -198,14 +198,76 @@ describe("workspace layout", () => {
     await screen.findByText("home route");
   });
 
-  it("Revert all clears the draft so navigation is no longer blocked", async () => {
+  it("Revert all asks for confirmation, then clears the draft", async () => {
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    // The first click only arms the confirmation — nothing is discarded.
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    expect(
+      screen.getByText(
+        /Unsaved draft changes in every file will be discarded/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("unsaved draft")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    );
+
+    // The bundle is back to active: badge flips, Save disables, and
+    // navigation is no longer blocked.
+    expect(screen.getByText("active")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(screen.getByRole("link", { name: "Domain" }));
+    await screen.findByText("domain page");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("cancelling the Revert all confirmation keeps the draft", async () => {
     const user = userEvent.setup();
     renderLayout(dirtyState());
 
     await user.click(screen.getByRole("button", { name: "Revert all" }));
+    await user.click(screen.getByRole("button", { name: "Keep draft" }));
+
+    // The draft survives — the badge stays dirty and navigation still
+    // prompts before leaving.
+    expect(screen.getByText("unsaved draft")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        /Unsaved draft changes in every file will be discarded/,
+      ),
+    ).toBeNull();
     await user.click(screen.getByRole("link", { name: "Domain" }));
-    await screen.findByText("domain page");
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await screen.findByRole("alertdialog");
+  });
+
+  it("a shown validation result goes stale after Revert all", async () => {
+    let state = dirtyState();
+    state = workspaceReducer(state, {
+      type: "validationStarted",
+      requestId: 1,
+    });
+    state = workspaceReducer(state, {
+      type: "validationFinished",
+      requestId: 1,
+      revision: state.draftRevision,
+      valid: false,
+      digest: "d1",
+      diagnostics: [SYNTHETIC_DIAGNOSTIC],
+    });
+    const user = userEvent.setup();
+    renderLayout(state);
+    expect(screen.getByText("draft invalid")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    await user.click(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    );
+    // The result keyed to the pre-revert revision can never render as
+    // current again — exactly like an edit.
+    expect(screen.getByText("validation stale")).toBeInTheDocument();
   });
 
   it("Validate draft sends the requested path and current draft files", async () => {

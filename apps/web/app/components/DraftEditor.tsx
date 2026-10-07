@@ -4,9 +4,12 @@
  * This is the free-form companion to the structured per-definition forms
  * (#16/#17/#18) and remains the escape hatch for content the forms do not
  * expose: edits mark the file dirty, "Revert to active" restores the exact
- * on-disk text, and diagnostics for the file sit beside it. It never
- * validates locally — "Validate draft" sends the whole bundle to the API.
+ * on-disk text behind an explicit confirmation, and diagnostics for the
+ * file sit beside it. It never validates locally — "Validate draft" sends
+ * the whole bundle to the API.
  */
+
+import { useEffect, useState } from "react";
 
 import { useWorkspace } from "../workspace/context";
 import { isFileDirty } from "../workspace/store";
@@ -20,6 +23,15 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
     state.workspace !== null &&
     Object.hasOwn(state.workspace.activeFiles, file);
   const labelId = `draft-editor-${file}`;
+  // Revert discards the draft text, so it arms a confirmation first — the
+  // same two-step pattern as closing a dirty workspace. The arm is moot
+  // once the file is clean (a revert-all or a landed save), and it must
+  // not fire while a save is in flight: a save already sent cannot be
+  // recalled, so the discarded edits would still reach disk.
+  const [confirmingRevert, setConfirmingRevert] = useState(false);
+  useEffect(() => {
+    if (!dirty) setConfirmingRevert(false);
+  }, [dirty]);
 
   return (
     <section className="draft-editor" aria-labelledby={labelId}>
@@ -39,15 +51,46 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
               Remove from draft
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={() => revertFile(file)}
-            disabled={!dirty}
-          >
-            Revert to active
-          </button>
+          {confirmingRevert && dirty && !state.saving ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  revertFile(file);
+                  setConfirmingRevert(false);
+                }}
+              >
+                Discard changes
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingRevert(false)}
+              >
+                Keep editing
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingRevert(true)}
+              disabled={!dirty || state.saving}
+              title={
+                state.saving
+                  ? "A save is in flight — wait for it to settle before discarding edits."
+                  : undefined
+              }
+            >
+              Revert to active
+            </button>
+          )}
         </div>
       </div>
+      {confirmingRevert && dirty && !state.saving ? (
+        <p role="alert" className="state state-error">
+          Unsaved changes to <code>{file}</code> will be discarded — the file
+          returns to the active on-disk text.
+        </p>
+      ) : null}
       <label className="sr-only" htmlFor={`${labelId}-textarea`}>
         {file} draft YAML
       </label>

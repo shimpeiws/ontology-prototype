@@ -37,6 +37,16 @@ export default function WorkspaceLayout() {
   dirtyRef.current = dirty;
   const blocker = useBlocker(useCallback(() => dirtyRef.current, []));
   const [confirmingClose, setConfirmingClose] = useState(false);
+  // "Revert all" discards every draft file, so it arms an explicit
+  // confirmation first — never a one-click discard. The arm is moot once
+  // the draft is clean (e.g. a save landed), so it clears itself.
+  const [confirmingRevertAll, setConfirmingRevertAll] = useState(false);
+  useEffect(() => {
+    if (!dirty) {
+      setConfirmingClose(false);
+      setConfirmingRevertAll(false);
+    }
+  }, [dirty]);
 
   // Warn on tab close / reload with unsaved drafts — useBlocker only covers
   // in-app navigation.
@@ -72,6 +82,7 @@ export default function WorkspaceLayout() {
     if (state.saving) return;
     if (dirty && !confirmingClose) {
       setConfirmingClose(true);
+      setConfirmingRevertAll(false);
       return;
     }
     setConfirmingClose(false);
@@ -114,18 +125,41 @@ export default function WorkspaceLayout() {
           >
             {state.saving ? "Saving…" : "Save"}
           </button>
-          <button
-            type="button"
-            onClick={revertAll}
-            disabled={!dirty || state.saving}
-            title={
-              state.saving
-                ? "A save is in flight — wait for it to settle before discarding the draft."
-                : undefined
-            }
-          >
-            Revert all
-          </button>
+          {confirmingRevertAll && dirty && !state.saving ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingRevertAll(false);
+                  revertAll();
+                }}
+              >
+                Discard all changes
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingRevertAll(false)}
+              >
+                Keep draft
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmingClose(false);
+                setConfirmingRevertAll(true);
+              }}
+              disabled={!dirty || state.saving}
+              title={
+                state.saving
+                  ? "A save is in flight — wait for it to settle before discarding the draft."
+                  : undefined
+              }
+            >
+              Revert all
+            </button>
+          )}
           <button
             type="button"
             onClick={closeWorkspace}
@@ -162,6 +196,12 @@ export default function WorkspaceLayout() {
       {confirmingClose ? (
         <p role="alert" className="state state-error">
           Unsaved draft changes will be discarded.
+        </p>
+      ) : null}
+      {confirmingRevertAll && dirty && !state.saving ? (
+        <p role="alert" className="state state-error">
+          Unsaved draft changes in every file will be discarded — the whole
+          bundle returns to the active on-disk text.
         </p>
       ) : null}
 
