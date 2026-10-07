@@ -185,11 +185,17 @@ describe("domain page", () => {
     const panel = await screen.findByRole("alertdialog");
     expect(panel).toHaveTextContent("mapping.events[0].event");
     expect(panel).toHaveTextContent("evaluation.interval.start_event");
+    expect(panel).toHaveTextContent(
+      "domain.projections.CompletedButNotInvoiced.select.required_events[0]",
+    );
     expect(panel).toHaveTextContent("dangling");
 
     await user.click(screen.getByRole("button", { name: "Remove" }));
     const files = drafts();
-    expect(files["domain.yaml"]).not.toContain("JobCompleted");
+    // The declaration is gone but the projection's select still names it —
+    // left dangling for the validator like the other references.
+    expect(files["domain.yaml"]).not.toContain("JobCompleted: {");
+    expect(files["domain.yaml"]).toContain("required_events: [ JobCompleted ]");
     // References stay broken until the FDE fixes them — the validator
     // reports them.
     expect(files["mapping.yaml"]).toContain("event: JobCompleted");

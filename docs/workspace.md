@@ -41,12 +41,22 @@ domain:
   events:
     JobCompleted: { subject: Job }
   projections:
-    CompletedButNotInvoiced: { subject: Job }
+    CompletedButNotInvoiced:
+      subject: Job
+      select:
+        required_events: [JobCompleted]
+        absent_events: [InvoiceIssued]
+        elapsed: { event: JobCompleted, comparator: gt, value: 2, unit: days }
 ```
 
 - Property `type` is one of `string`, `integer`, `number`, `boolean`, `date`, `datetime`, `ref`.
 - `ref` properties require `ref: <entity name>`; references resolve to entities only (never events or projections).
 - Every event and projection requires a `subject` entity.
+- Every projection declares its candidate selection under `select`:
+  - `required_events` — non-empty list of event names; every one must have occurred by `as_of`. All named events must be declared with the projection's `subject` and must not overlap `absent_events`.
+  - `absent_events` — optional list of event names; any occurrence at or before `as_of` excludes the subject.
+  - `elapsed` — optional as-of-relative duration comparison `{ event, comparator, value, unit }`: `event` is optional, defaults to the first `required_events` entry, and must be one of `required_events`; `comparator` is one of `lt`, `lte`, `gt`, `gte`; `value` is a non-negative number; `unit` is one of `seconds`, `minutes`, `hours`, `days`.
+  - `where` — optional condition over the subject entity's properties, using the same restricted condition language as mapping `when:` clauses.
 - Every event carries an occurrence time and an observation time. Schema v1 fixes the canonical field names: `occurrence_field` must be `occurred_at` and `observation_field` must be `observed_at` — the policy declares them explicitly so all four files agree on the same temporal contract. `date_only_timezone` must be `UTC`: a date-only value means midnight UTC.
 - `entity_id_type` must be `string` — entity ids are never cast to numbers.
 

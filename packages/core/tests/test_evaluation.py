@@ -37,7 +37,12 @@ def test_oversized_number_is_diagnostic(tmp_path: Path) -> None:
 
 def test_interval_subject_mismatch(tmp_path: Path) -> None:
     docs = base_docs()
+    # Break the interval pairing without touching the projection's
+    # selection: a third event type carries the other subject.
     docs["domain"]["domain"]["events"]["InvoiceIssued"]["subject"] = "Invoice"
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"][
+        "select"
+    ]["absent_events"] = []
     result = load_workspace(make_workspace(tmp_path, docs))
     assert not result.ok
     assert "EVAL.SUBJECT_MISMATCH" in codes(result)

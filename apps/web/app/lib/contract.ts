@@ -32,6 +32,8 @@ export interface ContractVocabulary {
     null: string[];
     logic: string[];
   };
+  /** Declarative projection-selection vocabulary (#55). */
+  projectionSelection: { comparators: string[]; durationUnits: string[] };
   previewLimits: { maxBytes: number; maxRecords: number } | null;
 }
 
@@ -71,6 +73,12 @@ export function contractVocabulary(
       set: stringList(ops["set"]),
       null: stringList(ops["null"]),
       logic: stringList(ops["logic"]),
+    },
+    projectionSelection: {
+      comparators: stringList(asRecord(c["projection_selection"])["comparators"]),
+      durationUnits: stringList(
+        asRecord(c["projection_selection"])["duration_units"],
+      ),
     },
     previewLimits:
       typeof limits["max_bytes"] === "number" &&

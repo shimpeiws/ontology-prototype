@@ -5,18 +5,23 @@ from __future__ import annotations
 import difflib
 from typing import Any
 
+from .conditions import validate_condition
 from .diagnostics import Diagnostics
 from .model import (
+    DURATION_UNITS,
+    ORDER_COMPARATORS,
     PROPERTY_TYPES,
     DomainDefinition,
     DomainPolicies,
+    ElapsedSpec,
     EntityType,
     EventTimePolicy,
     EventType,
     ProjectionSpec,
     PropertySpec,
+    SelectionSpec,
 )
-from .schema import check_name, err_at, get_map, get_str, unknown_keys, warn_at
+from .schema import check_name, err_at, get_map, get_num, get_str, unknown_keys, warn_at
 
 SUPPORTED_TIMEZONES = ("UTC",)
 
@@ -293,6 +298,10 @@ def validate_domain(doc: dict, diag: Diagnostics, file: str) -> DomainDefinition
                 )
 
     projections: dict[str, ProjectionSpec] = {}
+    # Projection subjects are checked against entities even when the rest of
+    # the spec is invalid — the deferred check must not depend on selection
+    # validity.
+    projection_subjects: list[tuple[str, str]] = []  # (path, subject)
     projections_node = section.get("projections")
     if projections_node is not None:
         if not isinstance(projections_node, dict):
@@ -305,7 +314,7 @@ def validate_domain(doc: dict, diag: Diagnostics, file: str) -> DomainDefinition
                 if not isinstance(spec, dict):
                     err("SCHEMA.INVALID_TYPE", proj_path, "projection spec must be a mapping")
                     continue
-                unknown_keys(spec, {"description", "subject"}, err, proj_path)
+                unknown_keys(spec, {"description", "subject", "select"}, err, proj_path)
                 subject = spec.get("subject")
                 subject_ok = isinstance(subject, str) and bool(subject)
                 if not subject_ok:
@@ -314,13 +323,26 @@ def validate_domain(doc: dict, diag: Diagnostics, file: str) -> DomainDefinition
                         f"{proj_path}.subject",
                         "projection requires a 'subject' entity name",
                     )
+                else:
+                    projection_subjects.append((f"{proj_path}.subject", subject))
                 proj_description = spec.get("description")
                 if proj_description is not None and not isinstance(proj_description, str):
                     err("SCHEMA.INVALID_TYPE", f"{proj_path}.description", "'description' must be a string")
                     proj_description = None
-                if subject_ok:
+                selection = _validate_select(
+                    spec.get("select"),
+                    err,
+                    f"{proj_path}.select",
+                    events=events,
+                    entities=entities,
+                    subject=subject if subject_ok else None,
+                )
+                if subject_ok and selection is not None:
                     projections[proj_name] = ProjectionSpec(
-                        name=proj_name, subject=subject, description=proj_description
+                        name=proj_name,
+                        subject=subject,
+                        select=selection,
+                        description=proj_description,
                     )
 
     # Deferred reference resolution: property refs and event/projection subjects.
@@ -340,13 +362,13 @@ def validate_domain(doc: dict, diag: Diagnostics, file: str) -> DomainDefinition
                 f"event subject {event.subject!r} is not a declared entity",
                 hint=suggest(event.subject, entity_names),
             )
-    for proj_name, proj in projections.items():
-        if proj.subject not in entities:
+    for subj_path, subj in projection_subjects:
+        if subj not in entities:
             err(
                 "DOMAIN.UNKNOWN_SUBJECT",
-                f"domain.projections.{proj_name}.subject",
-                f"projection subject {proj.subject!r} is not a declared entity",
-                hint=suggest(proj.subject, entity_names),
+                subj_path,
+                f"projection subject {subj!r} is not a declared entity",
+                hint=suggest(subj, entity_names),
             )
 
     own_errors = any(d.severity == "error" for d in diag.items[start:])
@@ -360,3 +382,246 @@ def validate_domain(doc: dict, diag: Diagnostics, file: str) -> DomainDefinition
         events=events,
         projections=projections,
     )
+
+
+def _validate_select(
+    node: Any,
+    err,
+    path: str,
+    *,
+    events: dict[str, EventType],
+    entities: dict[str, EntityType],
+    subject: str | None,
+) -> SelectionSpec | None:
+    """Validate a projection's declarative ``select`` block.
+
+    The vocabulary is deliberately restricted: required/absent event lists,
+    an optional as-of-relative ``elapsed`` comparison, and an optional
+    ``where`` condition over the subject entity's declared properties.
+    ``subject`` is None when the projection's own subject failed to parse —
+    subject-dependent checks are skipped so errors don't cascade. An
+    undeclared subject also skips them: DOMAIN.UNKNOWN_SUBJECT reports that
+    on its own.
+    """
+    check_subject = subject if subject in entities else None
+    if node is None:
+        err(
+            "SCHEMA.MISSING_FIELD",
+            path,
+            "projection requires a 'select' selection",
+        )
+        return None
+    if not isinstance(node, dict):
+        err("SCHEMA.INVALID_TYPE", path, "'select' must be a mapping")
+        return None
+    unknown_keys(
+        node, {"required_events", "absent_events", "elapsed", "where"}, err, path
+    )
+
+    ok = True
+    required = _validate_event_list(
+        node, "required_events", err, path, events, check_subject, required=True
+    )
+    absent = _validate_event_list(
+        node, "absent_events", err, path, events, check_subject, required=False
+    )
+    overlap = [name for name in required if name in absent]
+    if overlap:
+        err(
+            "DOMAIN.OVERLAPPING_EVENTS",
+            f"{path}.absent_events",
+            f"event(s) cannot be both required and absent: {', '.join(overlap)}",
+        )
+        ok = False
+
+    elapsed = _validate_elapsed(node.get("elapsed"), err, f"{path}.elapsed", required)
+    if "elapsed" in node and elapsed is None:
+        ok = False
+
+    where = None
+    if "where" in node:
+        where = validate_condition(node["where"], err, f"{path}.where")
+        if where is None:
+            ok = False
+        elif subject is not None and subject in entities:
+            properties = entities[subject].properties
+            for field_name in _condition_fields(where.raw):
+                if field_name not in properties:
+                    err(
+                        "DOMAIN.UNKNOWN_FIELD",
+                        f"{path}.where",
+                        f"condition field {field_name!r} is not a declared "
+                        f"property of {subject!r}",
+                        hint=suggest(field_name, list(properties)),
+                    )
+                    ok = False
+
+    if not ok or not required:
+        return None
+    return SelectionSpec(
+        required_events=tuple(required),
+        absent_events=tuple(absent),
+        elapsed=elapsed,
+        where=where,
+    )
+
+
+def _validate_event_list(
+    node: dict,
+    key: str,
+    err,
+    path: str,
+    events: dict[str, EventType],
+    subject: str | None,
+    *,
+    required: bool,
+) -> list[str]:
+    """Validate a required_events/absent_events list: declared events bound
+    to the projection's subject entity."""
+    names: list[str] = []
+    value = node.get(key)
+    if value is None:
+        if required:
+            err(
+                "SCHEMA.MISSING_FIELD",
+                f"{path}.{key}",
+                f"missing required field {key!r}",
+            )
+        return names
+    if not isinstance(value, list):
+        err(
+            "SCHEMA.INVALID_TYPE",
+            f"{path}.{key}",
+            f"'{key}' must be a list of event names",
+        )
+        return names
+    if required and not value:
+        err(
+            "SCHEMA.INVALID_VALUE",
+            f"{path}.{key}",
+            f"'{key}' must name at least one event",
+        )
+        return names
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        item_path = f"{path}.{key}[{index}]"
+        if not isinstance(item, str) or not item:
+            err(
+                "SCHEMA.INVALID_TYPE",
+                item_path,
+                "event name must be a non-empty string",
+            )
+            continue
+        if item in seen:
+            err(
+                "DOMAIN.DUPLICATE_EVENT",
+                item_path,
+                f"duplicate event {item!r}",
+            )
+            continue
+        seen.add(item)
+        event = events.get(item)
+        if event is None:
+            err(
+                "DOMAIN.UNKNOWN_EVENT",
+                item_path,
+                f"unknown event type {item!r}",
+                hint=suggest(item, list(events)),
+            )
+            continue
+        if subject is not None and event.subject != subject:
+            err(
+                "DOMAIN.EVENT_SUBJECT_MISMATCH",
+                item_path,
+                f"event {item!r} has subject {event.subject!r}; the "
+                f"projection selects {subject!r}",
+            )
+            continue
+        names.append(item)
+    return names
+
+
+def _validate_elapsed(
+    node: Any, err, path: str, required_events: list[str]
+) -> ElapsedSpec | None:
+    """Validate the optional ``elapsed`` as-of-relative duration check."""
+    if node is None:
+        return None
+    if not isinstance(node, dict):
+        err("SCHEMA.INVALID_TYPE", path, "'elapsed' must be a mapping")
+        return None
+    unknown_keys(node, {"event", "comparator", "value", "unit"}, err, path)
+
+    ok = True
+    event = node.get("event")
+    if event is not None:
+        if not isinstance(event, str) or not event:
+            err(
+                "SCHEMA.INVALID_TYPE",
+                f"{path}.event",
+                "'event' must be a non-empty string",
+            )
+            event = None
+            ok = False
+        elif required_events and event not in required_events:
+            err(
+                "DOMAIN.ELAPSED_EVENT",
+                f"{path}.event",
+                f"elapsed event {event!r} is not in required_events; the "
+                "clock starts on a required event",
+            )
+            ok = False
+    if event is None and required_events:
+        event = required_events[0]
+
+    comparator = get_str(node, "comparator", err, path)
+    if comparator is not None and comparator not in ORDER_COMPARATORS:
+        err(
+            "DOMAIN.INVALID_COMPARATOR",
+            f"{path}.comparator",
+            f"unknown comparator {comparator!r}",
+            hint=f"allowed: {', '.join(ORDER_COMPARATORS)} ('lt' is strict)",
+        )
+        ok = False
+
+    value = get_num(node, "value", err, path)
+    if value is not None and value < 0:
+        err(
+            "DOMAIN.INVALID_VALUE",
+            f"{path}.value",
+            "elapsed value must be non-negative",
+        )
+        ok = False
+
+    unit = get_str(node, "unit", err, path)
+    if unit is not None and unit not in DURATION_UNITS:
+        err(
+            "DOMAIN.INVALID_UNIT",
+            f"{path}.unit",
+            f"unknown unit {unit!r}",
+            hint=f"allowed: {', '.join(DURATION_UNITS)}",
+        )
+        ok = False
+
+    if not ok or event is None or comparator is None or value is None or unit is None:
+        return None
+    return ElapsedSpec(
+        event=event, comparator=comparator, value=value, unit=unit
+    )
+
+
+def _condition_fields(node: Any) -> list[str]:
+    """Collect the ``field`` operands of a validated condition tree."""
+    fields: list[str] = []
+    if not isinstance(node, dict):
+        return fields
+    field = node.get("field")
+    if isinstance(field, str):
+        fields.append(field)
+    args = node.get("args")
+    if isinstance(args, list):
+        for arg in args:
+            fields.extend(_condition_fields(arg))
+    if "arg" in node:
+        fields.extend(_condition_fields(node["arg"]))
+    return fields

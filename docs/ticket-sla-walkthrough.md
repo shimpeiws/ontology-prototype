@@ -65,17 +65,16 @@ ontology ingest examples/ticket-sla examples/ticket-sla/data/tickets-baseline.cs
 ontology ingest examples/ticket-sla examples/ticket-sla/data/tickets-current.csv
 # → 5 accepted, 0 rejected; 9 events appended
 
-# 3. The projection cannot run: candidate selection semantics are
-#    registered in code by name, and OpenedWithoutFirstResponse is not
-#    registered. The 4-hour SLA threshold is also not declarable — the
-#    one registered semantic hardcodes a 2-day delay (gap G-01 → #55).
+# 3. The projection runs from its declared `select` — no code was
+#    registered for this workflow. T-C00 was opened 16 hours before
+#    as-of with no FirstResponse (> the 4-hour SLA); T-C03, opened 3
+#    hours before as-of, stays inside the SLA and is excluded (#55).
 ontology project examples/ticket-sla --as-of 2026-10-24T00:00:00Z
-# → ERROR PROJECTION.UNSUPPORTED_PROJECTION — projection
-#   'OpenedWithoutFirstResponse' has no registered semantics in schema v1
+# → 1 candidate: T-C00 (elapsed 16h)
 
-# 4. Diagnosis stops at the same point: it needs the projection run.
+# 4. Diagnosis proceeds past the projection stage with a provider.
 ontology diagnose examples/ticket-sla --as-of 2026-10-24T00:00:00Z --provider stub
-# → ERROR PROJECTION.UNSUPPORTED_PROJECTION
+# → diagnosis run recorded over 1 candidate (stub proposal)
 
 # 5. Evaluation of the declared interval does run — interval pairing,
 #    cohorts, and the strict target are all generic. The reopen-rate
@@ -94,10 +93,10 @@ ontology evaluate examples/ticket-sla --boundary 2026-10-20T00:00:00Z --as-of 20
 ```
 
 The parts that run — validation, ingestion with observation evidence and
-re-observation idempotency, interval pairing, cohort evaluation, strict
-targets — are workflow-agnostic. The parts that stop — candidate
-selection and diagnosis — stop on a code registry, not on a validation
-error; `ontology check` stays green throughout.
+re-observation idempotency, declared candidate selection, diagnosis,
+interval pairing, cohort evaluation, strict targets — are
+workflow-agnostic. What still stops is the reopen-rate guardrail and its
+evidence source — gaps G-02/G-03.
 
 ## Reading the result honestly
 

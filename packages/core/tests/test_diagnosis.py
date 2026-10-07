@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -393,7 +394,8 @@ def test_unknown_and_mismatched_run(tmp_path: Path) -> None:
     docs = support.base_docs()
     docs["agent"]["agent"]["projection"] = "OtherProjection"
     docs["domain"]["domain"]["projections"]["OtherProjection"] = {
-        "subject": "Job"
+        "subject": "Job",
+        "select": {"required_events": ["JobCompleted"]},
     }
     ws_dir = support.make_workspace(tmp_path / "other", docs)
     loaded = load_workspace(ws_dir)
@@ -881,16 +883,19 @@ def test_frozen_run_subject_mismatch_is_rejected(tmp_path: Path) -> None:
     """A run frozen under a different projection subject must not be
     reused — its candidates would attach to the wrong entity type."""
     workspace, run_id = make_frozen_run(tmp_path)
-    docs = support.base_docs()
-    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"][
-        "subject"
-    ] = "Person"
-    ws_dir = support.make_workspace(tmp_path / "other", docs)
-    loaded = load_workspace(ws_dir)
-    assert loaded.ok
+    spec = workspace.domain.projections["CompletedButNotInvoiced"]
+    changed_domain = dataclasses.replace(
+        workspace.domain,
+        projections={
+            "CompletedButNotInvoiced": dataclasses.replace(
+                spec, subject="Person"
+            )
+        },
+    )
+    loaded_workspace = dataclasses.replace(workspace, domain=changed_domain)
 
     result = run_diagnosis(
-        loaded.workspace, FixedProvider(GOOD_OUTPUT), model="m",
+        loaded_workspace, FixedProvider(GOOD_OUTPUT), model="m",
         run_id=run_id,
         store=SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR),
     )

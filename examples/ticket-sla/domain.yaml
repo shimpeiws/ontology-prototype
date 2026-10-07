@@ -48,3 +48,9 @@ domain:
     OpenedWithoutFirstResponse:
       subject: Ticket
       description: Tickets whose opening is observed without a later first response.
+      select:
+        required_events: [TicketOpened]
+        absent_events: [FirstResponse]
+        # The SLA is strict: a ticket exactly four hours old is not yet a
+        # breach candidate.
+        elapsed: { comparator: gt, value: 4, unit: hours }

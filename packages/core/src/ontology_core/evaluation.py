@@ -11,6 +11,8 @@ from typing import Any
 from .diagnostics import Diagnostics
 from .domain import suggest
 from .model import (
+    DURATION_UNITS,
+    ORDER_COMPARATORS,
     DomainDefinition,
     EvaluationDefinition,
     GuardrailSpec,
@@ -20,9 +22,9 @@ from .model import (
 from .schema import err_at, get_map, get_num, get_str, unknown_keys
 
 AGGREGATIONS = ("median", "mean", "min", "max", "count")
-UNITS = ("seconds", "minutes", "hours", "days")
+UNITS = DURATION_UNITS
 METRICS = ("duration",)
-COMPARATORS = ("lt", "lte", "gt", "gte")
+COMPARATORS = ORDER_COMPARATORS
 GUARDRAIL_COMPARATORS = ("not_increase",) + COMPARATORS
 
 

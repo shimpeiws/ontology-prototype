@@ -16,6 +16,15 @@ SCALAR_TYPES = ("string", "integer", "number", "boolean", "date", "datetime")
 PROPERTY_TYPES = SCALAR_TYPES + ("ref",)
 CAST_TYPES = SCALAR_TYPES
 
+# Ordering comparators shared by evaluation targets/guardrails and the
+# projection elapsed threshold ('lt' is strict). Equality on a measured
+# duration is not offered.
+ORDER_COMPARATORS = ("lt", "lte", "gt", "gte")
+
+# Duration units usable wherever a duration is expressed: the evaluation
+# metric unit and the projection elapsed threshold.
+DURATION_UNITS = ("seconds", "minutes", "hours", "days")
+
 
 @dataclass(frozen=True)
 class PropertySpec:
@@ -42,9 +51,49 @@ class EventType:
 
 
 @dataclass(frozen=True)
+class ElapsedSpec:
+    """As-of-relative duration comparison over a required event.
+
+    ``event`` is the anchor event (always one of the selection's required
+    events); the comparison is ``as_of - earliest(event occurred_at)``
+    ``comparator`` ``value`` ``unit``.
+    """
+
+    event: str
+    comparator: str
+    value: float
+    unit: str
+
+
+@dataclass(frozen=True)
+class Condition:
+    """A validated declarative condition tree (see conditions.py)."""
+
+    raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class SelectionSpec:
+    """Declarative candidate selection declared on a domain projection.
+
+    A subject is a candidate when every ``required_events`` type has at
+    least one recorded occurrence, no ``absent_events`` type had occurred
+    by the run's as_of, the optional ``elapsed`` comparison holds, and the
+    optional ``where`` condition matches the subject entity's latest
+    observed properties.
+    """
+
+    required_events: tuple[str, ...]
+    absent_events: tuple[str, ...] = ()
+    elapsed: ElapsedSpec | None = None
+    where: Condition | None = None
+
+
+@dataclass(frozen=True)
 class ProjectionSpec:
     name: str
     subject: str
+    select: SelectionSpec
     description: str | None = None
 
 
@@ -80,13 +129,6 @@ class DomainDefinition:
     events: dict[str, EventType] = field(default_factory=dict)
     projections: dict[str, ProjectionSpec] = field(default_factory=dict)
     description: str | None = None
-
-
-@dataclass(frozen=True)
-class Condition:
-    """A validated declarative condition tree (see conditions.py)."""
-
-    raw: dict[str, Any]
 
 
 @dataclass(frozen=True)

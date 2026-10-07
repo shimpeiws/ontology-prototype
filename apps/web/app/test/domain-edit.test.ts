@@ -222,6 +222,44 @@ describe("add/remove/rename", () => {
       parseOk(next).entities.find((e) => e.name === "Person")?.description,
     ).toBe("A human being.");
   });
+
+  it("projection edits preserve the unmodeled `select` block (#55)", () => {
+    // `select` is not modeled by the form views — the CST-preserving edit
+    // must leave every key of it byte-identical after a modeled edit.
+    const next = setSpecDescription(
+      SYNTHETIC_DOMAIN_YAML,
+      "projections",
+      "CompletedButNotInvoiced",
+      "Jobs completed but not yet invoiced.",
+    )!;
+    const spec = (
+      js(next).domain as Record<string, Record<string, unknown>>
+    ).projections.CompletedButNotInvoiced as Record<string, unknown>;
+    expect(spec.description).toBe("Jobs completed but not yet invoiced.");
+    expect(spec.select).toEqual({
+      required_events: ["JobCompleted"],
+      absent_events: ["InvoiceIssued"],
+      elapsed: {
+        event: "JobCompleted",
+        comparator: "gt",
+        value: 2,
+        unit: "days",
+      },
+    });
+    // A subject edit on the same projection keeps `select` too.
+    const rebound = setSubject(
+      next,
+      "projections",
+      "CompletedButNotInvoiced",
+      "Job",
+    )!;
+    expect(
+      (
+        (js(rebound).domain as Record<string, Record<string, unknown>>)
+          .projections.CompletedButNotInvoiced as Record<string, unknown>
+      ).select,
+    ).toEqual(spec.select);
+  });
 });
 
 describe("property edits", () => {

@@ -71,12 +71,14 @@ describe("findReferences", () => {
     expect(unrelated.hits).toEqual([]);
   });
 
-  it("an event's blast radius covers mapping bindings and the evaluation interval", () => {
+  it("an event's blast radius covers bindings, interval, and select", () => {
     const result = findReferences(SYNTHETIC_BUNDLE_FILES, {
       kind: "event",
       name: "JobCompleted",
     });
     expect(paths(result)).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.elapsed.event",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.required_events[0]",
       "evaluation.yaml:evaluation.interval.start_event",
       "mapping.yaml:mapping.events[0].event",
     ]);

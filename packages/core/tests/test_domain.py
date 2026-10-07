@@ -149,4 +149,154 @@ def test_typed_domain_model(tmp_path: Path, valid_workspace: Path) -> None:
     assert domain.entities["Job"].properties["assignee"].type == "ref"
     assert domain.entities["Job"].properties["assignee"].ref == "Person"
     assert domain.events["InvoiceIssued"].subject == "Job"
-    assert "CompletedButNotInvoiced" in domain.projections
+    spec = domain.projections["CompletedButNotInvoiced"]
+    assert spec.select.required_events == ("JobCompleted",)
+    assert spec.select.absent_events == ("InvoiceIssued",)
+    assert spec.select.elapsed is not None
+    assert spec.select.elapsed.event == "JobCompleted"
+    assert spec.select.elapsed.comparator == "gt"
+    assert spec.select.elapsed.value == 2
+    assert spec.select.elapsed.unit == "days"
+    assert spec.select.where is None
+
+
+def test_projection_requires_select(tmp_path: Path) -> None:
+    docs = base_docs()
+    del docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"]
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(d for d in result.diagnostics if d.code == "SCHEMA.MISSING_FIELD")
+    assert diag.file == "domain.yaml"
+    assert diag.path == "domain.projections.CompletedButNotInvoiced.select"
+
+
+def test_select_rejects_unknown_keys(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "python"
+    ] = "lambda s: True"
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "SCHEMA.UNEXPECTED_KEY" in codes(result)
+
+
+def test_select_required_events_nonempty(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "required_events"
+    ] = []
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "SCHEMA.INVALID_VALUE" in codes(result)
+
+
+def test_select_unknown_event(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "required_events"
+    ] = ["JobCompletd"]
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(d for d in result.diagnostics if d.code == "DOMAIN.UNKNOWN_EVENT")
+    assert (
+        diag.path
+        == "domain.projections.CompletedButNotInvoiced.select.required_events[0]"
+    )
+    assert diag.hint == "did you mean 'JobCompleted'?"
+
+
+def test_select_event_subject_mismatch(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"]["domain"]["events"]["PersonRegistered"] = {"subject": "Person"}
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "absent_events"
+    ] = ["PersonRegistered"]
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(
+        d for d in result.diagnostics if d.code == "DOMAIN.EVENT_SUBJECT_MISMATCH"
+    )
+    assert diag.file == "domain.yaml"
+    assert diag.path == (
+        "domain.projections.CompletedButNotInvoiced.select.absent_events[0]"
+    )
+
+
+def test_select_overlapping_events(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "absent_events"
+    ] = ["JobCompleted"]
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "DOMAIN.OVERLAPPING_EVENTS" in codes(result)
+
+
+def test_select_elapsed_validation(tmp_path: Path) -> None:
+    select = base_docs()["domain"]["domain"]["projections"][
+        "CompletedButNotInvoiced"
+    ]["select"]
+
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"] = {
+        **select,
+        "elapsed": {"comparator": "eq", "value": 2, "unit": "days"},
+    }
+    result = load_workspace(make_workspace(tmp_path / "cmp", docs))
+    assert not result.ok
+    assert "DOMAIN.INVALID_COMPARATOR" in codes(result)
+
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"] = {
+        **select,
+        "elapsed": {"comparator": "gt", "value": -1, "unit": "days"},
+    }
+    result = load_workspace(make_workspace(tmp_path / "neg", docs))
+    assert not result.ok
+    assert "DOMAIN.INVALID_VALUE" in codes(result)
+
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"] = {
+        **select,
+        "elapsed": {"comparator": "gt", "value": 2, "unit": "weeks"},
+    }
+    result = load_workspace(make_workspace(tmp_path / "unit", docs))
+    assert not result.ok
+    assert "DOMAIN.INVALID_UNIT" in codes(result)
+
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"] = {
+        **select,
+        "elapsed": {
+            "event": "InvoiceIssued",
+            "comparator": "gt",
+            "value": 2,
+            "unit": "days",
+        },
+    }
+    result = load_workspace(make_workspace(tmp_path / "evt", docs))
+    assert not result.ok
+    assert "DOMAIN.ELAPSED_EVENT" in codes(result)
+
+
+def test_select_where_must_be_a_condition(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "where"
+    ] = {"op": "exec", "field": "status"}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "CONDITION.UNKNOWN_OP" in codes(result)
+
+
+def test_select_where_fields_are_subject_properties(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"]["select"][
+        "where"
+    ] = {"op": "eq", "field": "assigne", "value": "taro"}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    diag = next(d for d in result.diagnostics if d.code == "DOMAIN.UNKNOWN_FIELD")
+    assert diag.file == "domain.yaml"
+    assert diag.path == "domain.projections.CompletedButNotInvoiced.select.where"
+    assert diag.hint == "did you mean 'assignee'?"

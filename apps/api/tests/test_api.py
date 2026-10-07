@@ -71,6 +71,11 @@ class TestContract:
         assert contract["time_casts"] == ["date", "datetime"]
         assert contract["preview_limits"]["max_bytes"] > 0
         assert contract["preview_limits"]["max_records"] == 500
+        # The declarative projection-selection vocabulary (#55).
+        assert contract["projection_selection"] == {
+            "comparators": ["lt", "lte", "gt", "gte"],
+            "duration_units": ["seconds", "minutes", "hours", "days"],
+        }
 
     def test_contract_needs_no_roots(self) -> None:
         # Metadata is readable even with nothing configured.

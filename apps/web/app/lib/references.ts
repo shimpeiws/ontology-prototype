@@ -8,10 +8,13 @@
  * - entity names: `ref:` targets (domain properties, event properties,
  *   agent action params), event/projection `subject`, mapping entity
  *   bindings, mapping event `subject.entity`
- * - event names: mapping event bindings, evaluation `start_event`/`end_event`
+ * - event names: mapping event bindings, evaluation
+ *   `start_event`/`end_event`, projection `select` event lists and
+ *   `elapsed.event`
  * - projection names: agent `projection`
  * - entity property names: mapping `properties` keys of bindings for that
- *   entity
+ *   entity, `field` operands in projection `select.where` conditions over
+ *   that entity
  *
  * This is a navigation/confirmation aid, not validation — the core's
  * diagnostics remain the only verdict on the draft. Files that are absent
@@ -19,7 +22,7 @@
  * about (INV-005).
  */
 
-import { isMap, isSeq, parseDocument } from "yaml";
+import { isMap, isScalar, isSeq, parseDocument } from "yaml";
 import type { Document, YAMLMap } from "yaml";
 
 import type { Concept } from "./domainEdit";
@@ -87,12 +90,80 @@ function list(value: unknown): Record<string, unknown>[] {
 
 /* ---- scan (plain-JS walk of each draft file) ---- */
 
+/** `field` operands appearing anywhere inside a raw `where` tree. */
+function conditionFields(node: unknown, out: string[]): void {
+  if (!isRecord(node)) return;
+  if (typeof node.field === "string") out.push(node.field);
+  if (Array.isArray(node.args)) {
+    for (const arg of node.args) conditionFields(arg, out);
+  }
+  conditionFields(node.arg, out);
+}
+
+/**
+ * Event/property references inside one projection's `select` block —
+ * `required_events`/`absent_events` items and `elapsed.event` name events;
+ * `where` fields name properties of the projection's subject entity.
+ */
+function scanSelect(
+  proj: string,
+  spec: Record<string, unknown>,
+  concept: Concept,
+  hits: ReferenceHit[],
+): void {
+  const select = isRecord(spec.select) ? spec.select : {};
+  const base = `domain.projections.${proj}.select`;
+  if (concept.kind === "event") {
+    for (const key of ["required_events", "absent_events"] as const) {
+      const names = Array.isArray(select[key]) ? select[key] : [];
+      names.forEach((value, i) => {
+        if (scalarEq(value, concept.name)) {
+          hits.push({
+            file: "domain.yaml",
+            path: `${base}.${key}[${i}]`,
+            label: `selection event of projection ${proj}`,
+          });
+        }
+      });
+    }
+    const elapsed = isRecord(select.elapsed) ? select.elapsed : {};
+    if (scalarEq(elapsed.event, concept.name)) {
+      hits.push({
+        file: "domain.yaml",
+        path: `${base}.elapsed.event`,
+        label: `elapsed anchor of projection ${proj}`,
+      });
+    }
+  }
+  if (
+    concept.kind === "property" &&
+    concept.ownerKind === "entities" &&
+    scalarEq(spec.subject, concept.owner)
+  ) {
+    const fields: string[] = [];
+    conditionFields(select.where, fields);
+    if (fields.includes(concept.name)) {
+      hits.push({
+        file: "domain.yaml",
+        path: `${base}.where`,
+        label: `condition field '${concept.name}' of projection ${proj}`,
+      });
+    }
+  }
+}
+
 function scanDomain(
   js: unknown,
   concept: Concept,
   hits: ReferenceHit[],
 ): void {
   const domain = isRecord(js) && isRecord(js.domain) ? js.domain : {};
+  if (concept.kind === "event" || concept.kind === "property") {
+    for (const [proj, spec] of entries(domain.projections)) {
+      scanSelect(proj, spec, concept, hits);
+    }
+    return;
+  }
   if (concept.kind !== "entity") return;
   for (const [entity, spec] of entries(domain.entities)) {
     for (const [prop, pspec] of entries(spec.properties)) {
@@ -284,6 +355,87 @@ function retarget(
   return true;
 }
 
+/** Replace seq items that are scalar `oldName` with `newName`. */
+function retargetSeqItems(
+  doc: Document,
+  node: unknown,
+  oldName: string,
+  newName: string,
+): boolean {
+  if (!isSeq(node)) return false;
+  let changed = false;
+  for (let i = 0; i < node.items.length; i++) {
+    const item = node.items[i];
+    if (isScalar(item) && scalarEq(item.value, oldName)) {
+      node.set(i, doc.createNode(newName));
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** Retarget `field:` scalars anywhere inside a `where` condition tree. */
+function retargetConditionFields(
+  doc: Document,
+  node: unknown,
+  oldName: string,
+  newName: string,
+): boolean {
+  if (!isMap(node)) return false;
+  let changed = retarget(doc, node, "field", oldName, newName);
+  const args = node.get("args");
+  if (isSeq(args)) {
+    for (const arg of args.items) {
+      if (retargetConditionFields(doc, arg, oldName, newName))
+        changed = true;
+    }
+  }
+  if (retargetConditionFields(doc, node.get("arg"), oldName, newName))
+    changed = true;
+  return changed;
+}
+
+/** Apply an event/property rename inside one projection spec's `select`. */
+function retargetSelect(
+  doc: Document,
+  spec: YAMLMap,
+  concept: Concept,
+  newName: string,
+): boolean {
+  const select = spec.get("select");
+  if (!isMap(select)) return false;
+  let changed = false;
+  if (concept.kind === "event") {
+    for (const key of ["required_events", "absent_events"] as const) {
+      if (
+        retargetSeqItems(doc, select.get(key), concept.name, newName)
+      )
+        changed = true;
+    }
+    const elapsed = select.get("elapsed");
+    if (
+      isMap(elapsed) &&
+      retarget(doc, elapsed, "event", concept.name, newName)
+    )
+      changed = true;
+  } else if (
+    concept.kind === "property" &&
+    concept.ownerKind === "entities" &&
+    scalarIs(spec, "subject", concept.owner)
+  ) {
+    if (
+      retargetConditionFields(
+        doc,
+        select.get("where"),
+        concept.name,
+        newName,
+      )
+    )
+      changed = true;
+  }
+  return changed;
+}
+
 function renamePropertyRefs(
   doc: Document,
   spec: YAMLMap,
@@ -341,6 +493,10 @@ function renameInDomain(
       throw new Error(`event '${concept.name}' not found in domain.yaml`);
     }
     changed = true;
+    // `select` blocks reference event names — retarget them too.
+    for (const [, spec] of specMaps(projections)) {
+      if (retargetSelect(doc, spec, concept, newName)) changed = true;
+    }
   } else if (concept.kind === "projection") {
     if (
       !isMap(projections) ||
@@ -361,6 +517,10 @@ function renameInDomain(
         );
       }
       changed = true;
+      // `where` conditions over this entity name the renamed property.
+      for (const [, pspec] of specMaps(projections)) {
+        if (retargetSelect(doc, pspec, concept, newName)) changed = true;
+      }
     } else {
       throw new Error(
         `'${concept.owner}' not found in domain.yaml ${concept.ownerKind}`,
