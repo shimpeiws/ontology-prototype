@@ -60,12 +60,14 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
         capsys, ["ingest", str(workspace), str(snapshots["baseline"]), "--json"]
     )
     assert baseline["accepted"] == 3
+    assert baseline["rejected"] == 0
     assert baseline["canonical"]["events_appended"] == 9
 
     current = run_json(
         capsys, ["ingest", str(workspace), str(snapshots["current"]), "--json"]
     )
     assert current["accepted"] == 4
+    assert current["rejected"] == 0
     assert current["canonical"]["events_appended"] == 6
 
     # The projection name has no registered semantics: project and the
@@ -91,6 +93,7 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
         capsys, ["ingest", str(workspace), str(snapshots["followup"]), "--json"]
     )
     assert followup["accepted"] == 5
+    assert followup["rejected"] == 0
     assert followup["canonical"]["events_appended"] == 7
 
     # Evaluation of the declared interval works end to end; only the
