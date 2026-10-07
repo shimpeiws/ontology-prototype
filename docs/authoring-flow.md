@@ -74,7 +74,7 @@ Save is one shared flow for all four editors (#19):
 4. Atomic activation — failed persistence leaves the previous active bundle intact, never a mixed bundle.
 5. Result feedback — success, validation-blocked, conflict, or retryable failure is shown distinctly.
 
-Saving definitions mutates only the four YAML files: it never touches canonical entities/events, observations, traces, proposals, or approvals, and the authoring UI holds no path to approve proposals or execute write-backs.
+Saving definitions mutates only the four YAML files: it never touches canonical entities/events, observations, traces, proposals, or approvals, and the authoring UI holds no path to approve proposals or execute write-backs. Operational governance — inspecting canonical state and recording approve/reject decisions — is a separate console surface governed by [ADR 0003](adr/0003-api-operational-boundary.md), not part of the authoring flow.
 
 ## Coverage map
 
