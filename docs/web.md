@@ -34,6 +34,12 @@ The Web app is presentation only:
   unavailable, because a baseless save can never be conflict-checked.
   Save and reload are mutually exclusive in flight — a late save response
   is discarded rather than allowed to roll the reloaded baseline back.
+  Discarding edits is explicit too (#53): "Revert to active" (one file) and
+  "Revert all" (the bundle) first ask for confirmation, then restore the
+  byte-exact active text. Like an edit, a revert advances the draft
+  revision, so a displayed validation or preview result turns stale. Every
+  discard path — revert, close, and leave — is disabled while a save is in
+  flight, because a sent save cannot be recalled.
 - The Domain page offers structured authoring on top of the raw editor: a
   visual graph of entities/events/projections, an inspectable list, and
   per-concept forms that mutate the draft `domain.yaml` through the

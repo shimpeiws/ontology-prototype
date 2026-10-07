@@ -37,6 +37,13 @@ export default function WorkspaceLayout() {
   dirtyRef.current = dirty;
   const blocker = useBlocker(useCallback(() => dirtyRef.current, []));
   const [confirmingClose, setConfirmingClose] = useState(false);
+  const [confirmingRevertAll, setConfirmingRevertAll] = useState(false);
+
+  // Nothing left to discard (saved, reloaded, or reverted elsewhere)
+  // dismisses a pending revert-all confirmation.
+  useEffect(() => {
+    if (!dirty) setConfirmingRevertAll(false);
+  }, [dirty]);
 
   // Warn on tab close / reload with unsaved drafts — useBlocker only covers
   // in-app navigation.
@@ -116,8 +123,8 @@ export default function WorkspaceLayout() {
           </button>
           <button
             type="button"
-            onClick={revertAll}
-            disabled={!dirty || state.saving}
+            onClick={() => setConfirmingRevertAll(true)}
+            disabled={!dirty || state.saving || confirmingRevertAll}
             title={
               state.saving
                 ? "A save is in flight — wait for it to settle before discarding the draft."
@@ -158,6 +165,27 @@ export default function WorkspaceLayout() {
           onReload={() => void reloadActive()}
           onRetrySave={() => void saveDraft()}
         />
+      ) : null}
+      {confirmingRevertAll ? (
+        <div role="alert" className="state state-error">
+          <p>
+            Discard all unsaved draft changes and restore the active bundle?
+          </p>
+          <button
+            type="button"
+            disabled={state.saving}
+            onClick={() => {
+              if (state.saving) return;
+              setConfirmingRevertAll(false);
+              revertAll();
+            }}
+          >
+            Discard all changes
+          </button>
+          <button type="button" onClick={() => setConfirmingRevertAll(false)}>
+            Keep editing
+          </button>
+        </div>
       ) : null}
       {confirmingClose ? (
         <p role="alert" className="state state-error">

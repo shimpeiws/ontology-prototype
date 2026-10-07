@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { DraftEditor } from "../components/DraftEditor";
 import { useWorkspace, WorkspaceProvider } from "../workspace/context";
+import { initialWorkspaceState, workspaceReducer } from "../workspace/store";
 import type { OpenResponse, WorkspaceFileName } from "../lib/types";
 import { SYNTHETIC_OPEN_RESPONSE } from "./fixtures";
 
@@ -50,7 +51,7 @@ describe("DraftEditor", () => {
     );
   });
 
-  it("editing shows unsaved badge and revert restores active text", async () => {
+  it("editing shows unsaved badge and a confirmed revert restores active text", async () => {
     const user = userEvent.setup();
     renderEditor();
     const textarea = screen.getByLabelText("domain.yaml draft YAML");
@@ -61,10 +62,60 @@ describe("DraftEditor", () => {
     await user.click(
       screen.getByRole("button", { name: "Revert to active" }),
     );
+    // The first click only asks; nothing is discarded yet.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Discard unsaved changes to domain.yaml and restore the active text?",
+    );
+    expect(textarea).toHaveValue(
+      `${SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"]}# edit`,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Discard changes" }));
     expect(textarea).toHaveValue(
       SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"],
     );
     expect(screen.queryByText("unsaved")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keep editing cancels the revert and keeps the draft", async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    const textarea = screen.getByLabelText("domain.yaml draft YAML");
+
+    await user.type(textarea, "# edit");
+    await user.click(
+      screen.getByRole("button", { name: "Revert to active" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(textarea).toHaveValue(
+      `${SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"]}# edit`,
+    );
+    expect(screen.getByText("unsaved")).toBeInTheDocument();
+  });
+
+  it("revert stays disabled while a save is in flight", () => {
+    let state = workspaceReducer(initialWorkspaceState, {
+      type: "opened",
+      requestedPath: "job-invoicing",
+      response: SYNTHETIC_OPEN_RESPONSE,
+    });
+    state = workspaceReducer(state, {
+      type: "edited",
+      file: "domain.yaml",
+      text: "changed: true",
+    });
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
+    render(
+      <WorkspaceProvider initial={state}>
+        <DraftEditor file="domain.yaml" />
+      </WorkspaceProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Revert to active" }),
+    ).toBeDisabled();
   });
 
   it("removing an on-disk file from the draft says 'removed from draft'", async () => {
