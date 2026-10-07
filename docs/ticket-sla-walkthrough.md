@@ -34,10 +34,10 @@ The demonstration snapshots live in `examples/ticket-sla/data/`:
 | File | Rows | Role |
 | --- | --- | --- |
 | `tickets-baseline.csv` | T-B01–T-B03 | Historical export: tickets opened before the intervention, first responses 26, 28, and 24 hours later (median 26 hours). |
-| `tickets-current.csv` | T-C01–T-C04 | Current snapshot: T-C01 and T-C02 opened but unanswered past the 4-hour SLA (candidates), T-C03 opened 3 hours before as-of (still inside the SLA), T-C04 answered and resolved. |
-| `tickets-followup.csv` | T-C01–T-C05 | Later snapshot: T-C01–T-C03 first-responded 3, 2.5, and 3.5 hours after open; T-C05 opened after the last observation and still unanswered (pending outcome). |
+| `tickets-current.csv` | T-C00–T-C04 | Current snapshot at the diagnosis instant: T-C00 opened but still unanswered past the 4-hour SLA (the candidate), T-C01 and T-C02 already first-responded 3 and 2.5 hours after open, T-C03 opened 3 hours before as-of (still inside the SLA), T-C04 answered and resolved. |
+| `tickets-followup.csv` | T-C00–T-C05 | Later snapshot: T-C00 first-responded 20 hours after open (after the diagnosis instant) and resolved; T-C01–T-C03 resolved with first responses 3, 2.5, and 3.5 hours after open; T-C05 opened after the last observation and still unanswered (pending outcome). |
 | `resolutions-baseline.csv` | R-B01–R-B03 | Reopen evidence for the baseline cohort: R-B03 reopened. **Not ingestible** — `mapping.source` accepts one source (see [generality-gaps.md](generality-gaps.md) G-03). |
-| `resolutions-followup.csv` | R-C01–R-C04 | Reopen evidence for the after cohort: none reopened. Not ingestible for the same reason. |
+| `resolutions-followup.csv` | R-C00–R-C04 | Reopen evidence for the after cohort: none reopened. Not ingestible for the same reason. |
 
 All timestamps are ISO 8601 datetimes with an explicit `Z` offset —
 first-response SLAs are measured in hours, so this workflow cannot use
@@ -63,7 +63,7 @@ ontology check examples/ticket-sla
 ontology ingest examples/ticket-sla examples/ticket-sla/data/tickets-baseline.csv
 # → 3 accepted, 0 rejected; 9 events appended (3× TicketOpened, FirstResponse, TicketResolved)
 ontology ingest examples/ticket-sla examples/ticket-sla/data/tickets-current.csv
-# → 4 accepted, 0 rejected; 6 events appended
+# → 5 accepted, 0 rejected; 9 events appended
 
 # 3. The projection cannot run: candidate selection semantics are
 #    registered in code by name, and OpenedWithoutFirstResponse is not
@@ -83,11 +83,11 @@ ontology diagnose examples/ticket-sla --as-of 2026-10-24T00:00:00Z --provider st
 #    metric semantics and its evidence source cannot be ingested yet
 #    (gaps G-02 → #56 and G-03 → #57).
 ontology ingest examples/ticket-sla examples/ticket-sla/data/tickets-followup.csv
-# → 5 accepted, 0 rejected; 7 events appended; 6 re-observed
+# → 6 accepted, 0 rejected; 7 events appended; 9 re-observed
 ontology evaluate examples/ticket-sla --boundary 2026-10-20T00:00:00Z --as-of 2026-10-30T00:00:00Z
 # → baseline: median 26 hours (3 paired)
-#   after:    median 2.75 hours (4 paired, 1 pending — T-C05)
-#   change:   23.25 hours (improvement)
+#   after:    median 3 hours (5 paired, 1 pending — T-C05)
+#   change:   23 hours (improvement)
 #   target lt 4 hours: attained
 #   guardrail reopen-rate: unavailable — no registered semantics
 #   overall:  unverified

@@ -66,9 +66,9 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     current = run_json(
         capsys, ["ingest", str(workspace), str(snapshots["current"]), "--json"]
     )
-    assert current["accepted"] == 4
+    assert current["accepted"] == 5
     assert current["rejected"] == 0
-    assert current["canonical"]["events_appended"] == 6
+    assert current["canonical"]["events_appended"] == 9
 
     # The projection name has no registered semantics: project and the
     # diagnosis that depends on it both refuse (documented gap, #55).
@@ -92,9 +92,20 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     followup = run_json(
         capsys, ["ingest", str(workspace), str(snapshots["followup"]), "--json"]
     )
-    assert followup["accepted"] == 5
+    assert followup["accepted"] == 6
     assert followup["rejected"] == 0
     assert followup["canonical"]["events_appended"] == 7
+    assert followup["canonical"]["events_reobserved"] == 9
+
+    # Re-ingesting the same snapshot is idempotent: every row is
+    # re-observed and no new events are appended.
+    repeat = run_json(
+        capsys, ["ingest", str(workspace), str(snapshots["followup"]), "--json"]
+    )
+    assert repeat["accepted"] == 6
+    assert repeat["rejected"] == 0
+    assert repeat["canonical"]["events_appended"] == 0
+    assert repeat["canonical"]["events_reobserved"] == 16
 
     # Evaluation of the declared interval works end to end; only the
     # unregistered reopen_rate guardrail stays unavailable (#56).
@@ -112,10 +123,10 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     )
     report = evaluation["report"]
     assert report["cohorts"]["baseline"]["aggregate"] == 26.0
-    assert report["cohorts"]["after"]["aggregate"] == 2.75
+    assert report["cohorts"]["after"]["aggregate"] == 3.0
     assert report["change"] == {
         "status": "measured",
-        "value": 23.25,
+        "value": 23.0,
         "direction": "improvement",
     }
     assert report["target"] == {
