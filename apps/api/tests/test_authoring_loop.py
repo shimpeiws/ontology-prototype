@@ -102,7 +102,8 @@ def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) 
         },
     ).json()
     assert saved["outcome"] == "saved", saved["diagnostics"]
-    assert (workspace / "domain.yaml").read_text() == draft["domain.yaml"]
+    for name in ("domain.yaml", "mapping.yaml", "evaluation.yaml", "agent.yaml"):
+        assert (workspace / name).read_text() == draft[name]
 
     # A stale digest cannot overwrite: concurrent edits report conflict.
     stale = client.post(
