@@ -62,17 +62,25 @@ class SaveRequest(BaseModel):
 
 class PreviewSample(BaseModel):
     """A bounded source sample: raw CSV/JSON text, format decided by the
-    draft mapping's ``source.format`` — never by the request."""
+    selected mapping source's ``format`` — never by the request.
+
+    ``source`` names the declared source the sample resolves through;
+    omitted means the draft's single source. An unknown or ambiguous name
+    is a preview diagnostic, not a guess.
+    """
 
     text: str
+    source: str | None = None
 
 
 class DraftPreviewRequest(BaseModel):
     """Preview a draft mapping against an in-memory sample.
 
     Same draft semantics as ``DraftValidateRequest``; ``sample.text`` is the
-    raw CSV/JSON content the draft mapping is resolved against. Nothing is
-    persisted — the request is pure like draft validation.
+    raw CSV/JSON content the draft mapping is resolved against and
+    ``sample.source`` selects the declared source when the draft declares
+    several. Nothing is persisted — the request is pure like draft
+    validation.
     """
 
     path: str = Field(min_length=1)

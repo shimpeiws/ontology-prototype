@@ -1,51 +1,72 @@
 schema_version: 1
 kind: mapping
 mapping:
-  name: jobs-csv
-  description: Maps jobs.csv rows to canonical entities and business events.
-  source:
-    name: jobs
-    format: csv
-  entities:
-    - entity: Job
-      id:
-        field: id
-      properties:
-        status:
-          field: status
-        assignee:
-          field: assignee
-    - entity: Person
-      id:
-        field: assignee
-      properties:
-        name:
-          field: assignee
-  events:
-    - event: JobCompleted
-      subject:
-        entity: Job
-        id:
-          field: id
-      when:
-        op: and
-        args:
-          - op: eq
-            field: status
-            value: completed
-          - op: not_null
+  name: jobs-invoices-csv
+  description: Maps jobs.csv and invoices.csv rows to canonical entities and business events.
+  sources:
+    - name: jobs
+      format: csv
+      entities:
+        - entity: Job
+          id:
+            field: id
+          properties:
+            status:
+              field: status
+            assignee:
+              field: assignee
+        - entity: Person
+          id:
+            field: assignee
+          properties:
+            name:
+              field: assignee
+      events:
+        - event: JobCompleted
+          subject:
+            entity: Job
+            id:
+              field: id
+          when:
+            op: and
+            args:
+              - op: eq
+                field: status
+                value: completed
+              - op: not_null
+                field: completed_at
+          occurred_at:
             field: completed_at
-      occurred_at:
-        field: completed_at
-        as: datetime
-    - event: InvoiceIssued
-      subject:
-        entity: Job
-        id:
-          field: id
-      when:
-        op: not_null
-        field: invoiced_at
-      occurred_at:
-        field: invoiced_at
-        as: datetime
+            as: datetime
+        - event: InvoiceIssued
+          subject:
+            entity: Job
+            id:
+              field: id
+          when:
+            op: not_null
+            field: invoiced_at
+          occurred_at:
+            field: invoiced_at
+            as: datetime
+    - name: invoices
+      format: csv
+      entities:
+        - entity: Invoice
+          id:
+            field: id
+          properties:
+            job:
+              field: job
+            error:
+              field: error
+              as: boolean
+      events:
+        - event: InvoiceIssued
+          subject:
+            entity: Job
+            id:
+              field: job
+          occurred_at:
+            field: issued_at
+            as: datetime

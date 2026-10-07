@@ -31,12 +31,22 @@ def run_json(capsys, args: list[str]) -> dict:
 
 
 def copy_demo_snapshots(tmp_path: Path) -> dict[str, Path]:
-    return {
+    snapshots = {
         name: shutil.copy(
             EXAMPLE_DATA / f"jobs-{name}.csv", tmp_path / f"jobs-{name}.csv"
         )
         for name in ("baseline", "current", "followup")
     }
+    snapshots.update(
+        {
+            f"invoices-{name}": shutil.copy(
+                EXAMPLE_DATA / f"invoices-{name}.csv",
+                tmp_path / f"invoices-{name}.csv",
+            )
+            for name in ("baseline", "followup")
+        }
+    )
+    return snapshots
 
 
 def proposal_id(workspace: Path, capsys) -> str:
@@ -55,13 +65,29 @@ def test_complete_loop_stub_provider(tmp_path, capsys) -> None:
 
     # Stage 2: baseline and current snapshots ingest without rejection.
     baseline = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["baseline"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["baseline"]),
+            "--source",
+            "jobs",
+            "--json",
+        ],
     )
     assert baseline["accepted"] == 3
     assert baseline["canonical"]["events_appended"] == 6
 
     current = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["current"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["current"]),
+            "--source",
+            "jobs",
+            "--json",
+        ],
     )
     assert current["accepted"] == 4
     assert current["canonical"]["events_appended"] == 3
@@ -126,17 +152,69 @@ def test_complete_loop_stub_provider(tmp_path, capsys) -> None:
 
     # Re-ingesting an identical snapshot appends no duplicate events.
     reingest = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["current"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["current"]),
+            "--source",
+            "jobs",
+            "--json",
+        ],
     )
     assert reingest["canonical"]["events_appended"] == 0
     assert reingest["canonical"]["events_reobserved"] == 3
 
     # Stage 7: the follow-up snapshot records the invoiced outcomes.
     followup = run_json(
-        capsys, ["ingest", str(workspace), str(snapshots["followup"]), "--json"]
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["followup"]),
+            "--source",
+            "jobs",
+            "--json",
+        ],
     )
     assert followup["accepted"] == 5
     assert followup["canonical"]["events_appended"] == 4
+
+    # Stage 7b: the second source feeds Invoice entities (with the
+    # invoice-error flag) into the same canonical model. InvoiceIssued
+    # events that jobs snapshots already recorded are re-observed.
+    for name in ("invoices-baseline", "invoices-followup"):
+        invoices = run_json(
+            capsys,
+            [
+                "ingest",
+                str(workspace),
+                str(snapshots[name]),
+                "--source",
+                "invoices",
+                "--json",
+            ],
+        )
+        assert invoices["accepted"] == 3
+        assert invoices["rejected"] == 0
+    assert invoices["canonical"]["events_appended"] == 0
+    assert invoices["canonical"]["events_reobserved"] == 3
+
+    # Re-ingesting an unchanged snapshot from the second source also
+    # appends nothing.
+    invoice_repeat = run_json(
+        capsys,
+        [
+            "ingest",
+            str(workspace),
+            str(snapshots["invoices-followup"]),
+            "--source",
+            "invoices",
+            "--json",
+        ],
+    )
+    assert invoice_repeat["canonical"]["events_appended"] == 0
+    assert invoice_repeat["canonical"]["events_reobserved"] == 3
 
     # Stage 8: evaluation reports the documented reference outcome.
     evaluation = run_json(
@@ -164,9 +242,10 @@ def test_complete_loop_stub_provider(tmp_path, capsys) -> None:
         "value": 4.0,
         "status": "attained",
     }
-    # No invoice-error evidence: the guardrail reports unavailable, never passed.
-    assert report["guardrails"][0]["status"] == "unavailable"
-    assert report["overall"]["status"] == "unverified"
+    # The invoices source supplies invoice-error evidence: the guardrail
+    # is evaluated and passes with no errored invoices.
+    assert report["guardrails"][0]["status"] == "passed"
+    assert report["overall"]["status"] == "success"
     # C05 completed after the follow-up snapshot and stays pending.
     pending = {p["subject_id"] for p in report["cohorts"]["after"]["pending"]}
     assert pending == {"C05"}
@@ -197,7 +276,18 @@ def test_loop_rejected_proposal_never_executes(tmp_path, capsys) -> None:
     workspace = clisupport.copy_example(tmp_path)
     snapshots = copy_demo_snapshots(tmp_path)
     for name in ("baseline", "current"):
-        assert main(["ingest", str(workspace), str(snapshots[name])]) == 0
+        assert (
+            main(
+                [
+                    "ingest",
+                    str(workspace),
+                    str(snapshots[name]),
+                    "--source",
+                    "jobs",
+                ]
+            )
+            == 0
+        )
     capsys.readouterr()
     run_json(
         capsys,
@@ -231,8 +321,22 @@ def test_loop_median_exactly_at_target_is_a_miss(tmp_path, capsys) -> None:
         encoding="utf-8",
     )
     for name in ("baseline", "current"):
-        assert main(["ingest", str(workspace), str(snapshots[name])]) == 0
-    assert main(["ingest", str(workspace), str(followup)]) == 0
+        assert (
+            main(
+                [
+                    "ingest",
+                    str(workspace),
+                    str(snapshots[name]),
+                    "--source",
+                    "jobs",
+                ]
+            )
+            == 0
+        )
+    assert (
+        main(["ingest", str(workspace), str(followup), "--source", "jobs"])
+        == 0
+    )
     capsys.readouterr()
 
     report = run_json(

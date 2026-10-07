@@ -1,57 +1,78 @@
 schema_version: 1
 kind: mapping
 mapping:
-  name: tickets-csv
-  description: Maps tickets.csv rows to canonical entities and business events.
-  source:
-    name: tickets
-    format: csv
-  entities:
-    - entity: Ticket
-      id:
-        field: id
-      properties:
-        status:
-          field: status
-        assignee:
-          field: assignee
-    - entity: Agent
-      id:
-        field: assignee
-      properties:
-        name:
-          field: assignee
-  events:
-    - event: TicketOpened
-      subject:
-        entity: Ticket
-        id:
-          field: id
-      when:
-        op: not_null
-        field: opened_at
-      occurred_at:
-        field: opened_at
-        as: datetime
-    - event: FirstResponse
-      subject:
-        entity: Ticket
-        id:
-          field: id
-      when:
-        op: not_null
-        field: first_response_at
-      occurred_at:
-        field: first_response_at
-        as: datetime
-    - event: TicketResolved
-      subject:
-        entity: Ticket
-        id:
-          field: id
-      when:
-        op: not_null
-        field: resolved_at
-      occurred_at:
-        field: resolved_at
-        as: datetime
+  name: tickets-resolutions-csv
+  description: Maps tickets.csv and resolutions.csv rows to canonical entities and business events.
+  sources:
+    - name: tickets
+      format: csv
+      entities:
+        - entity: Ticket
+          id:
+            field: id
+          properties:
+            status:
+              field: status
+            assignee:
+              field: assignee
+        - entity: Agent
+          id:
+            field: assignee
+          properties:
+            name:
+              field: assignee
+      events:
+        - event: TicketOpened
+          subject:
+            entity: Ticket
+            id:
+              field: id
+          when:
+            op: not_null
+            field: opened_at
+          occurred_at:
+            field: opened_at
+            as: datetime
+        - event: FirstResponse
+          subject:
+            entity: Ticket
+            id:
+              field: id
+          when:
+            op: not_null
+            field: first_response_at
+          occurred_at:
+            field: first_response_at
+            as: datetime
+        - event: TicketResolved
+          subject:
+            entity: Ticket
+            id:
+              field: id
+          when:
+            op: not_null
+            field: resolved_at
+          occurred_at:
+            field: resolved_at
+            as: datetime
+    - name: resolutions
+      format: csv
+      entities:
+        - entity: Resolution
+          id:
+            field: id
+          properties:
+            ticket:
+              field: ticket
+            reopened:
+              field: reopened
+              as: boolean
+      events:
+        - event: TicketResolved
+          subject:
+            entity: Ticket
+            id:
+              field: ticket
+          occurred_at:
+            field: resolved_at
+            as: datetime

@@ -37,7 +37,13 @@ def test_json_output_matches_core(tmp_path: Path, capsys) -> None:
     from ontology_core import load_workspace
 
     workspace = copy_example(tmp_path)
-    rewrite(workspace, "mapping", lambda d: d["mapping"]["entities"][0].update(entity="Alien"))
+    rewrite(
+        workspace,
+        "mapping",
+        lambda d: d["mapping"]["sources"][0]["entities"][0].update(
+            entity="Alien"
+        ),
+    )
     assert main(["check", str(workspace), "--json"]) == EXIT_INVALID
     payload = json.loads(capsys.readouterr().out)
 

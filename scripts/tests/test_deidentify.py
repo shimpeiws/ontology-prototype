@@ -73,7 +73,7 @@ def _workspace(tmp_path: Path, name: str, fmt: str = "csv"):
     if fmt != "csv":
         mapping_path = ws_dir / "mapping.yaml"
         mapping = yaml.safe_load(mapping_path.read_text(encoding="utf-8"))
-        mapping["mapping"]["source"]["format"] = fmt
+        mapping["mapping"]["sources"][0]["format"] = fmt
         mapping_path.write_text(yaml.safe_dump(mapping, sort_keys=False), encoding="utf-8")
     result = load_workspace(ws_dir)
     assert result.ok, [d.format() for d in result.diagnostics]
@@ -81,7 +81,12 @@ def _workspace(tmp_path: Path, name: str, fmt: str = "csv"):
 
 
 def _ingest_shape(tmp_path: Path, name: str, snapshot: Path, fmt: str):
-    result = ingest_snapshot(_workspace(tmp_path, name, fmt), snapshot, observed_at=FIXED_NOW)
+    result = ingest_snapshot(
+        _workspace(tmp_path, name, fmt),
+        snapshot,
+        source="jobs",
+        observed_at=FIXED_NOW,
+    )
     codes = Counter((d.severity, d.code, d.path) for d in result.diagnostics)
     return codes, len(result.accepted), len(result.rejected)
 

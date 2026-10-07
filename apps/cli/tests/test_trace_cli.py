@@ -27,7 +27,10 @@ def full_loop(tmp_path: Path, capsys) -> tuple[Path, str]:
     """ingest -> diagnose (stub) -> approve -> execute -> evaluate."""
     workspace = clisupport.copy_example(tmp_path)
     snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     assert (
         main(
             [

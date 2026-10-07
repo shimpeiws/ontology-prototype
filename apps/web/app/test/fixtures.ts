@@ -86,17 +86,22 @@ export const SYNTHETIC_OPEN_RESPONSE: OpenResponse = {
     mapping: {
       name: "jobs-csv",
       description: null,
-      source: { name: "jobs", format: "csv" },
-      entities: [
+      sources: [
         {
-          entity: "Job",
-          id: { field: "id", literal: null, cast: null },
-          properties: {
-            status: { field: "status", literal: null, cast: null },
-          },
+          name: "jobs",
+          format: "csv",
+          entities: [
+            {
+              entity: "Job",
+              id: { field: "id", literal: null, cast: null },
+              properties: {
+                status: { field: "status", literal: null, cast: null },
+              },
+            },
+          ],
+          events: [],
         },
       ],
-      events: [],
     },
     evaluation: {
       name: "completion-to-invoice-latency",
@@ -438,6 +443,48 @@ export const SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE: OpenResponse = {
   files: {
     ...SYNTHETIC_FORM_OPEN_RESPONSE.files,
     "mapping.yaml": SYNTHETIC_MAPPING_FORM_YAML,
+  },
+};
+
+/**
+ * SYNTHETIC FIXTURE — the `sources:` form (#57): two declared sources,
+ * each carrying its own format and entity/event bindings.
+ */
+export const SYNTHETIC_MULTI_SOURCE_MAPPING_YAML = `schema_version: 1
+kind: mapping
+mapping:
+  name: jobs-invoices
+  sources:
+    - name: jobs
+      format: csv
+      entities:
+        - entity: Job
+          id: { field: id }
+          properties:
+            status: { field: status }
+      events:
+        - event: JobCompleted
+          subject: { entity: Job, id: { field: id } }
+          occurred_at: { field: completed_at, as: datetime }
+    - name: invoices
+      format: json
+      entities:
+        - entity: Invoice
+          id: { field: id }
+          properties:
+            job: { field: job }
+      events:
+        - event: InvoiceIssued
+          subject: { entity: Job, id: { field: job } }
+          occurred_at: { field: issued_at, as: datetime }
+`;
+
+/** Open response whose mapping.yaml declares two sources. */
+export const SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE: OpenResponse = {
+  ...SYNTHETIC_FORM_OPEN_RESPONSE,
+  files: {
+    ...SYNTHETIC_FORM_OPEN_RESPONSE.files,
+    "mapping.yaml": SYNTHETIC_MULTI_SOURCE_MAPPING_YAML,
   },
 };
 

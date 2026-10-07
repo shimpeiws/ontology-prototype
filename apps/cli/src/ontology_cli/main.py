@@ -104,7 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "snapshot",
         type=Path,
-        help="CSV or JSON snapshot file matching mapping.source.format",
+        help="CSV or JSON snapshot file matching the selected source's format",
+    )
+    ingest.add_argument(
+        "--source",
+        metavar="NAME",
+        help="declared mapping source the snapshot resolves through "
+        "(required when the mapping declares several sources)",
     )
     ingest.add_argument(
         "--json",
@@ -391,7 +397,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         return _cmd_check(args.workspace, as_json=args.json)
     if args.command == "ingest":
-        return _cmd_ingest(args.workspace, args.snapshot, as_json=args.json)
+        return _cmd_ingest(
+            args.workspace, args.snapshot, source=args.source, as_json=args.json
+        )
     if args.command == "project":
         return _cmd_project(
             args.workspace,
@@ -487,7 +495,9 @@ def _cmd_check(workspace: Path, *, as_json: bool) -> int:
     return EXIT_OK if result.ok else EXIT_INVALID
 
 
-def _cmd_ingest(workspace: Path, snapshot: Path, *, as_json: bool) -> int:
+def _cmd_ingest(
+    workspace: Path, snapshot: Path, *, source: str | None, as_json: bool
+) -> int:
     loaded = load_workspace(workspace)
     if not loaded.ok:
         if as_json:
@@ -508,7 +518,7 @@ def _cmd_ingest(workspace: Path, snapshot: Path, *, as_json: bool) -> int:
         return EXIT_INVALID
 
     assert loaded.workspace is not None
-    result = ingest_snapshot(loaded.workspace, snapshot)
+    result = ingest_snapshot(loaded.workspace, snapshot, source=source)
 
     if as_json:
         payload = {

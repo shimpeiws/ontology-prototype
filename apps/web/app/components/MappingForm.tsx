@@ -541,6 +541,7 @@ function AssignmentFields({
 
 function EntityBindingCard({
   index,
+  base,
   item,
   diagnostics,
   entityOptions,
@@ -550,6 +551,9 @@ function EntityBindingCard({
   onRemove,
 }: {
   index: number;
+  /** Diagnostic path prefix, e.g. `mapping.entities[0]` or
+   *  `mapping.sources[1].entities[0]`. */
+  base: string;
   /** The seq item node — commits locate it by identity. */
   item: unknown;
   diagnostics: Diagnostic[];
@@ -561,7 +565,6 @@ function EntityBindingCard({
 }) {
   const [newProp, setNewProp] = useState("");
   const propListId = useId();
-  const base = `mapping.entities[${index}]`;
   const map = isMap(item) ? item : null;
   const entityName = map ? scalarText(memberValue(map, "entity")) : "";
   const props = map ? mapAt(map, ["properties"]) : null;
@@ -686,6 +689,7 @@ function EntityBindingCard({
 
 function EventBindingCard({
   index,
+  base,
   item,
   diagnostics,
   eventOptions,
@@ -696,6 +700,9 @@ function EventBindingCard({
   onRemove,
 }: {
   index: number;
+  /** Diagnostic path prefix, e.g. `mapping.events[0]` or
+   *  `mapping.sources[1].events[0]`. */
+  base: string;
   item: unknown;
   diagnostics: Diagnostic[];
   eventOptions: { id: string; options: string[] };
@@ -705,7 +712,6 @@ function EventBindingCard({
   editItem: (item: unknown, fn: (m: YAMLMap, d: Document) => void) => void;
   onRemove: () => void;
 }) {
-  const base = `mapping.events[${index}]`;
   const map = isMap(item) ? item : null;
   const whenNode = map?.getIn(["when"], true);
   const observedNode = map?.getIn([timeFields.observation], true);
@@ -857,6 +863,201 @@ function EventBindingCard({
   );
 }
 
+/** Shared props the binding sections need from `MappingForm`. */
+interface BindingContext {
+  diagnostics: Diagnostic[];
+  entityOptions: { id: string; options: string[] };
+  eventOptions: { id: string; options: string[] };
+  domainDraft: string | null;
+  domainFallback: DomainDefinition | null;
+  vocabulary: ContractVocabulary | null;
+  timeFields: { occurrence: string; observation: string };
+  update: <T>(fn: (d: Document) => T) => T | undefined;
+  /** Locate a seq item by node identity within the seq at `seqPath`, then
+   *  mutate it — a remove queued in the same render pass cannot shift
+   *  this write. */
+  editItem: (
+    seqPath: readonly (string | number)[],
+  ) => (item: unknown, fn: (m: YAMLMap, d: Document) => void) => void;
+  removeItem: (
+    seqPath: readonly (string | number)[],
+  ) => (item: unknown) => void;
+}
+
+/**
+ * One source's binding lists — either the mapping's top-level
+ * entities/events (single-source form) or a `sources[]` entry's.
+ * `containerPath` is the doc path to the map holding the binding keys;
+ * `diagBase` is the same location as a core diagnostic path.
+ */
+function BindingsSections({
+  doc,
+  containerPath,
+  diagBase,
+  ctx,
+}: {
+  doc: Document;
+  containerPath: readonly (string | number)[];
+  diagBase: string;
+  ctx: BindingContext;
+}) {
+  const {
+    diagnostics,
+    entityOptions,
+    eventOptions,
+    domainDraft,
+    domainFallback,
+    vocabulary,
+    timeFields,
+    update,
+    editItem,
+    removeItem,
+  } = ctx;
+  const entitiesPath = [...containerPath, "entities"];
+  const eventsPath = [...containerPath, "events"];
+  const entities = seqAt(doc, entitiesPath);
+  const events = seqAt(doc, eventsPath);
+  return (
+    <>
+      <FormSection
+        title="Entity bindings"
+        path={`${diagBase}.entities`}
+        diagnostics={diagnostics}
+        action={
+          <button
+            type="button"
+            onClick={() =>
+              update((d) => {
+                ensureSeq(d, entitiesPath).add(
+                  d.createNode({ entity: "", id: { field: "" } }),
+                );
+              })
+            }
+          >
+            Add entity binding
+          </button>
+        }
+      >
+        {entities === null || entities.items.length === 0 ? (
+          <p className="hint">No entity bindings in the draft.</p>
+        ) : (
+          entities.items.map((item, i) => (
+            <EntityBindingCard
+              key={i}
+              index={i}
+              base={`${diagBase}.entities[${i}]`}
+              item={item}
+              diagnostics={diagnostics}
+              entityOptions={entityOptions}
+              propertyOptions={(entity) =>
+                domainEntityProperties(domainDraft, domainFallback, entity)
+              }
+              vocabulary={vocabulary}
+              editItem={editItem(entitiesPath)}
+              onRemove={() => removeItem(entitiesPath)(item)}
+            />
+          ))
+        )}
+      </FormSection>
+
+      <FormSection
+        title="Event bindings"
+        path={`${diagBase}.events`}
+        diagnostics={diagnostics}
+        action={
+          <button
+            type="button"
+            onClick={() =>
+              update((d) => {
+                ensureSeq(d, eventsPath).add(
+                  d.createNode({
+                    event: "",
+                    subject: { entity: "", id: { field: "" } },
+                    [timeFields.occurrence]: { field: "", as: "datetime" },
+                  }),
+                );
+              })
+            }
+          >
+            Add event binding
+          </button>
+        }
+      >
+        {events === null || events.items.length === 0 ? (
+          <p className="hint">No event bindings in the draft.</p>
+        ) : (
+          events.items.map((item, i) => (
+            <EventBindingCard
+              key={i}
+              index={i}
+              base={`${diagBase}.events[${i}]`}
+              item={item}
+              diagnostics={diagnostics}
+              eventOptions={eventOptions}
+              entityOptions={entityOptions}
+              vocabulary={vocabulary}
+              timeFields={timeFields}
+              editItem={editItem(eventsPath)}
+              onRemove={() => removeItem(eventsPath)(item)}
+            />
+          ))
+        )}
+      </FormSection>
+    </>
+  );
+}
+
+/** One `mapping.sources[i]` entry: its name/format plus scoped bindings. */
+function SourceScope({
+  index,
+  item,
+  ctx,
+}: {
+  index: number;
+  item: unknown;
+  ctx: BindingContext & {
+    value: (path: readonly (string | number)[]) => string;
+    textCommit: (
+      path: readonly (string | number)[],
+    ) => (text: string) => string;
+    doc: Document;
+  };
+}) {
+  const { diagnostics, vocabulary, value, textCommit, doc, removeItem } = ctx;
+  const path = [ROOT, "sources", index];
+  const diagBase = `mapping.sources[${index}]`;
+  return (
+    <fieldset className="form-card">
+      <legend>Source {index + 1}</legend>
+      <FieldDiagnostics diagnostics={diagnostics} path={diagBase} deep={false} />
+      <TextField
+        label="Source name"
+        value={value([...path, "name"])}
+        commit={textCommit([...path, "name"])}
+        diagnostics={diagnostics}
+        path={`${diagBase}.name`}
+      />
+      <SelectField
+        label="Source format"
+        value={value([...path, "format"])}
+        options={vocabulary?.sourceFormats ?? null}
+        commit={textCommit([...path, "format"])}
+        diagnostics={diagnostics}
+        path={`${diagBase}.format`}
+      />
+      <BindingsSections
+        doc={doc}
+        containerPath={path}
+        diagBase={diagBase}
+        ctx={ctx}
+      />
+      <button type="button" onClick={() => removeItem([ROOT, "sources"])(item)}>
+        Remove source
+      </button>
+    </fieldset>
+  );
+}
+
 export function MappingForm() {
   const { state } = useWorkspace();
   const { parsed, update } = useDraftDoc(FILE);
@@ -886,32 +1087,45 @@ export function MappingForm() {
     (text: string): string =>
       update((d) => commitText(d, path, text)) ?? text;
 
-  const entities = seqAt(doc, [ROOT, "entities"]);
-  const events = seqAt(doc, [ROOT, "events"]);
   const entityOptions = { id: "mapping-domain-entities", options: refs.entities };
   const eventOptions = { id: "mapping-domain-events", options: refs.events };
 
-  /** Locate a bindings seq item by node identity, then mutate it — a
-   *  remove queued in the same render pass cannot shift this write. */
-  const editItem =
-    (seqKey: "entities" | "events") =>
-    (item: unknown, fn: (m: YAMLMap, d: Document) => void) =>
+  const editItem: BindingContext["editItem"] =
+    (seqPath) =>
+    (item, fn) =>
       update((d) => {
-        const seq = seqAt(d, [ROOT, seqKey]);
+        const seq = seqAt(d, seqPath);
         const idx = seq ? seq.items.indexOf(item) : -1;
         if (!seq || idx < 0) return;
         if (!isMap(seq.items[idx])) seq.items[idx] = d.createNode({});
         fn(seq.items[idx] as YAMLMap, d);
       });
 
-  const removeItem =
-    (seqKey: "entities" | "events") =>
-    (item: unknown) =>
+  const removeItem: BindingContext["removeItem"] =
+    (seqPath) =>
+    (item) =>
       update((d) => {
-        const seq = seqAt(d, [ROOT, seqKey]);
+        const seq = seqAt(d, seqPath);
         const idx = seq ? seq.items.indexOf(item) : -1;
         if (seq && idx >= 0) seq.items.splice(idx, 1);
       });
+
+  const ctx: BindingContext = {
+    diagnostics,
+    entityOptions,
+    eventOptions,
+    domainDraft,
+    domainFallback,
+    vocabulary,
+    timeFields,
+    update,
+    editItem,
+    removeItem,
+  };
+
+  // A draft declaring `sources:` renders one section per source; the
+  // single-source `source:` form keeps its original shape.
+  const sourcesSeq = seqAt(doc, [ROOT, "sources"]);
 
   return (
     <section className="definition-form" aria-labelledby="mapping-form-heading">
@@ -936,110 +1150,109 @@ export function MappingForm() {
         path="mapping.description"
       />
 
-      <FormSection
-        title="Source"
-        path="mapping.source"
-        diagnostics={diagnostics}
-      >
-        <TextField
-          label="Source name"
-          value={value([ROOT, "source", "name"])}
-          commit={textCommit([ROOT, "source", "name"])}
-          diagnostics={diagnostics}
-          path="mapping.source.name"
-        />
-        <SelectField
-          label="Source format"
-          value={value([ROOT, "source", "format"])}
-          options={vocabulary?.sourceFormats ?? null}
-          commit={textCommit([ROOT, "source", "format"])}
-          diagnostics={diagnostics}
-          path="mapping.source.format"
-        />
-      </FormSection>
-
-      <FormSection
-        title="Entity bindings"
-        path="mapping.entities"
-        diagnostics={diagnostics}
-        action={
-          <button
-            type="button"
-            onClick={() =>
-              update((d) => {
-                ensureSeq(d, [ROOT, "entities"]).add(
-                  d.createNode({ entity: "", id: { field: "" } }),
-                );
-              })
+      {sourcesSeq === null ? (
+        <>
+          <FormSection
+            title="Source"
+            path="mapping.source"
+            diagnostics={diagnostics}
+            action={
+              <button
+                type="button"
+                onClick={() =>
+                  update((d) => {
+                    const m = mapAt(d, [ROOT]);
+                    if (!m) return;
+                    const source = m.get("source", true);
+                    const entities = m.get("entities", true);
+                    const events = m.get("events", true);
+                    const entry = d.createNode({}) as YAMLMap;
+                    // Move the declared name/format pairs (and their
+                    // comments) into the new source entry.
+                    if (isMap(source)) entry.items = [...source.items];
+                    entry.set(
+                      "entities",
+                      isSeq(entities) ? entities : d.createNode([]),
+                    );
+                    entry.set(
+                      "events",
+                      isSeq(events) ? events : d.createNode([]),
+                    );
+                    const seq = d.createNode([entry]);
+                    m.set("sources", seq);
+                    m.delete("source");
+                    m.delete("entities");
+                    m.delete("events");
+                  })
+                }
+              >
+                Convert to sources list
+              </button>
             }
           >
-            Add entity binding
-          </button>
-        }
-      >
-        {entities === null || entities.items.length === 0 ? (
-          <p className="hint">No entity bindings in the draft.</p>
-        ) : (
-          entities.items.map((item, i) => (
-            <EntityBindingCard
-              key={i}
-              index={i}
-              item={item}
+            <TextField
+              label="Source name"
+              value={value([ROOT, "source", "name"])}
+              commit={textCommit([ROOT, "source", "name"])}
               diagnostics={diagnostics}
-              entityOptions={entityOptions}
-              propertyOptions={(entity) =>
-                domainEntityProperties(domainDraft, domainFallback, entity)
+              path="mapping.source.name"
+            />
+            <SelectField
+              label="Source format"
+              value={value([ROOT, "source", "format"])}
+              options={vocabulary?.sourceFormats ?? null}
+              commit={textCommit([ROOT, "source", "format"])}
+              diagnostics={diagnostics}
+              path="mapping.source.format"
+            />
+          </FormSection>
+
+          <BindingsSections
+            doc={doc}
+            containerPath={[ROOT]}
+            diagBase="mapping"
+            ctx={ctx}
+          />
+        </>
+      ) : (
+        <FormSection
+          title="Sources"
+          path="mapping.sources"
+          diagnostics={diagnostics}
+          action={
+            <button
+              type="button"
+              onClick={() =>
+                update((d) => {
+                  ensureSeq(d, [ROOT, "sources"]).add(
+                    d.createNode({
+                      name: "",
+                      format: "",
+                      entities: [],
+                      events: [],
+                    }),
+                  );
+                })
               }
-              vocabulary={vocabulary}
-              editItem={editItem("entities")}
-              onRemove={() => removeItem("entities")(item)}
-            />
-          ))
-        )}
-      </FormSection>
-
-      <FormSection
-        title="Event bindings"
-        path="mapping.events"
-        diagnostics={diagnostics}
-        action={
-          <button
-            type="button"
-            onClick={() =>
-              update((d) => {
-                ensureSeq(d, [ROOT, "events"]).add(
-                  d.createNode({
-                    event: "",
-                    subject: { entity: "", id: { field: "" } },
-                    [timeFields.occurrence]: { field: "", as: "datetime" },
-                  }),
-                );
-              })
-            }
-          >
-            Add event binding
-          </button>
-        }
-      >
-        {events === null || events.items.length === 0 ? (
-          <p className="hint">No event bindings in the draft.</p>
-        ) : (
-          events.items.map((item, i) => (
-            <EventBindingCard
-              key={i}
-              index={i}
-              item={item}
-              diagnostics={diagnostics}
-              eventOptions={eventOptions}
-              entityOptions={entityOptions}
-              vocabulary={vocabulary}
-              timeFields={timeFields}
-              editItem={editItem("events")}
-              onRemove={() => removeItem("events")(item)}
-            />
-          ))
-        )}
-      </FormSection>
+            >
+              Add source
+            </button>
+          }
+        >
+          {sourcesSeq.items.length === 0 ? (
+            <p className="hint">No sources in the draft.</p>
+          ) : (
+            sourcesSeq.items.map((item, i) => (
+              <SourceScope
+                key={i}
+                index={i}
+                item={item}
+                ctx={{ ...ctx, value, textCommit, doc }}
+              />
+            ))
+          )}
+        </FormSection>
+      )}
     </section>
   );
 }

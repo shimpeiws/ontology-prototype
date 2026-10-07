@@ -16,9 +16,10 @@ The differences from ingest are the point of the type:
 - Versions are explicit: the result carries the sample's content digest and
   the same ``mapping_digest`` recipe ingest records, and the preview id and
   observation ids are derived deterministically from the input, mapping, and
-  domain digests — a preview result states exactly which input and which
-  definitions produced it. Resolution consults the domain (required
-  properties, event-time policy), so the domain is part of preview identity.
+  domain digests plus the selected source name — a preview result states
+  exactly which input, which definitions, and which source produced it.
+  Resolution consults the domain (required properties, event-time policy),
+  so the domain is part of preview identity.
 
 Never raises on bad input: encoding errors, parse failures, and malformed
 records all become diagnostics, same as ingest.
@@ -43,11 +44,14 @@ from datetime import datetime, timezone
 from .diagnostics import Diagnostic, Diagnostics
 from .ingest import (
     Observation,
+    _check_references,
     _domain_digest,
     _mapping_digest,
     _parse_csv,
     _parse_json,
     _process_record,
+    _UnresolvedRef,
+    select_source,
 )
 from .model import Workspace
 from .yamlio import MAX_FILE_BYTES
@@ -64,8 +68,9 @@ class PreviewResult:
 
     ``record_count`` counts every record the parser produced, including ones
     dropped by the record cap; ``truncated`` marks that drop. ``preview_id``
-    is deterministic — derived from the input, mapping, and domain digests —
-    so an identical re-run reports identical observation ids.
+    is deterministic — derived from the input, mapping, and domain digests
+    plus the selected source name — so an identical re-run reports identical
+    observation ids.
     """
 
     diagnostics: list[Diagnostic] = field(default_factory=list)
@@ -96,23 +101,28 @@ def preview_snapshot(
     workspace: Workspace,
     content: bytes,
     *,
+    source: str | None = None,
     observed_at: datetime | None = None,
 ) -> PreviewResult:
     """Run the draft mapping over in-memory source bytes — no side effects.
 
     ``workspace`` is the already-validated draft bundle (e.g. from
-    ``load_workspace_texts``); ``content`` is the raw sample. The source
-    format comes from ``mapping.source.format``, like ingest.
+    ``load_workspace_texts``); ``content`` is the raw sample. ``source``
+    selects the declared source like ingest does; the format always comes
+    from that source's declaration, never from the request.
     """
     diag = Diagnostics()
     result = PreviewResult()
 
-    source = workspace.mapping.source
-    result.source = source.name
-    result.format = source.format
+    selected = select_source(workspace.mapping, source, diag)
+    if selected is None:
+        result.diagnostics = diag.items
+        return result
+    result.source = selected.name
+    result.format = selected.format
     result.mapping_digest = _mapping_digest(workspace)
     # Diagnostics name the sample like a snapshot file: "jobs.csv".
-    label = f"{source.name}.{source.format}"
+    label = f"{selected.name}.{selected.format}"
 
     if observed_at is None:
         observed_at = datetime.now(timezone.utc)
@@ -146,7 +156,7 @@ def preview_snapshot(
 
     records = (
         _parse_csv(text, diag, label)
-        if source.format == "csv"
+        if selected.format == "csv"
         else _parse_json(text, diag, label)
     )
     if records is None:
@@ -166,24 +176,34 @@ def preview_snapshot(
     if not records:
         diag.warning("INGEST.EMPTY", "sample contains no records", file=label)
 
+    # The selected source is part of preview identity: identical bytes
+    # resolved under different sources produce different facts, so their
+    # preview and observation ids must differ too.
     result.preview_id = (
         f"prev-{result.content_digest[7:19]}-{result.mapping_digest[7:19]}"
-        f"-{_domain_digest(workspace)[7:19]}"
+        f"-{_domain_digest(workspace)[7:19]}-{selected.name}"
     )
+    pending: list[tuple[Observation, _UnresolvedRef]] = []
     for row, raw in records:
-        result.observations.append(
-            _process_record(
-                workspace,
-                raw,
-                row=row,
-                file_label=label,
-                ingest_id=result.preview_id,
-                observed_at=observed_at,
-                content_digest=result.content_digest,
-                mapping_digest=result.mapping_digest,
-                run_diag=diag,
-            )
+        observation, refs = _process_record(
+            workspace,
+            selected,
+            raw,
+            row=row,
+            file_label=label,
+            ingest_id=result.preview_id,
+            observed_at=observed_at,
+            content_digest=result.content_digest,
+            mapping_digest=result.mapping_digest,
+            run_diag=diag,
         )
+        result.observations.append(observation)
+        pending.extend((observation, ref) for ref in refs)
+    # Preview reads nothing beyond the posted bundle: refs resolve against
+    # the sample's own accepted entities only — never the canonical store —
+    # so cross-source refs report UNRESOLVED_REF exactly like a first
+    # ingest would.
+    _check_references(pending, result.accepted, set(), diag, label)
     result.diagnostics = diag.items
     return result
 
