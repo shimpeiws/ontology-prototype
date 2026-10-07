@@ -17,7 +17,8 @@ fix, or explicitly accepted for v0.3.
 ## Coverage check
 
 `ontology check examples/ticket-sla` passes with 0 errors and 0
-warnings, so every remaining gap above is a *runtime or authoring* gap —
-the schema validates the intent and the code registry refuses it.
-`apps/cli/tests/test_ticket_sla_cli.py` pins the runnable surface and
-each `unavailable`/`UNSUPPORTED` outcome above.
+warnings — the schema validates the intent, so every remaining gap
+above is a *runtime or authoring* limitation rather than a validation
+failure. Only G-02 is still refused by a code registry, which
+`apps/cli/tests/test_ticket_sla_cli.py` pins as the `unavailable`
+guardrail outcome.
