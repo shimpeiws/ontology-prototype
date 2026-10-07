@@ -22,6 +22,8 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 | [docs/v0.1.md](docs/v0.1.md) | v0.1 acceptance criteria and the demonstration workflow |
 | [docs/walkthrough.md](docs/walkthrough.md) | Repeatable end-to-end walkthrough of the complete loop |
 | [docs/v0.1-live-model-run.md](docs/v0.1-live-model-run.md) | Live-model run evidence for the v0.1 release review |
+| [docs/v0.2-walkthrough.md](docs/v0.2-walkthrough.md) | Repeatable FDE authoring walkthrough: UI → YAML → CLI |
+| [docs/v0.2.md](docs/v0.2.md) | v0.2 acceptance review, limitations, and single-user model |
 | [docs/monorepo.md](docs/monorepo.md) | Repository boundaries and the shared-core rule |
 | [docs/workspace.md](docs/workspace.md) | Workspace definition format and validation rules |
 | [docs/ingestion.md](docs/ingestion.md) | CSV/JSON ingestion and immutable observation evidence |
