@@ -35,9 +35,12 @@ The older `jobs.csv` / `jobs-later.csv` pair belongs to the ingestion
 documentation examples and is not part of this run.
 
 All timestamps are date-only and resolve to midnight UTC under
-`date_only_timezone`. The cohort boundary `2026-10-15T00:00:00Z` marks the
-intervention: baseline jobs completed before it, the after cohort after it.
-Diagnosis runs at `2026-10-21T00:00:00Z`; evaluation at
+`date_only_timezone`. They are synthetic scenario times: the as-of and
+boundary values are caller-supplied scenario parameters, not the real time
+of your run, so a snapshot "later" than today simply simulates a future
+re-observation of the source. The cohort boundary `2026-10-15T00:00:00Z`
+marks the intervention: baseline jobs completed before it, the after cohort
+after it. Diagnosis runs at `2026-10-21T00:00:00Z`; evaluation at
 `2026-10-26T00:00:00Z`.
 
 ## Steps
@@ -76,8 +79,10 @@ ontology execute examples/job-invoicing <proposal-id>
 ontology decide examples/job-invoicing <proposal-id> --approve --reviewer fde-sato
 ontology execute examples/job-invoicing <proposal-id>
 # → succeeded: reminder rem-… appended to .ontology/reminders.csv
-# Repeating either step is safe: a second execute reports "(already executed)"
+# Repeating execute is idempotent: a second run reports "(already executed)"
 # and appends nothing; re-ingesting the current snapshot appends 0 events.
+# (decide is append-only by design — each call records another decision, so
+# repeat approvals are not a no-op.)
 
 # 7. Re-observe the source after the outcome arrives.
 ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-followup.csv
