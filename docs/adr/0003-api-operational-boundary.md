@@ -105,9 +105,11 @@ invocations. Coordination is decided as follows:
   persist and stay inspectable; the record arbitrates, not a lock. The same
   holds for every append-only history table — races append, they do not
   overwrite. The `entities` current-state table is the exception:
-  concurrent merges are serialized writers, each committing whole — the
-  last committed merge wins the row, with the event stream still carrying
-  every observation behind it.
+  concurrent merges are serialized writers, each committing whole, and the
+  upsert's guard keeps the *newest observed* state — an incoming
+  observation wins the row only when its `updated_at`, tie-broken by
+  `last_ingest_id`, outranks the stored one — with the event stream still
+  carrying every observation behind it.
 - **`trace.jsonl` stays best-effort.** Concurrent appends may interleave on
   oversized events; the journal is evidence, so no lock is taken on it.
   Correctness state lives only in `canon.db`.
@@ -182,9 +184,9 @@ fine — it is the implicitness that fails the coordination requirement.
   in the API — small core and transport changes owned by the endpoint
   issues.
 - Append-only history plus serialized entity upserts carry the concurrency
-  story: races between writers produce ordered appends or whole
-  transactions, not corruption, and the busy failure is the only
-  coordination error a caller ever sees.
+  story: races between writers produce ordered appends or
+  observation-ordered upserts, not corruption, and the busy failure is the
+  only coordination error a caller ever sees.
 - Reviewer identity is self-asserted on both surfaces. Any future
   multi-user or network-exposed deployment must revisit this — it is a
   deliberate consequence of the single-user local tool, not an oversight.
