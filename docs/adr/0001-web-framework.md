@@ -60,4 +60,4 @@ npm --prefix apps/web run build
 - `apps/web` owns presentation, navigation, and draft state. It reaches workspace files only through the API.
 - `apps/cli` continues to use the same core and workspace files.
 - Local servers bind to `127.0.0.1`. The API resolves requested paths and verifies that the resolved path remains under a configured root, including when symlinks are present.
-- The API and Web authoring flow does not access canonical SQLite data, traces, proposals, approvals, or write-back storage.
+- The API and Web authoring flow does not access canonical SQLite data, traces, proposals, approvals, or write-back storage. The boundary for the operational surface — inspection reads and decision writes over the same store, with execution never exposed — is decided separately in [ADR 0003](0003-api-operational-boundary.md).

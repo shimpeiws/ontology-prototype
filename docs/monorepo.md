@@ -54,7 +54,7 @@ JSON/API schemas may be derived from shared contracts in v0.2. Avoid independent
 
 Add the API and FDE workspace Web app over the established core. Candidate surfaces are domain-model visualization/editing, mapping previews, and evaluation/agent definition editing. Reuse the validation and approval boundaries; choose HTTP/frontend technology and detailed UI flows during v0.2 planning.
 
-Multiple apps do not imply multiple production services, independent databases, multi-user editing, or concurrent writers. Deployment topology and storage coordination require explicit decisions when the API is implemented.
+Multiple apps do not imply multiple production services, independent databases, multi-user editing, or concurrent writers. Deployment topology and storage coordination require explicit decisions when the API is implemented. Storage coordination between the API and CLI over the shared `.ontology/` store is decided in [ADR 0003](adr/0003-api-operational-boundary.md); deployment topology remains undecided.
 
 ## References
 

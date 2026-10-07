@@ -5,8 +5,13 @@ that exposes the shared core's workspace contracts over HTTP for the FDE
 authoring UI. It owns transport only — request/response typing, workspace
 root enforcement, and error mapping. Every validation result comes from
 `ontology_core`; the API never re-validates, never runs the CLI as a
-subprocess, and never touches canonical state, proposals, approvals, or
-write-back storage.
+subprocess, and — on the authoring surface documented here — never touches
+canonical state, proposals, approvals, or write-back storage.
+
+The operational surface is a separate set of endpoints governed by
+[ADR 0003](adr/0003-api-operational-boundary.md): inspection reads and
+human decision writes through the same core — never execution, write-back,
+or run triggers.
 
 ## Install and startup
 
