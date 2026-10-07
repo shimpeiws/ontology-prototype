@@ -1,0 +1,6 @@
+id,status,assignee,completed_at,invoiced_at
+C01,completed,taro,2026-10-17,2026-10-20
+C02,completed,taro,2026-10-18,2026-10-21
+C03,completed,hanako,2026-10-19,2026-10-23
+C04,in_progress,hanako,,
+C05,completed,taro,2026-10-24,
