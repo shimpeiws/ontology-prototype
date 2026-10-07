@@ -259,6 +259,7 @@ def create_app(
     @app.post(
         f"{API_PREFIX}/workspaces/trace",
         response_model=TraceOverviewResponse,
+        response_model_exclude_unset=True,
         responses={
             400: {"model": ErrorResponse},
             403: {"model": ErrorResponse},

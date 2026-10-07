@@ -10,6 +10,7 @@ unchanged while transport failures stay ``{error}``.
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -30,12 +31,19 @@ def make_client(*roots: Path) -> TestClient:
 def cli(capsys, *args: str) -> str:
     code = cli_main(list(args))
     out = capsys.readouterr().out
-    assert code == 0, f"ontology {' '.join(args)} exited {code}: {out}"
+    assert code == EXIT_OK, f"ontology {' '.join(args)} exited {code}: {out}"
     return out
 
 
 def cli_json(capsys, *args: str) -> dict:
     return json.loads(cli(capsys, *args))
+
+
+def cli_payload(capsys, *args: str) -> dict:
+    """Parse the CLI's --json output regardless of exit code — domain
+    failures print a payload and exit non-zero."""
+    cli_main(list(args))
+    return json.loads(capsys.readouterr().out)
 
 
 @pytest.fixture
@@ -384,6 +392,132 @@ class TestContractFailures:
                 "TRACE.INVALID_SUBJECT"
             )
 
+    def test_corrupt_store(self, walked, roots, capsys) -> None:
+        # A damaged canon.db must degrade to the core's store-error
+        # diagnostics (200 + ok:false), never a 500.
+        db = walked.workspace / ".ontology" / "canon.db"
+        db.write_bytes(b"not a sqlite database")
+
+        expected = cli_payload(
+            capsys, "trace", str(walked.workspace), "--json"
+        )
+        body = post(
+            make_client(roots), "trace", path=str(walked.workspace)
+        )
+        assert body == {"api_version": "v1", **expected}
+        assert any(
+            d["code"] == "TRACE.STORE_ERROR" for d in body["diagnostics"]
+        )
+
+        runs = post(
+            make_client(roots), "evaluations", path=str(walked.workspace)
+        )
+        assert runs["ok"] is False
+        assert runs["diagnostics"][0]["code"] == "EVALUATION.STORE_ERROR"
+
+        run = post(
+            make_client(roots),
+            "evaluations/run",
+            path=str(walked.workspace),
+            run_id=walked.evaluation_run_id,
+        )
+        assert run["ok"] is False
+        assert run["diagnostics"][0]["code"] == "EVALUATION.STORE_ERROR"
+
+        cli_main(["proposals", str(walked.workspace), "--json"])
+        expected_proposals = json.loads(capsys.readouterr().out)
+        proposals = post(
+            make_client(roots), "proposals", path=str(walked.workspace)
+        )
+        assert proposals == {"api_version": "v1", **expected_proposals}
+        assert proposals["diagnostics"][0]["code"] == (
+            "DECISION.STORE_ERROR"
+        )
+
+    def test_unindexed_proposals_are_not_backfilled(
+        self, walked, roots
+    ) -> None:
+        # Legacy state: the diagnosis run holds proposals that were never
+        # indexed into the proposals table (e.g. recorded before the
+        # table existed). The CLI's read-write path backfills them on
+        # first `proposals`; the read-only API must not — it reports the
+        # index as-is while the trace view still surfaces them.
+        db = walked.workspace / ".ontology" / "canon.db"
+        conn = sqlite3.connect(db)
+        try:
+            # The table is append-only; the test drops and restores the
+            # guard trigger to simulate a store that predates the index.
+            conn.execute("DROP TRIGGER proposals_no_delete")
+            conn.execute("DELETE FROM proposals")
+            conn.execute(
+                "CREATE TRIGGER proposals_no_delete BEFORE DELETE ON "
+                "proposals BEGIN SELECT RAISE(ABORT, 'proposals are "
+                "append-only'); END"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        before = fingerprint(walked.workspace / ".ontology")
+        client = make_client(roots)
+        path = str(walked.workspace)
+
+        body = post(client, "proposals", path=path)
+        assert body["ok"] is True
+        assert body["proposals"] == []
+
+        detail = post(
+            client,
+            "proposals/show",
+            path=path,
+            proposal_id=walked.proposal_id,
+        )
+        assert detail["ok"] is False
+        assert detail["diagnostics"][0]["code"] == (
+            "DECISION.UNKNOWN_PROPOSAL"
+        )
+
+        overview = post(client, "trace", path=path)
+        assert overview["proposals"]["unindexed"] == 1
+
+        assert fingerprint(walked.workspace / ".ontology") == before
+
+    def test_failure_payloads_match_cli(
+        self, walked, roots, capsys
+    ) -> None:
+        # Domain failures are CLI-identical payloads, not just codes.
+        client = make_client(roots)
+        path = str(walked.workspace)
+
+        expected = cli_payload(
+            capsys, "trace", path, "--run", "dgx-nope", "--json"
+        )
+        assert post(client, "trace/run", path=path, run_id="dgx-nope") == {
+            "api_version": "v1",
+            **expected,
+        }
+
+        expected = cli_payload(
+            capsys, "trace", path, "--subject", "nope", "--json"
+        )
+        assert post(
+            client, "trace/subject", path=path, subject="nope"
+        ) == {"api_version": "v1", **expected}
+
+        expected = cli_payload(
+            capsys, "evaluate", path, "--run", "evl-nope", "--json"
+        )
+        assert post(
+            client, "evaluations/run", path=path, run_id="evl-nope"
+        ) == {"api_version": "v1", **expected}
+
+        expected = cli_payload(
+            capsys, "proposals", path, "--show", "dgx-x-p9", "--json"
+        )
+        assert post(
+            client, "proposals/show", path=path, proposal_id="dgx-x-p9"
+        ) == {"api_version": "v1", **expected}
+
     def test_trace_survives_broken_definitions(
         self, walked, roots, capsys
     ) -> None:
@@ -484,14 +618,17 @@ class TestPathGuards:
             ("trace", {"path": ""}),
             ("trace/subject", {"path": "x"}),
             ("trace/subject", {"path": "x", "subject": ""}),
+            ("trace/subject", {"path": "x", "subject": "J/1" * 600}),
             ("trace/run", {"path": "x"}),
             ("trace/run", {"path": "x", "run_id": 4}),
+            ("trace/run", {"path": "x", "run_id": "r" * 2000}),
             ("evaluations", {}),
             ("evaluations/run", {"path": "x"}),
             ("evaluations/run", {"path": "x", "run_id": None}),
             ("proposals", {"path": None}),
             ("proposals/show", {"path": "x"}),
             ("proposals/show", {"path": "x", "proposal_id": ""}),
+            ("proposals/show", {"path": "x", "proposal_id": "p" * 2000}),
         ]
         for route, body in bad:
             response = client.post(

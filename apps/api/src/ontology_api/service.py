@@ -264,7 +264,7 @@ class CoreWorkspaceService:
     def trace_overview(self, path: str) -> dict[str, Any]:
         """The ``ontology trace --json`` overview payload."""
         resolved = self._workspace_dir(path)
-        return traceview.trace_overview(self._assemble(resolved))
+        return self._trace_view(resolved, traceview.trace_overview)[1]
 
     def trace_subject(self, path: str, subject: str) -> dict[str, Any]:
         """The ``ontology trace --subject Entity/Id --json`` payload."""
@@ -276,19 +276,22 @@ class CoreWorkspaceService:
                 "TRACE.INVALID_SUBJECT",
                 f"invalid --subject {subject!r}: expected 'Entity/Id'",
             )
-        asm = self._assemble(resolved)
+        asm, view = self._trace_view(
+            resolved, lambda a: traceview.trace_subject(a, entity, subject_id)
+        )
         return {
             "workspace": str(resolved),
             "ok": asm.ok,
-            "trace": traceview.trace_subject(asm, entity, subject_id),
+            "trace": view,
             "diagnostics": [d.to_dict() for d in asm.diagnostics],
         }
 
     def trace_run(self, path: str, run_id: str) -> dict[str, Any]:
         """The ``ontology trace --run <id> --json`` payload."""
         resolved = self._workspace_dir(path)
-        asm = self._assemble(resolved)
-        view = traceview.trace_anchor(asm, run_id)
+        asm, view = self._trace_view(
+            resolved, lambda a: traceview.trace_anchor(a, run_id)
+        )
         if view is None:
             return _failure(
                 resolved,
@@ -307,17 +310,18 @@ class CoreWorkspaceService:
         """Every frozen evaluation run, in store order — full records in
         the same shape the ``evaluate --run`` detail returns."""
         resolved = self._workspace_dir(path)
-        store = self._readonly_store(resolved)
         try:
-            runs = store.evaluation_runs()
+            store = self._readonly_store(resolved)
+            try:
+                runs = store.evaluation_runs()
+            finally:
+                store.close()
         except Exception as exc:
             return _failure(
                 resolved,
                 "EVALUATION.STORE_ERROR",
                 f"cannot read canonical store: {exc}",
             )
-        finally:
-            store.close()
         return {
             "workspace": str(resolved),
             "ok": True,
@@ -332,17 +336,18 @@ class CoreWorkspaceService:
         edit breaks the workspace.
         """
         resolved = self._workspace_dir(path)
-        store = self._readonly_store(resolved)
         try:
-            record = get_evaluation_run(resolved, run_id, store=store)
+            store = self._readonly_store(resolved)
+            try:
+                record = get_evaluation_run(resolved, run_id, store=store)
+            finally:
+                store.close()
         except Exception as exc:
             return _failure(
                 resolved,
                 "EVALUATION.STORE_ERROR",
                 f"cannot read canonical store: {exc}",
             )
-        finally:
-            store.close()
         if record is None:
             return _failure(
                 resolved,
@@ -363,18 +368,19 @@ class CoreWorkspaceService:
                 "ok": False,
                 "diagnostics": [d.to_dict() for d in loaded.diagnostics],
             }
-        store = self._readonly_store(resolved)
         try:
-            assert loaded.workspace is not None
-            views = proposal_view(loaded.workspace, store=store)
+            store = self._readonly_store(resolved)
+            try:
+                assert loaded.workspace is not None
+                views = proposal_view(loaded.workspace, store=store)
+            finally:
+                store.close()
         except Exception as exc:
             return _failure(
                 resolved,
                 "DECISION.STORE_ERROR",
                 f"cannot read canonical store: {exc}",
             )
-        finally:
-            store.close()
         return {
             "workspace": str(resolved),
             "ok": True,
@@ -391,18 +397,19 @@ class CoreWorkspaceService:
                 "ok": False,
                 "diagnostics": [d.to_dict() for d in loaded.diagnostics],
             }
-        store = self._readonly_store(resolved)
         try:
-            assert loaded.workspace is not None
-            views = proposal_view(loaded.workspace, store=store)
+            store = self._readonly_store(resolved)
+            try:
+                assert loaded.workspace is not None
+                views = proposal_view(loaded.workspace, store=store)
+            finally:
+                store.close()
         except Exception as exc:
             return _failure(
                 resolved,
                 "DECISION.STORE_ERROR",
                 f"cannot read canonical store: {exc}",
             )
-        finally:
-            store.close()
         view = next(
             (v for v in views if v["proposal_id"] == proposal_id), None
         )
@@ -419,10 +426,15 @@ class CoreWorkspaceService:
     def _readonly_store(self, resolved: Path) -> SqliteCanonicalStore:
         return SqliteCanonicalStore(resolved / RUNTIME_DIR, readonly=True)
 
-    def _assemble(self, resolved: Path) -> traceview.TraceAssembly:
+    def _trace_view(
+        self, resolved: Path, view
+    ) -> tuple[traceview.TraceAssembly, Any]:
+        """Assemble the trace and build ``view(asm)`` while the store is
+        open — the store never outlives the assembly that read it."""
         store = self._readonly_store(resolved)
         try:
-            return traceview.assemble_trace(resolved, store=store)
+            asm = traceview.assemble_trace(resolved, store=store)
+            return asm, view(asm)
         finally:
             store.close()
 

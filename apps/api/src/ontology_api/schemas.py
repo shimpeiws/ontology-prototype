@@ -90,27 +90,28 @@ class TraceSubjectRequest(WorkspacePathRequest):
     """Follow one subject through the recorded run — like the CLI's
     ``trace --subject Entity/Id``."""
 
-    subject: str = Field(min_length=1)
+    # Bounded because the value is echoed into diagnostic messages.
+    subject: str = Field(min_length=1, max_length=1024)
 
 
 class TraceRunRequest(WorkspacePathRequest):
     """Inspect one recorded artifact id — like the CLI's ``trace --run``."""
 
-    run_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1, max_length=1024)
 
 
 class EvaluationRunRequest(WorkspacePathRequest):
     """Read one frozen evaluation report — like the CLI's
     ``evaluate --run``."""
 
-    run_id: str = Field(min_length=1)
+    run_id: str = Field(min_length=1, max_length=1024)
 
 
 class ProposalRequest(WorkspacePathRequest):
     """Inspect one persisted proposal — like the CLI's
     ``proposals --show``."""
 
-    proposal_id: str = Field(min_length=1)
+    proposal_id: str = Field(min_length=1, max_length=1024)
 
 
 class WorkspaceRef(BaseModel):
@@ -179,7 +180,9 @@ class TraceOverviewResponse(BaseModel):
 
     The section fields are the core's overview dict verbatim; ``extra``
     keys pass through so a new core section can never be silently dropped
-    and diverge from the CLI payload.
+    and diverge from the CLI payload. Every section is optional so a
+    degraded assembly can never trip response validation into a 500 —
+    whatever the core emits is what the client sees.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -187,17 +190,17 @@ class TraceOverviewResponse(BaseModel):
     api_version: str
     workspace: str
     ok: bool
-    journal: dict[str, Any]
-    evidence: dict[str, Any]
-    canonical: dict[str, Any]
-    projection_runs: list[dict[str, Any]]
-    diagnosis_runs: list[dict[str, Any]]
-    proposals: dict[str, Any]
-    decisions: int
-    executions: dict[str, Any]
-    evaluation_runs: list[dict[str, Any]]
-    links: dict[str, Any]
-    diagnostics: list[dict[str, Any]]
+    journal: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
+    canonical: dict[str, Any] | None = None
+    projection_runs: list[dict[str, Any]] | None = None
+    diagnosis_runs: list[dict[str, Any]] | None = None
+    proposals: dict[str, Any] | None = None
+    decisions: int | None = None
+    executions: dict[str, Any] | None = None
+    evaluation_runs: list[dict[str, Any]] | None = None
+    links: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
 
 
 class TraceViewResponse(BaseModel):
