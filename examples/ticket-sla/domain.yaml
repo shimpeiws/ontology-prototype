@@ -1,0 +1,50 @@
+schema_version: 1
+kind: domain
+domain:
+  name: ticket-sla
+  description: Minimal model for the support-ticket first-response SLA workflow.
+  policies:
+    entity_id_type: string
+    event_times:
+      occurrence_field: occurred_at
+      observation_field: observed_at
+      date_only_timezone: UTC
+  entities:
+    Ticket:
+      description: A customer support ticket.
+      properties:
+        status:
+          type: string
+          required: true
+        assignee:
+          type: ref
+          ref: Agent
+          description: Agent responsible for the ticket.
+    Agent:
+      properties:
+        name:
+          type: string
+    Resolution:
+      description: A ticket's resolution record; carries the reopen evidence.
+      properties:
+        ticket:
+          type: ref
+          ref: Ticket
+          required: true
+        reopened:
+          type: boolean
+          description: True when the ticket was reopened after this resolution.
+  events:
+    TicketOpened:
+      subject: Ticket
+      description: A ticket was opened.
+    FirstResponse:
+      subject: Ticket
+      description: The first response was sent to the customer on a ticket.
+    TicketResolved:
+      subject: Ticket
+      description: A ticket was marked resolved.
+  projections:
+    OpenedWithoutFirstResponse:
+      subject: Ticket
+      description: Tickets whose opening is observed without a later first response.

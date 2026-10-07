@@ -1,0 +1,23 @@
+schema_version: 1
+kind: evaluation
+evaluation:
+  name: open-to-first-response-latency
+  description: Hours from TicketOpened to FirstResponse for the same ticket.
+  interval:
+    start_event: TicketOpened
+    end_event: FirstResponse
+  metric: duration
+  aggregation: median
+  unit: hours
+  baseline:
+    value: 26
+    description: Baseline median open-to-first-response latency.
+  target:
+    comparator: lt
+    value: 4
+    description: Strict target; a median of exactly 4 hours is a miss.
+  guardrails:
+    - name: reopen-rate
+      metric: reopen_rate
+      comparator: not_increase
+      description: Reopen rate must not increase versus baseline.
