@@ -22,7 +22,7 @@
 
 - 2026-10-06: The OpenRouter key was already provisioned on the operator
   machine — created earlier at https://openrouter.ai/keys and exported as
-  `OPENROUTER_API_KEY` in the shell environment (also present in `~/.env`).
+  `OPENROUTER_API_KEY` in the shell environment.
   No new key was issued; nothing credential-shaped was written to the
   workspace, the artifact, or this report (verified by grep over the run
   output for the key value and the `sk-or` prefix — zero hits).

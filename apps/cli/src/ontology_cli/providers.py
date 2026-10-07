@@ -26,7 +26,7 @@ from ontology_core import ProviderError, ProviderRequest
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY"
 MODEL_ENV = "ONTOLOGY_MODEL"
-DEFAULT_MODEL = "openai/gpt-4o-mini"
+DEFAULT_MODEL = "anthropic/claude-haiku-4.5"
 DEFAULT_TIMEOUT_SECONDS = 60
 
 

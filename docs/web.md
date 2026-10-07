@@ -38,6 +38,12 @@ The Web app is presentation only:
   unavailable, because a baseless save can never be conflict-checked.
   Save and reload are mutually exclusive in flight — a late save response
   is discarded rather than allowed to roll the reloaded baseline back.
+  Every discard path — revert, remove from draft, close, and leave — is
+  disabled while a save is in flight, because a sent save cannot be
+  recalled. A pending revert confirmation is bound to the active baseline
+  it was armed against: it is withdrawn when a save starts, when the draft
+  turns clean, or when a landed save or reload replaces the baseline, so it
+  can never discard against on-disk text the FDE did not confirm.
 - The Domain page offers structured authoring on top of the raw editor: a
   visual graph of entities/events/projections, an inspectable list, and
   per-concept forms that mutate the draft `domain.yaml` through the

@@ -55,7 +55,7 @@ Every view renders one state at a time; states are shared patterns (#15), not pe
 - **Empty.** A valid but unpopulated definition (no entities, no mapping source selected, preview not yet run) shows an actionable empty state, not an error.
 - **Error.** Missing/inaccessible workspaces, malformed requests, API failures, and failed saves produce diagnostic-bearing error states with retry where the operation is retryable; transport errors never masquerade as validation findings.
 - **Validation.** Core diagnostics appear as a cross-definition list (severity, code, file, dotted path, hint) and as markers on the owning field; errors block activation, warnings do not.
-- **Unsaved draft.** Each definition and the bundle as a whole expose a draft/active indicator; navigating away or closing with unsaved changes warns the FDE.
+- **Unsaved draft.** Each definition and the bundle as a whole expose a draft/active indicator; navigating away or closing with unsaved changes warns the FDE. Discarding is explicit: "revert to active" for one file or the whole bundle asks for confirmation, restores the byte-exact active text, and is unavailable while a save is in flight.
 - **Active definition.** The baseline is the on-disk bundle at its loaded digest; the FDE can always compare draft against active, and save only proceeds against that digest.
 
 ## Field-level feedback and navigation
@@ -86,6 +86,7 @@ Saving definitions mutates only the four YAML files: it never touches canonical 
 | Mapping forms, restricted condition editing, isolated preview with evidence and invalidation | #17 |
 | Evaluation and agent-task editing, credential exclusion, cross-definition checks | #18 |
 | Core persistence, explicit save, digest conflict detection, atomic activation, YAML round-trip | #19 |
+| Draft discard: confirmed per-file and whole-bundle revert to the active bundle | #53 |
 | End-to-end verification and documented walkthrough | #20 |
 
 ## Gaps and unassigned requirements
@@ -95,7 +96,6 @@ Called out, not silently invented:
 - **Workspace creation.** No issue covers creating a new, initially empty workspace from the UI; the flow assumes opening an existing workspace (e.g., the example). If desired, this is new scope.
 - **Workspace listing/switching.** #14 requires configured roots but no issue defines enumerating or switching between multiple workspaces.
 - **Projection definition editing.** Domain `projections:` are referenced by #16 (visualization) and consumed by #18 (agent input), but no issue explicitly assigns a dedicated projection-editing control; per #18 the bundle must round-trip fields the UI does not expose.
-- **Draft discard.** A "revert to active" control is implied by draft/active state and the reload path in #19 — assigned to #53 (per-file and whole-bundle revert behind an explicit confirmation, invalidating shown validation/preview output like an edit).
 - **Draft restore after restart.** Whether an unsaved draft survives a browser restart is unspecified by #14–#20.
 
 These gaps are documentation of uncovered requirements, not commitments.
