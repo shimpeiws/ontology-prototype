@@ -43,7 +43,9 @@ List each source file's columns and classify every column with exactly one actio
 | `--keep` | non-identifying categories: statuses, booleans, enum codes | Copied verbatim. **Your judgement**: never keep free text, amounts that identify a customer, or anything you are unsure about. |
 | `--drop` | everything the mapping does not need | Removed. |
 
-Nested JSON values in any column are replaced by an empty object or list. Extra CSV cells beyond the header become blank cells. Both keep the shape ingestion reports (`INGEST.NON_SCALAR`, `INGEST.INVALID_ROW`) without the content.
+Nested JSON values in any column are replaced by an empty object or list. Extra CSV cells beyond the header become blank cells. Both keep the shape ingestion reports (`INGEST.NON_SCALAR`, `INGEST.INVALID_ROW`) without the content. A string with an unpaired surrogate becomes a content-free placeholder that still triggers `INGEST.ENCODING_ERROR`.
+
+The tool refuses, without writing any output, in two cases. The first is a CSV that ingestion's strict parser would reject as a whole, such as one with an unterminated quote: record that as an `INGEST.INVALID_SOURCE` finding. The second is a valid date that the offset would push out of the representable range: pass a different `--shift-days`.
 
 ### 3. De-identify
 
@@ -87,7 +89,16 @@ ontology project "$WORK/ws" --as-of <ISO-8601 with offset>
 ontology evaluate "$WORK/ws" --boundary <ISO-8601> --as-of <ISO-8601>
 ```
 
-The summary prints only counts, codes, and field names, which is the form findings use. Choose `--as-of` and `--boundary` relative to the de-identified dates: the original calendar times no longer line up, and the tool never prints the offset. The diagnosis, approval, and write-back stages are out of scope here: they never touch the source and add nothing to applicability.
+The summary prints only counts, codes, and field names, which is the form findings use.
+
+`--as-of` and `--boundary` decide the cohorts, and therefore the verdict. Pick them by a named rule, applied to the de-identified data. Then repeated checks are comparable without recording any date. The original calendar times no longer line up, and the tool never prints the offset.
+
+| Rule | `--as-of` | `--boundary` |
+| --- | --- | --- |
+| `change-date` (preferred) | 00:00 UTC on the day after the latest de-identified start or end event | the de-identified date of the business change being evaluated. Shift the change date with the same key: put it in a one-column file and run `--shift` on that column. |
+| `median-start` (no known change) | as above | 00:00 UTC on the median de-identified start-event date, so the two cohorts are roughly equal halves |
+
+Record the rule name in the findings. Do not record the resulting timestamps. The diagnosis, approval, and write-back stages are out of scope here: they never touch the source and add nothing to applicability.
 
 ### 6. Record findings and clean up
 
@@ -104,7 +115,7 @@ Mapping gaps and missing core capabilities also go to the gap log that #54 intro
 - Mapping gaps: <what the four definitions could not express, by concept, not by value>
 - Ingestion: <accepted/rejected counts; diagnostic code × field × count table>
 - Data quality: <patterns such as "naive datetimes in completed_at", "ids with trailing spaces">
-- Projection/evaluation: <ran / failed with code>; verdict class <success | not_met | unverified>; guardrail <passed | failed | unavailable>
+- Projection/evaluation: <ran / failed with code>; window rule <change-date | median-start>; verdict class <success | not_met | unverified>; guardrail <passed | failed | unavailable>
 - Follow-ups: <issue links>
 ```
 

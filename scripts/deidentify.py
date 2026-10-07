@@ -39,6 +39,9 @@ from typing import Any
 
 ACTIONS = ("pseudonymize", "shift", "keep", "drop")
 INVALID_TIMESTAMP = "invalid-timestamp"
+# Ingestion reports any string with an unpaired surrogate as
+# INGEST.ENCODING_ERROR; this content-free stand-in keeps that finding.
+SURROGATE_PLACEHOLDER = "\ud800"
 MIN_KEY_BYTES = 16
 BOM = "﻿"
 
@@ -82,7 +85,7 @@ class Deidentifier:
             return int(self.pseudonym(json.dumps(value))[1:13], 16)
         return _emptied(value)
 
-    def _shift_value(self, value: Any) -> Any:
+    def _shift_value(self, column: str, value: Any) -> Any:
         if value is None or isinstance(value, bool):
             return value
         if isinstance(value, (int, float)):
@@ -97,21 +100,30 @@ class Deidentifier:
             return lead + INVALID_TIMESTAMP + trail
         try:
             day = dt.date.fromisoformat(match.group(1))
-            shifted = (day + self._shift).isoformat()
-        except (ValueError, OverflowError):
+        except ValueError:
             return lead + INVALID_TIMESTAMP + trail
+        try:
+            shifted = (day + self._shift).isoformat()
+        except OverflowError:
+            # A valid date must never become the malformed-value sentinel.
+            raise DeidentifyError(
+                f"a valid date in column {column!r} cannot be shifted within the "
+                "representable range; pass a different --shift-days"
+            ) from None
         # Only the date moves: time of day, offset, and naive-ness stay.
         rest = match.group(2) if match.re is _DATETIME else ""
         return lead + shifted + rest + trail
 
     def transform(self, column: str, value: Any) -> Any:
         action = self._columns[column]
-        if action == "keep":
+        if action != "keep" and isinstance(value, str) and _has_unpaired_surrogate(value):
+            result = SURROGATE_PLACEHOLDER
+        elif action == "keep":
             result = _emptied(value) if isinstance(value, (dict, list)) else value
         elif action == "pseudonymize":
             result = self._pseudonymize(value)
         else:
-            result = self._shift_value(value)
+            result = self._shift_value(column, value)
         self.counts[column] = self.counts.get(column, 0) + 1
         return result
 
@@ -119,13 +131,19 @@ class Deidentifier:
         unknown = sorted({n for n in names if n not in self._columns})
         if unknown:
             raise DeidentifyError(
-                "unclassified columns: " + ", ".join(unknown)
+                "unclassified columns: " + ", ".join(_label(n) for n in unknown)
                 + " (classify each as --pseudonymize, --shift, --keep, or --drop)"
             )
 
     def csv_text(self, text: str) -> tuple[str, int]:
         bom = text.startswith(BOM)
-        rows = list(csv.reader(io.StringIO(text[1:] if bom else text, newline="")))
+        # strict=True matches ingestion's parser: a source it rejects (an
+        # unterminated quote) is refused here, never rewritten into valid CSV.
+        reader = csv.reader(io.StringIO(text[1:] if bom else text, newline=""), strict=True)
+        try:
+            rows = list(reader)
+        except csv.Error:
+            raise DeidentifyError(f"input is not valid CSV (line {reader.line_num})") from None
         if not rows:
             return text, 0
         header = rows[0]
@@ -160,7 +178,21 @@ class Deidentifier:
             records.append(
                 {k: self.transform(k, v) for k, v in item.items() if self._columns[k] != "drop"}
             )
-        return json.dumps(records, ensure_ascii=False, indent=2) + "\n", len(document)
+        # ASCII escapes keep kept surrogates (and the placeholder) writable.
+        return json.dumps(records, ensure_ascii=True, indent=2) + "\n", len(document)
+
+
+def _has_unpaired_surrogate(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
+def _label(name: str) -> str:
+    """A column name safe to print (unpaired surrogates escaped)."""
+    return ascii(name)[1:-1] if _has_unpaired_surrogate(name) else name
 
 
 def _emptied(value: Any) -> Any:
@@ -318,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"deidentified {args.format} snapshot; values per column:")
     for name, action in sorted(columns.items()):
-        print(f"  {name}: {action} ({tool.counts.get(name, 0) if action != 'drop' else 'removed'})")
+        print(f"  {_label(name)}: {action} ({tool.counts.get(name, 0) if action != 'drop' else 'removed'})")
     return 0
 
 

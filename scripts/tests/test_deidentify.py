@@ -303,3 +303,67 @@ def test_generate_key_is_private_and_never_overwrites(tmp_path: Path) -> None:
     short = _write(tmp_path / "short.hex", "abcd\n")
     with pytest.raises(deidentify.DeidentifyError, match="at least"):
         deidentify.read_key(short)
+
+
+def test_malformed_csv_is_refused_not_repaired(tmp_path: Path) -> None:
+    """FIND-001 (Devin): Given `id,status,completed_at\\n"J1,completed,2026-10-01\\n`,
+    ingestion rejects the source as an unfinished quote. De-identification must
+    not rewrite it into an ingestible file."""
+    text = 'id,status,completed_at\n"J1,completed,2026-10-01\n'
+    source = _write(tmp_path / "jobs.csv", text)
+    shape = _ingest_shape(tmp_path, "ws-malformed", source, "csv")
+    assert ("error", "INGEST.INVALID_SOURCE", None) in shape[0]
+    output = tmp_path / "out.csv"
+    with pytest.raises(deidentify.DeidentifyError, match="not valid CSV"):
+        deidentify.deidentify_file(source, output, "csv", KEY,
+                                   {"id": "pseudonymize", "status": "keep", "completed_at": "shift"})
+    assert not output.exists()
+
+
+def test_valid_date_that_cannot_be_shifted_aborts_the_run(tmp_path: Path) -> None:
+    """FIND-002 (Devin): With a 100-day backward shift, `0001-01-01` is a valid
+    input date, but its de-identified output is `invalid-timestamp` rather than
+    a shifted date. A valid timestamp must never become the sentinel."""
+    source = _write(tmp_path / "in.csv", "t\n2026-10-01\n0001-01-01\n")
+    output = tmp_path / "out.csv"
+    with pytest.raises(deidentify.DeidentifyError, match="cannot be shifted"):
+        deidentify.deidentify_file(source, output, "csv", KEY, {"t": "shift"}, shift_days=-100)
+    assert not output.exists()
+    late = _write(tmp_path / "late.csv", "t\n9999-12-01T00:00:00Z\n")
+    with pytest.raises(deidentify.DeidentifyError, match="cannot be shifted"):
+        deidentify.deidentify_file(late, tmp_path / "late-out.csv", "csv", KEY, {"t": "shift"}, shift_days=100)
+
+
+@pytest.mark.parametrize("action", ["pseudonymize", "shift", "keep"])
+def test_unpaired_surrogate_is_preserved_as_an_encoding_finding(tmp_path: Path, action: str) -> None:
+    """FIND-003 (Devin): A record containing `{"id":"\\\\ud800"}` loads as JSON,
+    but pseudonymizing `id` raises `UnicodeEncodeError`. It must be handled
+    without a traceback, keeping ingestion's ENCODING_ERROR finding."""
+    secret = "J-SECRET-\\ud800"
+    source = _write(tmp_path / "in.json",
+                    '[{"id": "%s", "status": "completed", "completed_at": "2026-10-01"}]' % secret)
+    columns = {"id": action, "status": "keep", "completed_at": "shift"}
+    output = tmp_path / "out.json"
+    deidentify.deidentify_file(source, output, "json", KEY, columns)
+    text = output.read_text(encoding="utf-8")
+    if action != "keep":
+        assert "J-SECRET" not in text
+    jobs_columns = dict(JOB_COLUMNS, id=action)
+    before = _ingest_shape(tmp_path, f"ws-sur-before-{action}", source, "json")
+    deid = tmp_path / f"jobs-{action}.json"
+    deidentify.deidentify_file(source, deid, "json", KEY, jobs_columns)
+    after = _ingest_shape(tmp_path, f"ws-sur-after-{action}", deid, "json")
+    assert ("error", "INGEST.ENCODING_ERROR", "record[1].id") in before[0]
+    assert after == before
+
+
+def test_surrogate_column_name_is_reported_without_crashing(tmp_path: Path, capsys) -> None:
+    """FIND-003 sibling: a column name with an unpaired surrogate must not crash
+    the error path that prints column names."""
+    key_path = tmp_path / "key.hex"
+    deidentify.main(["--generate-key", str(key_path)])
+    source = _write(tmp_path / "in.json", '[{"id": "J1", "bad\\udc80": "x"}]')
+    code = deidentify.main(["--key", str(key_path), "--format", "json", "--keep", "id",
+                            str(source), str(tmp_path / "out.json")])
+    assert code == 1
+    assert "unclassified columns: bad\\udc80" in capsys.readouterr().err
