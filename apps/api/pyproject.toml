@@ -8,6 +8,7 @@ version = "0.0.1"
 description = "Local FastAPI application exposing ontology-core workspace load/inspect and draft validation for the FDE authoring UI."
 readme = { text = "Local API application for the ontology-prototype monorepo.", content-type = "text/plain" }
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["ontology-core>=0.0.1", "fastapi>=0.115", "uvicorn>=0.30"]
 

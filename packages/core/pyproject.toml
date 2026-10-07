@@ -8,6 +8,7 @@ version = "0.0.1"
 description = "Shared operational core: workspace contracts, loading, and validation for the FDE operational loop."
 readme = { text = "Shared operational core for the ontology-prototype monorepo.", content-type = "text/plain" }
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = ["PyYAML>=6.0.2"]
 
