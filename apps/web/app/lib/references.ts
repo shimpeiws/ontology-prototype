@@ -134,17 +134,18 @@ function scanDomain(
   }
 }
 
-function scanMapping(
-  js: unknown,
+function scanMappingBindings(
+  scope: unknown,
+  base: string,
   concept: Concept,
   hits: ReferenceHit[],
 ): void {
-  const mapping = isRecord(js) && isRecord(js.mapping) ? js.mapping : {};
-  list(mapping.entities).forEach((binding, i) => {
+  const bindings = isRecord(scope) ? scope : {};
+  list(bindings.entities).forEach((binding, i) => {
     if (concept.kind === "entity" && scalarEq(binding.entity, concept.name)) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.entities[${i}].entity`,
+        path: `${base}.entities[${i}].entity`,
         label: `entity binding ${i + 1}`,
       });
     }
@@ -157,16 +158,16 @@ function scanMapping(
     ) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.entities[${i}].properties.${concept.name}`,
+        path: `${base}.entities[${i}].properties.${concept.name}`,
         label: `property binding for ${binding.entity}.${concept.name}`,
       });
     }
   });
-  list(mapping.events).forEach((binding, i) => {
+  list(bindings.events).forEach((binding, i) => {
     if (concept.kind === "event" && scalarEq(binding.event, concept.name)) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.events[${i}].event`,
+        path: `${base}.events[${i}].event`,
         label: `event binding ${i + 1}`,
       });
     }
@@ -177,11 +178,23 @@ function scanMapping(
     ) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.events[${i}].subject.entity`,
+        path: `${base}.events[${i}].subject.entity`,
         label: `subject of event binding ${i + 1}`,
       });
     }
   });
+}
+
+function scanMapping(
+  js: unknown,
+  concept: Concept,
+  hits: ReferenceHit[],
+): void {
+  const mapping = isRecord(js) && isRecord(js.mapping) ? js.mapping : {};
+  scanMappingBindings(mapping, "mapping", concept, hits);
+  list(mapping.sources).forEach((source, i) =>
+    scanMappingBindings(source, `mapping.sources[${i}]`, concept, hits),
+  );
 }
 
 function scanEvaluation(

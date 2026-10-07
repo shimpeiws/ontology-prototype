@@ -25,7 +25,10 @@ def write_snapshot(tmp_path: Path, name: str, text: str) -> Path:
 def ingested_workspace(tmp_path: Path) -> Path:
     workspace = copy_example(tmp_path)
     snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     return workspace
 
 

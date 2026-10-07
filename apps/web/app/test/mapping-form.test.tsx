@@ -28,6 +28,7 @@ import {
   SYNTHETIC_CONTRACT_RESPONSE,
   SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
   SYNTHETIC_MAPPING_FORM_YAML,
+  SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE,
   SYNTHETIC_PREVIEW_RESPONSE,
 } from "./fixtures";
 
@@ -556,6 +557,132 @@ describe("MappingForm", () => {
     ).toHaveValue("json");
   });
 
+  it("renders one binding section per sources[] entry", async () => {
+    renderForm(<MappingForm />, SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE);
+    await waitForContract();
+
+    const names = screen
+      .getAllByLabelText("Source name")
+      .map((el) => (el as HTMLInputElement).value);
+    expect(names).toEqual(["jobs", "invoices"]);
+    const formats = screen
+      .getAllByLabelText("Source format")
+      .map((el) => (el as HTMLSelectElement).value);
+    expect(formats).toEqual(["csv", "json"]);
+
+    const jobs = card("Source 1");
+    expect(
+      within(jobs).getByLabelText("Entity"),
+    ).toHaveValue("Job");
+    expect(
+      within(jobs).getByLabelText("Event"),
+    ).toHaveValue("JobCompleted");
+    const invoices = card("Source 2");
+    expect(
+      within(invoices).getByLabelText("Entity"),
+    ).toHaveValue("Invoice");
+    expect(
+      within(invoices).getByLabelText("Event"),
+    ).toHaveValue("InvoiceIssued");
+    // The legacy single-source header is gone — the draft's own shape wins.
+    expect(screen.queryByRole("button", { name: "Convert to sources list" })).toBeNull();
+  });
+
+  it("edits a source entry without touching the other", async () => {
+    const user = userEvent.setup();
+    renderForm(<MappingForm />, SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE);
+    await waitForContract();
+
+    const name = within(card("Source 2")).getByLabelText("Source name");
+    await user.clear(name);
+    await user.type(name, "billing");
+    expect(draftJs().mapping.sources[1].name).toBe("billing");
+    expect(draftJs().mapping.sources[0].name).toBe("jobs");
+
+    // A binding edit inside the second source lands on sources[1].
+    const entity = within(card("Source 2")).getByLabelText("Entity");
+    await user.clear(entity);
+    await user.type(entity, "Bill");
+    expect(draftJs().mapping.sources[1].entities[0].entity).toBe("Bill");
+    expect(draftJs().mapping.sources[0].entities[0].entity).toBe("Job");
+  });
+
+  it("adds and removes sources; edits hit the survivor", async () => {
+    const user = userEvent.setup();
+    renderForm(<MappingForm />, SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE);
+    await waitForContract();
+
+    await user.click(
+      screen.getByRole("button", { name: "Add source" }),
+    );
+    expect(draftJs().mapping.sources).toHaveLength(3);
+
+    await user.click(
+      within(card("Source 1")).getByRole("button", {
+        name: "Remove source",
+      }),
+    );
+    const sources = draftJs().mapping.sources;
+    expect(sources.map((s: { name: string }) => s.name)).toEqual([
+      "invoices",
+      "",
+    ]);
+    // The invoices bindings survived — they were not nested under jobs.
+    expect(sources[0].entities[0].entity).toBe("Invoice");
+  });
+
+  it("converts a single-source draft to the sources list", async () => {
+    const user = userEvent.setup();
+    renderForm(<MappingForm />);
+    await waitForContract();
+
+    await user.click(
+      screen.getByRole("button", { name: "Convert to sources list" }),
+    );
+
+    const mapping = draftJs().mapping;
+    expect(mapping.source).toBeUndefined();
+    expect(mapping.entities).toBeUndefined();
+    expect(mapping.events).toBeUndefined();
+    expect(mapping.sources).toHaveLength(1);
+    expect(mapping.sources[0].name).toBe("jobs");
+    expect(mapping.sources[0].format).toBe("csv");
+    expect(mapping.sources[0].entities).toHaveLength(2);
+    expect(mapping.sources[0].events).toHaveLength(2);
+    // Untouched content — the file-level comment — survives the rewrite.
+    expect(draftText()).toContain(
+      "# comment proving form edits preserve untouched content",
+    );
+  });
+
+  it("attaches sources[] diagnostics to the owning binding", async () => {
+    const response: OpenResponse = {
+      ...SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE,
+      diagnostics: [
+        {
+          severity: "error",
+          code: "MAPPING.UNKNOWN_ENTITY",
+          message: "unknown entity type 'Jbo'",
+          file: "mapping.yaml",
+          path: "mapping.sources[1].entities[0].entity",
+          line: null,
+          hint: null,
+        },
+      ],
+    };
+    renderForm(<MappingForm />, response);
+    await waitForContract();
+
+    const invoiceField = within(card("Source 2"))
+      .getByLabelText("Entity")
+      .closest(".form-field");
+    expect(invoiceField).toHaveTextContent("MAPPING.UNKNOWN_ENTITY");
+    const jobField = within(card("Source 1"))
+      .getByLabelText("Entity")
+      .closest(".form-field");
+    expect(jobField).not.toHaveTextContent("MAPPING.UNKNOWN_ENTITY");
+  });
+
   it("edits set-condition values as separate elements", async () => {
     const response: OpenResponse = {
       ...SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
@@ -608,7 +735,7 @@ describe("PreviewPanel", () => {
     await waitForContract();
 
     expect(
-      screen.getByText(/declares source format csv/),
+      screen.getByText(/selected source declares format csv/),
     ).toBeInTheDocument();
     expect(screen.getByText(/bounded to 262144 bytes/)).toBeInTheDocument();
 
@@ -629,7 +756,10 @@ describe("PreviewPanel", () => {
         "agent.yaml",
       ]),
     );
-    expect(sample).toEqual({ text: "id,status,assignee" });
+    expect(sample).toEqual({
+      text: "id,status,assignee",
+      source: "jobs",
+    });
 
     // Header metadata: input/mapping versions and bounds.
     expect(await screen.findByText("prev-aaaabbbbcccc-dddd"))
@@ -651,6 +781,43 @@ describe("PreviewPanel", () => {
     expect(screen.getByText("Record row 3")).toBeInTheDocument();
     expect(screen.getByText("rejected")).toBeInTheDocument();
     expect(screen.getByText("INGEST.MISSING_ID")).toBeInTheDocument();
+  });
+
+  it("offers source selection for multi-source drafts and sends it", async () => {
+    const user = userEvent.setup();
+    renderForm(<PreviewPanel />, SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE);
+    await waitForContract();
+
+    const select = screen.getByLabelText("Source");
+    expect(select).toHaveValue("jobs");
+
+    await user.type(screen.getByLabelText(/Sample input/), "a,b");
+    await user.click(screen.getByRole("button", { name: "Run preview" }));
+    await waitFor(() => expect(previewMock).toHaveBeenCalledOnce());
+    expect(previewMock.mock.calls[0][2]).toEqual({
+      text: "a,b",
+      source: "jobs",
+    });
+    expect(await screen.findByText("prev-aaaabbbbcccc-dddd"))
+      .toBeInTheDocument();
+
+    // Switching to the second source marks the shown result stale and
+    // the next run sends that source's name.
+    await user.selectOptions(select, "invoices");
+    expect(await screen.findByText("stale")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Run preview" }));
+    await waitFor(() => expect(previewMock).toHaveBeenCalledTimes(2));
+    expect(previewMock.mock.calls[1][2]).toEqual({
+      text: "a,b",
+      source: "invoices",
+    });
+  });
+
+  it("a single-source draft shows no source picker", async () => {
+    renderForm(<PreviewPanel />);
+    await waitForContract();
+
+    expect(screen.queryByLabelText("Source")).toBeNull();
   });
 
   it("marks the result stale after a draft edit until rerun", async () => {

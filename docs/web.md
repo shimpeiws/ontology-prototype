@@ -66,21 +66,27 @@ The Web app is presentation only:
   from the domain draft — the core remains the only validator.
 - The Mapping page carries the structured mapping form plus a preview
   panel (#17). The form edits `mapping.yaml`'s restricted mapping
-  language: source name/format, entity bindings (id + property
-  `{field|literal, as}` assignments), and event bindings (subject,
-  `when` condition tree over the allowlisted operators, occurrence and
-  optional observation-time assignments restricted to the contract's
-  `time_casts`). The panel posts a pasted CSV/JSON sample plus the whole
-  draft bundle to `/api/v1/workspaces/drafts/preview`; the format is the
-  draft's `mapping.source.format`, and the byte/record bounds come from
-  `contract.preview_limits`. Results show each source row next to the
-  canonical entities/events it produced — normalized nulls and
-  timestamps, `accepted`/`rejected` status, evidence references
-  (observation id, preview id, row, input and mapping digests), and
-  per-record diagnostics. A displayed result is keyed to the draft
-  revision and sample text it ran against: editing the draft or the
-  sample marks it stale until re-run, so a preview can never present
-  results for an older mapping as current.
+  language: one section per declared source (name + format), each with
+  its own entity bindings (id + property `{field|literal, as}`
+  assignments) and event bindings (subject, `when` condition tree over
+  the allowlisted operators, occurrence and optional observation-time
+  assignments restricted to the contract's `time_casts`). Sources can be
+  added and removed; a legacy single-source draft (`source:` +
+  top-level `entities`/`events`) can be rewritten into `sources:` form
+  with the form's "Convert to sources list" action. The panel posts a pasted CSV/JSON sample plus
+  the whole draft bundle to `/api/v1/workspaces/drafts/preview`; the
+  format is the selected source's declared `format`, and the
+  byte/record bounds come from `contract.preview_limits`. A draft with
+  several sources shows a source picker and sends the choice as
+  `sample.source`; single-source drafts send none. Results show each
+  source row next to the canonical entities/events it produced —
+  normalized nulls and timestamps, `accepted`/`rejected` status,
+  evidence references (observation id, preview id, row, input and
+  mapping digests), and per-record diagnostics. A displayed result is
+  keyed to the draft revision, sample text, and selected source it ran
+  against: editing the draft, the sample, or the source selection marks
+  it stale until re-run, so a preview can never present results for an
+  older mapping as current.
 
 ## Development
 

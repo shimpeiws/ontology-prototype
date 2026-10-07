@@ -16,7 +16,7 @@ import { useId, useState } from "react";
 
 import { api, ApiError } from "../lib/api";
 import { contractVocabulary, useContract } from "../lib/contract";
-import { draftSourceFormat } from "../lib/draftDoc";
+import { draftSourceFormat, draftSourceNames } from "../lib/draftDoc";
 import { draftFilesForRequest } from "../workspace/store";
 import type {
   DraftPreviewResponse,
@@ -35,6 +35,8 @@ interface PreviewRun {
   revision: number;
   /** Sample text captured when the request was sent. */
   sample: string;
+  /** Declared source the sample resolved through ("" = core default). */
+  source: string;
   status: "running" | "done" | "failed";
   response?: DraftPreviewResponse;
   error?: ApiError | Error;
@@ -156,7 +158,7 @@ function PreviewResult({ preview }: { preview: PreviewPayload }) {
         <dt>Source</dt>
         <dd>
           <code>
-            {preview.source}.{preview.format}
+            {preview.source ?? "—"}.{preview.format ?? "—"}
           </code>
         </dd>
         <dt>Preview id</dt>
@@ -207,11 +209,17 @@ export function PreviewPanel() {
   const { contract } = useContract();
   const limits = contractVocabulary(contract)?.previewLimits ?? null;
   const sampleId = useId();
+  const sourceId = useId();
 
   const mappingDraft = state.drafts["mapping.yaml"] ?? null;
+  const mappingFallback = state.workspace?.definitions?.mapping ?? null;
+  const sources = draftSourceNames(mappingDraft, mappingFallback);
+  const [source, setSource] = useState("");
+  const effectiveSource = source || sources[0] || "";
   const format = draftSourceFormat(
     mappingDraft,
-    state.workspace?.definitions?.mapping ?? null,
+    mappingFallback,
+    effectiveSource || null,
   );
 
   const [sample, setSample] = useState("");
@@ -225,34 +233,44 @@ export function PreviewPanel() {
     const path = state.workspace.requestedPath;
     const revision = state.draftRevision;
     const text = sample;
-    setRun({ status: "running", path, revision, sample: text });
+    const sourceName = effectiveSource;
+    setRun({ status: "running", path, revision, sample: text, source: sourceName });
     try {
       const response = await api.previewDraft(
         path,
         draftFilesForRequest(state.drafts),
-        { text },
+        sourceName ? { text, source: sourceName } : { text },
       );
-      setRun({ status: "done", path, revision, sample: text, response });
+      setRun({
+        status: "done",
+        path,
+        revision,
+        sample: text,
+        source: sourceName,
+        response,
+      });
     } catch (err) {
       setRun({
         status: "failed",
         path,
         revision,
         sample: text,
+        source: sourceName,
         error: toError(err),
       });
     }
   };
 
-  // A shown result describes exactly the workspace, draft revision, and
-  // sample it ran against — any drift since means the display is stale,
+  // A shown result describes exactly the workspace, draft revision, sample,
+  // and source it ran against — any drift since means the display is stale,
   // not current. The path is part of the key because opening another
   // workspace resets the draft revision, which could otherwise collide.
   const stale =
     run !== null &&
     (run.path !== (state.workspace?.requestedPath ?? null) ||
       run.revision !== state.draftRevision ||
-      run.sample !== sample);
+      run.sample !== sample ||
+      run.source !== effectiveSource);
   const running = run?.status === "running";
 
   return (
@@ -261,11 +279,28 @@ export function PreviewPanel() {
       <p className="hint">
         Resolves the draft mapping against a pasted sample via the shared
         core — isolated from the workspace files and the canonical store.
-        {format ? ` The draft declares source format ${format}.` : ""}
+        {format ? ` The selected source declares format ${format}.` : ""}
         {limits
           ? ` Samples are bounded to ${limits.maxBytes} bytes and ${limits.maxRecords} records.`
           : ""}
       </p>
+
+      {sources.length > 1 ? (
+        <div className="form-field">
+          <label htmlFor={sourceId}>Source</label>
+          <select
+            id={sourceId}
+            value={effectiveSource}
+            onChange={(e) => setSource(e.target.value)}
+          >
+            {sources.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
 
       <div className="form-field">
         <label htmlFor={sampleId}>

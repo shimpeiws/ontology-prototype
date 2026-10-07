@@ -18,7 +18,18 @@ CSV_SAMPLE = (
 def setup_workspace(tmp_path: Path) -> Path:
     workspace = clisupport.copy_example(tmp_path)
     (tmp_path / "jobs.csv").write_text(CSV_SAMPLE, encoding="utf-8")
-    assert main(["ingest", str(workspace), str(tmp_path / "jobs.csv")]) == 0
+    assert (
+        main(
+            [
+                "ingest",
+                str(workspace),
+                str(tmp_path / "jobs.csv"),
+                "--source",
+                "jobs",
+            ]
+        )
+        == 0
+    )
     assert (
         main(
             [

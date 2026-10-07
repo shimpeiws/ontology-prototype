@@ -180,12 +180,18 @@ restricted condition language the core defines.
 {
   "path": "job-invoicing",
   "files": { "domain.yaml": "…", "mapping.yaml": "…", "evaluation.yaml": "…", "agent.yaml": "…" },
-  "sample": { "text": "id,status,assignee\n101,completed,taro" }
+  "sample": { "text": "id,status,assignee\n101,completed,taro", "source": "jobs" }
 }
 ```
 
-The sample format is the draft's `mapping.source.format` (`csv` or
-`json`); there is no request-side format override. Bounds come from the
+`sample.source` selects which declared `mapping.sources[]` entry the
+sample resolves through; it is optional when the draft declares a single
+source and required for a multi-source draft (`INGEST.SOURCE_REQUIRED`,
+`INGEST.UNKNOWN_SOURCE` otherwise). The sample format is the selected
+source's `format` (`csv` or `json`); there is no request-side format
+override. The response echoes the selection in `preview.source` and
+`preview.format` — both `null` when the draft declared no usable source.
+Bounds come from the
 core (`MAX_PREVIEW_BYTES`, `MAX_PREVIEW_RECORDS`, exposed under
 `contract.preview_limits`): an oversized sample is a `PREVIEW.*`
 diagnostic, not an HTTP error, and an over-long record list is truncated

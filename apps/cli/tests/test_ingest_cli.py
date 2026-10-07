@@ -26,7 +26,10 @@ def test_ingest_example_workspace(tmp_path: Path, capsys) -> None:
     workspace = copy_example(tmp_path)
     snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
 
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     out = capsys.readouterr().out
     assert "2 accepted" in out
     assert "0 rejected" in out
@@ -37,7 +40,19 @@ def test_ingest_json_output(tmp_path: Path, capsys) -> None:
     workspace = copy_example(tmp_path)
     snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
 
-    assert main(["ingest", str(workspace), str(snapshot), "--json"]) == EXIT_OK
+    assert (
+        main(
+            [
+                "ingest",
+                str(workspace),
+                str(snapshot),
+                "--source",
+                "jobs",
+                "--json",
+            ]
+        )
+        == EXIT_OK
+    )
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
     assert payload["accepted"] == 2
@@ -50,13 +65,75 @@ def test_ingest_json_output(tmp_path: Path, capsys) -> None:
     assert len(lines) == 2
 
 
+def test_ingest_multi_source_requires_source_flag(tmp_path: Path, capsys) -> None:
+    workspace = copy_example(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
+
+    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_INVALID
+    assert "INGEST.SOURCE_REQUIRED" in capsys.readouterr().out
+
+
+def test_ingest_unknown_source_exit_1(tmp_path: Path, capsys) -> None:
+    workspace = copy_example(tmp_path)
+    snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
+
+    assert (
+        main(
+            [
+                "ingest",
+                str(workspace),
+                str(snapshot),
+                "--source",
+                "bogus",
+            ]
+        )
+        == EXIT_INVALID
+    )
+    assert "INGEST.UNKNOWN_SOURCE" in capsys.readouterr().out
+
+
+def test_ingest_second_source(tmp_path: Path, capsys) -> None:
+    # The invoices source resolves Invoice entities; the Job it references
+    # has not been ingested, so the cross-source ref warns — never rejects.
+    workspace = copy_example(tmp_path)
+    snapshot = write_snapshot(
+        tmp_path,
+        "invoices.csv",
+        "id,job,issued_at,error\nINV-1,101,2026-10-05,false\n",
+    )
+
+    assert (
+        main(
+            [
+                "ingest",
+                str(workspace),
+                str(snapshot),
+                "--source",
+                "invoices",
+                "--json",
+            ]
+        )
+        == EXIT_OK
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["source"] == "invoices"
+    assert payload["accepted"] == 1
+    assert payload["rejected"] == 0
+    assert "INGEST.UNRESOLVED_REF" in [
+        d["code"] for d in payload["diagnostics"]
+    ]
+
+
 def test_ingest_rejected_records_exit_1(tmp_path: Path, capsys) -> None:
     workspace = copy_example(tmp_path)
     snapshot = write_snapshot(
         tmp_path, "jobs.csv", "id,status,assignee\n,completed,taro\n"
     )
 
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_INVALID
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_INVALID
+    )
     out = capsys.readouterr().out
     assert "INGEST.MISSING_ID" in out
     assert "1 rejected" in out
@@ -74,7 +151,15 @@ def test_ingest_missing_snapshot_exit_1(tmp_path: Path, capsys) -> None:
     workspace = copy_example(tmp_path)
 
     assert (
-        main(["ingest", str(workspace), str(tmp_path / "missing.csv")])
+        main(
+            [
+                "ingest",
+                str(workspace),
+                str(tmp_path / "missing.csv"),
+                "--source",
+                "jobs",
+            ]
+        )
         == EXIT_INVALID
     )
     assert "INGEST.UNREADABLE_SOURCE" in capsys.readouterr().out
@@ -84,7 +169,10 @@ def test_ingest_writes_evidence_under_runtime_dir(tmp_path: Path, capsys) -> Non
     workspace = copy_example(tmp_path)
     snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
 
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     capsys.readouterr()
 
     runtime = workspace / ".ontology"
@@ -98,6 +186,9 @@ def test_ingest_real_example_data(tmp_path: Path, capsys) -> None:
     workspace = copy_example(tmp_path)
     snapshot = EXAMPLE_WORKSPACE / "data" / "jobs.csv"
 
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     out = capsys.readouterr().out
     assert "2 accepted" in out

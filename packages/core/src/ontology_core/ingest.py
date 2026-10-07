@@ -1,9 +1,10 @@
 """CSV/JSON snapshot ingestion with immutable observation evidence.
 
 ``ingest_snapshot`` reads one source snapshot in the format declared by the
-workspace mapping (``mapping.source.format``), pushes every record through
-the single normalization boundary in ``normalize.py``, resolves the mapping's
-entity/event bindings, and records each record as an observation carrying:
+selected mapping source (``mapping.sources[].format``), pushes every record
+through the single normalization boundary in ``normalize.py``, resolves the
+selected source's entity/event bindings, and records each record as an
+observation carrying:
 
 - an observation id and the ingest run id,
 - the source name and record index,
@@ -17,6 +18,13 @@ partially mapped facts are emitted — but the rejected observation is still
 recorded with its diagnostics, and every accepted/rejected record emits a
 trace event. Accepted observations then persist canonical entities and
 append-only events through ``canonical.py`` in a single transaction.
+
+Mappings may declare several sources (``mapping.sources``); the ``source``
+argument selects which one a snapshot resolves through, so entities and
+evidence from separate systems land in the same canonical model. References
+between sources resolve by exact stable id only: a ref property or event
+subject that matches no entity in the run or the canonical store earns an
+``INGEST.UNRESOLVED_REF`` warning on its observation — never a guess.
 """
 
 from __future__ import annotations
@@ -42,7 +50,7 @@ from .conditions import evaluate_condition
 from .decisions import backfill_proposals
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR, EvidenceStore, FileEvidenceStore
-from .model import FieldAssignment, Workspace
+from .model import FieldAssignment, MappingDefinition, SourceMapping, Workspace
 from .normalize import FAILED, Normalized, as_event_time, cast_scalar, normalize_record
 from .schema import ErrorFn, err_at, warn_at
 from .trace import TraceSink
@@ -157,10 +165,57 @@ class IngestResult:
         return [o for o in self.observations if o.status == REJECTED]
 
 
+@dataclass(frozen=True)
+class _UnresolvedRef:
+    """A reference a resolved record makes to another entity by stable id."""
+
+    target: str
+    target_id: str
+    path: str
+    what: str
+
+
+def select_source(
+    mapping: MappingDefinition,
+    name: str | None,
+    diag: Diagnostics,
+    *,
+    file: str | None = None,
+) -> SourceMapping | None:
+    """Pick the declared source a snapshot is resolved through.
+
+    ``None`` selects the only declared source; with several sources a name
+    is required. An unknown name is a diagnostic, never a guess.
+    """
+    if name is None:
+        if len(mapping.sources) == 1:
+            return mapping.sources[0]
+        declared = ", ".join(source.name for source in mapping.sources)
+        diag.error(
+            "INGEST.SOURCE_REQUIRED",
+            f"mapping declares {len(mapping.sources)} sources ({declared}); "
+            "select one",
+            file=file,
+        )
+        return None
+    for source in mapping.sources:
+        if source.name == name:
+            return source
+    diag.error(
+        "INGEST.UNKNOWN_SOURCE",
+        f"unknown source {name!r}",
+        file=file,
+        hint="declared sources: "
+        + ", ".join(source.name for source in mapping.sources),
+    )
+    return None
+
+
 def ingest_snapshot(
     workspace: Workspace,
     snapshot: str | Path,
     *,
+    source: str | None = None,
     observed_at: datetime | None = None,
     store: EvidenceStore | None = None,
     trace: TraceSink | None = None,
@@ -168,8 +223,11 @@ def ingest_snapshot(
 ) -> IngestResult:
     """Ingest one CSV/JSON snapshot into immutable observation evidence.
 
-    Never raises on bad input: unreadable files, parse errors, and malformed
-    records all become diagnostics. The source file is never modified.
+    ``source`` selects which declared source (and therefore which format and
+    bindings) the snapshot is resolved through; a single-source mapping
+    needs no name. Never raises on bad input: unreadable files, parse
+    errors, and malformed records all become diagnostics. The source file
+    is never modified.
     """
     diag = Diagnostics()
     path = Path(snapshot)
@@ -191,8 +249,12 @@ def ingest_snapshot(
     # A failing trace sink becomes a diagnostic, never a mid-run crash.
     trace = _GuardedTrace(trace, diag, label)
 
-    source = workspace.mapping.source
-    result.source = source.name
+    selected = select_source(workspace.mapping, source, diag, file=label)
+    if selected is None:
+        _emit_failed(trace, result, diag)
+        result.diagnostics = diag.items
+        return result
+    result.source = selected.name
     result.mapping_digest = _mapping_digest(workspace)
 
     content = _read_source(path, diag, label)
@@ -204,7 +266,7 @@ def ingest_snapshot(
     result.content_digest = "sha256:" + hashlib.sha256(content).hexdigest()
     try:
         result.snapshot_path = store.store_snapshot(
-            content, result.content_digest, source.format
+            content, result.content_digest, selected.format
         )
     except OSError as exc:
         diag.error(
@@ -216,7 +278,7 @@ def ingest_snapshot(
     text = content.decode("utf-8-sig")
     records = (
         _parse_csv(text, diag, label)
-        if source.format == "csv"
+        if selected.format == "csv"
         else _parse_json(text, diag, label)
     )
     if records is None:
@@ -238,9 +300,11 @@ def ingest_snapshot(
         f"-{uuid.uuid4().hex[:8]}"
     )
 
+    pending: list[tuple[Observation, _UnresolvedRef]] = []
     for row, raw in records:
-        observation = _process_record(
+        observation, refs = _process_record(
             workspace,
+            selected,
             raw,
             row=row,
             file_label=label,
@@ -251,7 +315,15 @@ def ingest_snapshot(
             run_diag=diag,
         )
         result.observations.append(observation)
+        pending.extend((observation, ref) for ref in refs)
         _emit_observation(trace, observation)
+
+    if pending:
+        stored = _stored_entity_ids(workspace, canonical, diag, label)
+        if stored is not None:
+            # The store could not be read; skip the check rather than
+            # flag every record.
+            _check_references(pending, result.accepted, stored, diag, label)
 
     try:
         result.observations_path = store.write_observations(
@@ -287,7 +359,7 @@ def ingest_snapshot(
         "ingest.completed",
         {
             "ingest_id": result.ingest_id,
-            "source": source.name,
+            "source": selected.name,
             "content_digest": result.content_digest,
             "mapping_digest": result.mapping_digest,
             "observed_at": _iso_z(observed_at),
@@ -435,6 +507,7 @@ def _apply_canonical(
 
 def _process_record(
     workspace: Workspace,
+    source: SourceMapping,
     raw: dict[Any, Any] | None,
     *,
     row: int,
@@ -444,14 +517,19 @@ def _process_record(
     content_digest: str,
     mapping_digest: str,
     run_diag: Diagnostics,
-) -> Observation:
-    """Normalize and resolve one record into an accepted/rejected observation."""
+) -> tuple[Observation, list[_UnresolvedRef]]:
+    """Normalize and resolve one record into an accepted/rejected observation.
+
+    Returns the observation plus the references it makes to other entities;
+    the caller checks them once the whole run's entity set is known.
+    """
     rdiag = Diagnostics()
     err = err_at(rdiag, file_label)
     warn = warn_at(rdiag, file_label)
 
     entities: list[ResolvedEntity] = []
     events: list[ResolvedEvent] = []
+    refs: list[_UnresolvedRef] = []
     if raw is None:
         err(
             "INGEST.INVALID_ROW",
@@ -468,20 +546,20 @@ def _process_record(
             )
         record = normalize_record(raw, err, row)
         if not rdiag.has_errors:
-            entities, events = _resolve(
-                workspace, record, err, warn, row, observed_at
+            entities, events, refs = _resolve(
+                workspace, source, record, err, warn, row, observed_at
             )
 
     status = REJECTED if rdiag.has_errors else ACCEPTED
     if status == REJECTED:
         # A rejected record emits no partially mapped facts.
-        entities, events = [], []
+        entities, events, refs = [], [], []
     run_diag.items.extend(rdiag.items)
     observation_id = hashlib.sha256(f"{ingest_id}:{row}".encode()).hexdigest()[:16]
     return Observation(
         observation_id=f"obs-{observation_id}",
         ingest_id=ingest_id,
-        source=workspace.mapping.source.name,
+        source=source.name,
         row=row,
         status=status,
         observed_at=observed_at,
@@ -491,23 +569,25 @@ def _process_record(
         entities=entities,
         events=events,
         diagnostics=list(rdiag.items),
-    )
+    ), refs
 
 
 def _resolve(
     workspace: Workspace,
+    source: SourceMapping,
     record: dict[str, Normalized],
     err: ErrorFn,
     warn: ErrorFn,
     row: int,
     observed_at: datetime,
-) -> tuple[list[ResolvedEntity], list[ResolvedEvent]]:
-    """Resolve the mapping's bindings against a normalized record."""
+) -> tuple[list[ResolvedEntity], list[ResolvedEvent], list[_UnresolvedRef]]:
+    """Resolve one source's bindings against a normalized record."""
     domain = workspace.domain
     tz = domain.policies.event_times.date_only_timezone
+    refs: list[_UnresolvedRef] = []
 
     entities: list[ResolvedEntity] = []
-    for binding in workspace.mapping.entities:
+    for binding in source.entities:
         entity_id = _resolve_id(
             binding.id, record, err, warn, row, f"entity {binding.entity!r} id"
         )
@@ -530,12 +610,21 @@ def _resolve(
                 )
                 continue
             properties[name] = value
+            if spec is not None and spec.type == "ref" and value:
+                refs.append(
+                    _UnresolvedRef(
+                        target=spec.ref,
+                        target_id=value,
+                        path=path,
+                        what=f"entity {binding.entity!r} ref property {name!r}",
+                    )
+                )
         entities.append(
             ResolvedEntity(entity=binding.entity, id=entity_id, properties=properties)
         )
 
     events: list[ResolvedEvent] = []
-    for binding in workspace.mapping.events:
+    for binding in source.events:
         if binding.when is not None and not evaluate_condition(binding.when, record):
             continue
         subject_id = _resolve_id(
@@ -586,7 +675,77 @@ def _resolve(
                 ),
             )
         )
-    return entities, events
+        refs.append(
+            _UnresolvedRef(
+                target=binding.subject.entity,
+                target_id=subject_id,
+                path=_assign_path(row, binding.subject.id),
+                what=f"event {binding.event!r} subject {binding.subject.entity!r}",
+            )
+        )
+    return entities, events, refs
+
+
+def _stored_entity_ids(
+    workspace: Workspace,
+    canonical: CanonicalStore | None,
+    diag: Diagnostics,
+    label: str,
+) -> set[tuple[str, str]] | None:
+    """``(entity_type, entity_id)`` pairs already in the canonical store.
+
+    ``None`` when the store cannot be read — the store error is reported
+    once here and the reference check is skipped; the canonical apply
+    reports the failure on its own.
+    """
+    if canonical is None:
+        canonical = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    try:
+        return {(e["entity_type"], e["entity_id"]) for e in canonical.entities()}
+    except Exception as exc:
+        message = exc.strerror if isinstance(exc, OSError) else str(exc)
+        diag.error(
+            "CANON.STORE_ERROR",
+            f"cannot read canonical state: {message or exc}",
+            file=label,
+        )
+        return None
+
+
+def _check_references(
+    pending: list[tuple[Observation, _UnresolvedRef]],
+    accepted: list[Observation],
+    stored: set[tuple[str, str]],
+    diag: Diagnostics,
+    label: str,
+) -> None:
+    """Warn on references that resolve to no known entity.
+
+    Known = entities this run accepts plus ``stored`` entities already
+    canonical (empty for preview, which sees no store). A miss is a
+    warning, not a rejection — a snapshot can legitimately precede the
+    source that binds the referenced entity — and it is never a guess:
+    the match is the exact (entity type, stable id) pair.
+    """
+    if not pending:
+        return
+    known = {(e.entity, e.id) for o in accepted for e in o.entities}
+    known |= stored
+    for observation, ref in pending:
+        if (ref.target, ref.target_id) in known:
+            continue
+        d = Diagnostic(
+            "warning",
+            "INGEST.UNRESOLVED_REF",
+            f"{ref.what}: {ref.target}/{ref.target_id} resolves to no "
+            "known entity",
+            file=label,
+            path=ref.path,
+            hint="references resolve by exact stable id only; ingest the "
+            "source that binds the referenced entity, or correct the id",
+        )
+        observation.diagnostics.append(d)
+        diag.items.append(d)
 
 
 def _resolve_id(
