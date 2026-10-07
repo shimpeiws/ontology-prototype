@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 
 import apisupport
-import yaml
 from fastapi.testclient import TestClient
 from ontology_api import ApiConfig, create_app
 from ontology_cli.main import main as cli_main
@@ -29,26 +28,38 @@ def make_client(*roots: Path) -> TestClient:
 
 
 def apply_ui_edits(files: dict[str, str]) -> dict[str, str]:
-    """Edits the way the structured form panels produce them: CST-preserving
-    YAML mutations over the four definitions."""
+    """Edits the way the structured form panels produce them: surgical text
+    mutations that leave the rest of each file byte-identical, the same
+    fidelity the web app's CST-preserving `parseDocument` edits produce —
+    including pre-existing comments."""
 
-    def mutate(name: str, fn) -> None:
-        doc = yaml.safe_load(files[name])
-        fn(doc)
-        files[name] = yaml.safe_dump(doc, sort_keys=False)
+    def replace(name: str, old: str, new: str) -> None:
+        assert old in files[name], f"{old!r} not found in {name}"
+        files[name] = files[name].replace(old, new, 1)
 
-    mutate("domain.yaml", lambda d: d["domain"]["entities"]["Job"]["properties"].update(
-        {"notes": {"type": "string", "required": False}}
-    ))
-    mutate("mapping.yaml", lambda d: d["mapping"].update(
-        description="Maps jobs.csv rows to canonical entities and business events (edited in UI)."
-    ))
-    mutate("evaluation.yaml", lambda d: d["evaluation"]["target"].update(
-        description="Strict target; a median of exactly 4 days is a miss. (edited in UI)"
-    ))
-    mutate("agent.yaml", lambda d: d["agent"]["task"].update(
-        goal="Identify likely causes of delayed invoicing and suggest an intervention. (edited in UI)"
-    ))
+    replace(
+        "domain.yaml",
+        "    Invoice:\n      description: A bill issued for a job.",
+        "        notes:\n          type: string\n"
+        "    Invoice:\n      description: A bill issued for a job.",
+    )
+    # UI drafts keep comments authored in the raw editor.
+    files["domain.yaml"] = "# Edited in the authoring UI.\n" + files["domain.yaml"]
+    replace(
+        "mapping.yaml",
+        "description: Maps jobs.csv rows to canonical entities and business events.",
+        "description: Maps jobs.csv rows to canonical entities and business events (edited in UI).",
+    )
+    replace(
+        "evaluation.yaml",
+        "description: Strict target; a median of exactly 4 days is a miss.",
+        "description: Strict target; a median of exactly 4 days is a miss. (edited in UI)",
+    )
+    replace(
+        "agent.yaml",
+        "goal: Identify likely causes of delayed invoicing and suggest an intervention.",
+        "goal: Identify likely causes of delayed invoicing and suggest an intervention. (edited in UI)",
+    )
     return files
 
 
