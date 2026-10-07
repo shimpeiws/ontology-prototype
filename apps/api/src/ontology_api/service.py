@@ -17,13 +17,18 @@ from typing import Any, Literal, Protocol
 
 import ontology_core
 from ontology_core import (
+    RUNTIME_DIR,
     WORKSPACE_FILES,
     Diagnostic,
+    SqliteCanonicalStore,
     Workspace,
     bundle_digest,
+    get_evaluation_run,
     load_workspace,
     load_workspace_texts,
+    proposal_view,
     save_workspace,
+    traceview,
 )
 from ontology_core.agentdef import DELIVERABLES
 from ontology_core.conditions import COMPARISON_OPS, LOGIC_OPS, NULL_OPS, SET_OPS
@@ -125,7 +130,13 @@ class DraftPreviewResult:
 
 
 class WorkspaceService(Protocol):
-    """Workspace operations the API exposes. Injectable for tests."""
+    """Workspace operations the API exposes. Injectable for tests.
+
+    The inspection methods return the exact payload the CLI prints for
+    the same ``--json`` query — a dict with ``workspace``/``ok`` plus the
+    view or the failure ``diagnostics``. ``ApiError`` remains the channel
+    for transport failures only.
+    """
 
     def open(self, path: str) -> OpenResult: ...
 
@@ -140,6 +151,20 @@ class WorkspaceService(Protocol):
         self, path: str, files: Mapping[str, str], sample_text: str
     ) -> DraftPreviewResult: ...
 
+    def trace_overview(self, path: str) -> dict[str, Any]: ...
+
+    def trace_subject(self, path: str, subject: str) -> dict[str, Any]: ...
+
+    def trace_run(self, path: str, run_id: str) -> dict[str, Any]: ...
+
+    def evaluation_runs(self, path: str) -> dict[str, Any]: ...
+
+    def evaluation_run(self, path: str, run_id: str) -> dict[str, Any]: ...
+
+    def proposals(self, path: str) -> dict[str, Any]: ...
+
+    def proposal(self, path: str, proposal_id: str) -> dict[str, Any]: ...
+
 
 class CoreWorkspaceService:
     """WorkspaceService over ``ontology_core``, scoped to configured roots."""
@@ -152,17 +177,7 @@ class CoreWorkspaceService:
         return self._roots
 
     def open(self, path: str) -> OpenResult:
-        resolved = self._resolve(path)
-        try:
-            is_dir = resolved.is_dir()
-        except OSError:
-            is_dir = False
-        if not is_dir:
-            raise ApiError(
-                404,
-                "API.WORKSPACE_NOT_FOUND",
-                f"no workspace directory at {path!r} (resolved: {resolved})",
-            )
+        resolved = self._workspace_dir(path)
         result = load_workspace(resolved)
         files, omitted = self._read_files(resolved)
         return OpenResult(
@@ -203,16 +218,7 @@ class CoreWorkspaceService:
                 f"unknown workspace file(s): {', '.join(unknown)}; "
                 f"expected only {', '.join(sorted(WORKSPACE_FILES.values()))}",
             )
-        try:
-            is_dir = resolved.is_dir()
-        except OSError:
-            is_dir = False
-        if not is_dir:
-            raise ApiError(
-                404,
-                "API.WORKSPACE_NOT_FOUND",
-                f"no workspace directory at {path!r} (resolved: {resolved})",
-            )
+        self._require_dir(path, resolved)
         # The core owns the whole save contract: validation, the base
         # digest check, and atomic activation with rollback.
         result = save_workspace(resolved, files, base_digest=base_digest)
@@ -255,6 +261,257 @@ class CoreWorkspaceService:
             digest=bundle_digest(files),
             preview=preview,
         )
+
+    # ------------------------------------------------------- inspection
+    #
+    # The operational surface (ADR 0003): strictly read-only views over
+    # the workspace's `.ontology/` runtime, through the core's own read
+    # APIs. Canonical reads always go through a `readonly=True` store —
+    # its `mode=ro` connection cannot create `canon.db`, and a stray
+    # write attempt (the proposals index backfill) fails instead of
+    # mutating the store the CLI shares.
+
+    def trace_overview(self, path: str) -> dict[str, Any]:
+        """The ``ontology trace --json`` overview payload."""
+        resolved = self._workspace_dir(path)
+        return self._trace_view(resolved, traceview.trace_overview)[1]
+
+    def trace_subject(self, path: str, subject: str) -> dict[str, Any]:
+        """The ``ontology trace --subject Entity/Id --json`` payload."""
+        resolved = self._workspace_dir(path)
+        entity, sep, subject_id = subject.partition("/")
+        if not sep or not entity or not subject_id:
+            return _failure(
+                resolved,
+                "TRACE.INVALID_SUBJECT",
+                f"invalid --subject {_bounded(subject)!r}: "
+                "expected 'Entity/Id'",
+            )
+        asm, view = self._trace_view(
+            resolved, lambda a: traceview.trace_subject(a, entity, subject_id)
+        )
+        return {
+            "workspace": str(resolved),
+            "ok": asm.ok,
+            "trace": view,
+            "diagnostics": [d.to_dict() for d in asm.diagnostics],
+        }
+
+    def trace_run(self, path: str, run_id: str) -> dict[str, Any]:
+        """The ``ontology trace --run <id> --json`` payload."""
+        resolved = self._workspace_dir(path)
+        asm, view = self._trace_view(
+            resolved, lambda a: traceview.trace_anchor(a, run_id)
+        )
+        if view is None:
+            return _failure(
+                resolved,
+                "TRACE.UNKNOWN_ID",
+                f"no trace artifact with id {run_id!r}",
+                hint="run 'ontology trace <workspace>' for the recorded runs",
+            )
+        return {
+            "workspace": str(resolved),
+            "ok": asm.ok,
+            "trace": view,
+            "diagnostics": [d.to_dict() for d in asm.diagnostics],
+        }
+
+    def evaluation_runs(self, path: str) -> dict[str, Any]:
+        """Every frozen evaluation run, in store order — full records in
+        the same shape the ``evaluate --run`` detail returns."""
+        resolved = self._workspace_dir(path)
+        try:
+            store = self._readonly_store(resolved)
+            try:
+                runs = store.evaluation_runs()
+            finally:
+                store.close()
+        except ApiError:
+            raise
+        except Exception as exc:
+            return _failure(
+                resolved,
+                "EVALUATION.STORE_ERROR",
+                f"cannot read canonical store: {exc}",
+            )
+        return {
+            "workspace": str(resolved),
+            "ok": True,
+            "evaluation_runs": runs,
+        }
+
+    def evaluation_run(self, path: str, run_id: str) -> dict[str, Any]:
+        """The ``ontology evaluate --run <id> --json`` payload.
+
+        Inspection needs only the store's location, not valid
+        definitions — a frozen report stays inspectable after a later
+        edit breaks the workspace.
+        """
+        resolved = self._workspace_dir(path)
+        try:
+            store = self._readonly_store(resolved)
+            try:
+                record = get_evaluation_run(resolved, run_id, store=store)
+            finally:
+                store.close()
+        except ApiError:
+            raise
+        except Exception as exc:
+            return _failure(
+                resolved,
+                "EVALUATION.STORE_ERROR",
+                f"cannot read canonical store: {exc}",
+            )
+        if record is None:
+            return _failure(
+                resolved,
+                "EVALUATION.UNKNOWN_RUN",
+                f"no frozen evaluation report {run_id!r}",
+                hint="reports are recorded only when an evaluation "
+                "completes without errors",
+            )
+        return {"workspace": str(resolved), "ok": True, "run": record}
+
+    def proposals(self, path: str) -> dict[str, Any]:
+        """The ``ontology proposals --json`` payload."""
+        resolved = self._workspace_dir(path)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return {
+                "workspace": str(resolved),
+                "ok": False,
+                "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+            }
+        try:
+            store = self._readonly_store(resolved)
+            try:
+                assert loaded.workspace is not None
+                views = proposal_view(loaded.workspace, store=store)
+            finally:
+                store.close()
+        except ApiError:
+            raise
+        except Exception as exc:
+            return _failure(
+                resolved,
+                "DECISION.STORE_ERROR",
+                f"cannot read canonical store: {exc}",
+            )
+        return {
+            "workspace": str(resolved),
+            "ok": True,
+            "proposals": views,
+        }
+
+    def proposal(self, path: str, proposal_id: str) -> dict[str, Any]:
+        """The ``ontology proposals --show <id> --json`` payload."""
+        resolved = self._workspace_dir(path)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return {
+                "workspace": str(resolved),
+                "ok": False,
+                "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+            }
+        try:
+            store = self._readonly_store(resolved)
+            try:
+                assert loaded.workspace is not None
+                views = proposal_view(loaded.workspace, store=store)
+            finally:
+                store.close()
+        except ApiError:
+            raise
+        except Exception as exc:
+            return _failure(
+                resolved,
+                "DECISION.STORE_ERROR",
+                f"cannot read canonical store: {exc}",
+            )
+        view = next(
+            (v for v in views if v["proposal_id"] == proposal_id), None
+        )
+        if view is None:
+            return _failure(
+                resolved,
+                "DECISION.UNKNOWN_PROPOSAL",
+                f"no persisted proposal {proposal_id!r}",
+                hint="run 'ontology proposals <workspace>' to list "
+                "persisted proposals",
+            )
+        return {"workspace": str(resolved), "ok": True, "proposal": view}
+
+    def _readonly_store(self, resolved: Path) -> SqliteCanonicalStore:
+        """A workspace's store without creating it. Every ``.ontology``
+        entry must resolve inside the configured roots — a symlink
+        planted there would otherwise let inspection read arbitrary
+        external runtime state."""
+        self._check_runtime(resolved / RUNTIME_DIR)
+        return SqliteCanonicalStore(
+            resolved / RUNTIME_DIR, readonly=True
+        )
+
+    def _check_runtime(self, runtime: Path) -> None:
+        """Reject a runtime tree that escapes the configured roots.
+
+        Every entry — including those reached through a symlinked
+        directory — is checked by its resolved target, so a link chain
+        cannot hide a path outside the roots. Resolved directories are
+        visited once, which also breaks link cycles.
+        """
+        pending = [runtime]
+        seen: set[Path] = set()
+        while pending:
+            entry = pending.pop()
+            real = _resolve(entry)
+            if real is None or not any(
+                real.is_relative_to(root) for root in self._roots
+            ):
+                raise ApiError(
+                    403,
+                    "API.RUNTIME_OUTSIDE_ROOTS",
+                    f"{entry.relative_to(runtime.parent)} resolves "
+                    "outside the configured roots; refusing to read "
+                    "runtime state",
+                )
+            if real in seen:
+                continue
+            seen.add(real)
+            try:
+                if entry.is_dir():
+                    pending += list(entry.iterdir())
+            except OSError:
+                continue
+
+    def _trace_view(
+        self, resolved: Path, view
+    ) -> tuple[traceview.TraceAssembly, Any]:
+        """Assemble the trace and build ``view(asm)`` while the store is
+        open — the store never outlives the assembly that read it."""
+        store = self._readonly_store(resolved)
+        try:
+            asm = traceview.assemble_trace(resolved, store=store)
+            return asm, view(asm)
+        finally:
+            store.close()
+
+    def _workspace_dir(self, path: str) -> Path:
+        """Resolve ``path`` under the roots and require an existing dir."""
+        return self._require_dir(path, self._resolve(path))
+
+    def _require_dir(self, path: str, resolved: Path) -> Path:
+        try:
+            is_dir = resolved.is_dir()
+        except OSError:
+            is_dir = False
+        if not is_dir:
+            raise ApiError(
+                404,
+                "API.WORKSPACE_NOT_FOUND",
+                f"no workspace directory at {path!r} (resolved: {resolved})",
+            )
+        return resolved
 
     def _check_file_names(self, files: Mapping[str, str]) -> None:
         unknown = sorted(set(files) - set(WORKSPACE_FILES.values()))
@@ -344,6 +601,25 @@ class CoreWorkspaceService:
         return files, omitted
 
 
+def _failure(
+    resolved: Path, code: str, message: str, *, hint: str | None = None
+) -> dict[str, Any]:
+    """A domain-failure payload — the same shape the CLI's ``--json``
+    error path emits. These are read results, not transport errors: the
+    finding travels in ``diagnostics`` with the core's stable codes."""
+    diagnostic = Diagnostic("error", code, message, hint=hint)
+    return {
+        "workspace": str(resolved),
+        "ok": False,
+        "diagnostics": [diagnostic.to_dict()],
+    }
+
+
+def _bounded(value: str, limit: int = 256) -> str:
+    """Bound a user-supplied value echoed into a diagnostic message."""
+    return value if len(value) <= limit else value[:limit] + "…"
+
+
 def _resolve(candidate: Path) -> Path | None:
     try:
         return candidate.resolve()
@@ -419,6 +695,13 @@ def contract_metadata() -> dict[str, Any]:
             "validate_draft": f"POST /api/{API_VERSION}/workspaces/drafts/validate",
             "save": f"POST /api/{API_VERSION}/workspaces/save",
             "preview_draft": f"POST /api/{API_VERSION}/workspaces/drafts/preview",
+            "trace_overview": f"POST /api/{API_VERSION}/workspaces/trace",
+            "trace_subject": f"POST /api/{API_VERSION}/workspaces/trace/subject",
+            "trace_run": f"POST /api/{API_VERSION}/workspaces/trace/run",
+            "evaluation_runs": f"POST /api/{API_VERSION}/workspaces/evaluations",
+            "evaluation_run": f"POST /api/{API_VERSION}/workspaces/evaluations/run",
+            "proposals": f"POST /api/{API_VERSION}/workspaces/proposals",
+            "proposal": f"POST /api/{API_VERSION}/workspaces/proposals/show",
         },
         "contract": {
             "property_types": list(PROPERTY_TYPES),

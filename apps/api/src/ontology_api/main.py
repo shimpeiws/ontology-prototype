@@ -28,10 +28,21 @@ from .schemas import (
     DraftValidateRequest,
     DraftValidateResponse,
     ErrorResponse,
+    EvaluationRunRequest,
+    EvaluationRunResponse,
+    EvaluationRunsResponse,
     OpenRequest,
     OpenResponse,
+    ProposalRequest,
+    ProposalResponse,
+    ProposalsResponse,
     SaveRequest,
     SaveResponse,
+    TraceOverviewResponse,
+    TraceRunRequest,
+    TraceSubjectRequest,
+    TraceViewResponse,
+    WorkspacePathRequest,
     WorkspaceRef,
 )
 from .service import (
@@ -240,6 +251,160 @@ def create_app(
             diagnostics=[DiagnosticOut(**d.to_dict()) for d in result.diagnostics],
             preview=result.preview,
         )
+
+    # ------------------------------------------------------- inspection
+    #
+    # Operational surface (ADR 0003): read-only views over `.ontology/`.
+    # The service returns the CLI's `--json` payload verbatim; each route
+    # only adds `api_version`. Domain misses arrive as `ok: false` with
+    # core diagnostics — `{error}` stays reserved for transport failures.
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/trace",
+        response_model=TraceOverviewResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def trace_overview(
+        payload: WorkspacePathRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.trace_overview(payload.path),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/trace/subject",
+        response_model=TraceViewResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def trace_subject(
+        payload: TraceSubjectRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.trace_subject(payload.path, payload.subject),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/trace/run",
+        response_model=TraceViewResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def trace_run(
+        payload: TraceRunRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.trace_run(payload.path, payload.run_id),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/evaluations",
+        response_model=EvaluationRunsResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def evaluation_runs(
+        payload: WorkspacePathRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.evaluation_runs(payload.path),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/evaluations/run",
+        response_model=EvaluationRunResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def evaluation_run(
+        payload: EvaluationRunRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.evaluation_run(payload.path, payload.run_id),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/proposals",
+        response_model=ProposalsResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def proposals(
+        payload: WorkspacePathRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.proposals(payload.path),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/proposals/show",
+        response_model=ProposalResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def proposal(
+        payload: ProposalRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.proposal(payload.path, payload.proposal_id),
+        }
 
     return app
 

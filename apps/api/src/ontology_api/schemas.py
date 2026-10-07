@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
@@ -88,6 +88,42 @@ class DraftPreviewRequest(BaseModel):
     sample: PreviewSample
 
 
+class WorkspacePathRequest(BaseModel):
+    """Identify a workspace directory under the configured roots."""
+
+    path: str = Field(min_length=1)
+
+
+class TraceSubjectRequest(WorkspacePathRequest):
+    """Follow one subject through the recorded run — like the CLI's
+    ``trace --subject Entity/Id``."""
+
+    # Ingestion stores ids verbatim with no length cap, so a request cap
+    # would reject valid stored subjects; the echo into diagnostic
+    # messages is bounded in the service instead.
+    subject: str = Field(min_length=1)
+
+
+class TraceRunRequest(WorkspacePathRequest):
+    """Inspect one recorded artifact id — like the CLI's ``trace --run``."""
+
+    run_id: str = Field(min_length=1, max_length=1024)
+
+
+class EvaluationRunRequest(WorkspacePathRequest):
+    """Read one frozen evaluation report — like the CLI's
+    ``evaluate --run``."""
+
+    run_id: str = Field(min_length=1, max_length=1024)
+
+
+class ProposalRequest(WorkspacePathRequest):
+    """Inspect one persisted proposal — like the CLI's
+    ``proposals --show``."""
+
+    proposal_id: str = Field(min_length=1, max_length=1024)
+
+
 class WorkspaceRef(BaseModel):
     """``digest`` is null when the on-disk bundle could not be fully
     represented in ``files`` (e.g. a symlink escaping the roots), so the
@@ -147,6 +183,101 @@ class DraftPreviewResponse(BaseModel):
     digest: str
     diagnostics: list[DiagnosticOut]
     preview: dict[str, Any] | None
+
+
+class TraceOverviewResponse(BaseModel):
+    """The ``ontology trace --json`` overview payload plus ``api_version``.
+
+    The section fields are the core's overview dict verbatim; ``extra``
+    keys pass through so a new core section can never be silently dropped
+    and diverge from the CLI payload. Every section is optional so a
+    degraded assembly can never trip response validation into a 500 —
+    whatever the core emits is what the client sees.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    journal: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
+    canonical: dict[str, Any] | None = None
+    projection_runs: list[dict[str, Any]] | None = None
+    diagnosis_runs: list[dict[str, Any]] | None = None
+    proposals: dict[str, Any] | None = None
+    decisions: int | None = None
+    executions: dict[str, Any] | None = None
+    evaluation_runs: list[dict[str, Any]] | None = None
+    links: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class TraceViewResponse(BaseModel):
+    """The ``trace --subject``/``trace --run`` JSON payload plus
+    ``api_version``. ``trace`` is omitted on domain failures — the CLI
+    emits only ``workspace``/``ok``/``diagnostics`` there too."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    trace: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class EvaluationRunsResponse(BaseModel):
+    """Frozen evaluation run list. On a store failure ``evaluation_runs``
+    is omitted and ``diagnostics`` carries ``EVALUATION.STORE_ERROR``,
+    mirroring the CLI's error payload."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    evaluation_runs: list[dict[str, Any]] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class EvaluationRunResponse(BaseModel):
+    """The ``evaluate --run`` JSON payload plus ``api_version``: ``run``
+    on success, ``diagnostics`` on a domain failure."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    run: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class ProposalsResponse(BaseModel):
+    """The ``proposals --json`` payload plus ``api_version``: ``proposals``
+    on success, ``diagnostics`` when the workspace itself is invalid."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    proposals: list[dict[str, Any]] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class ProposalResponse(BaseModel):
+    """The ``proposals --show`` JSON payload plus ``api_version``:
+    ``proposal`` on success, ``diagnostics`` on a domain failure."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    proposal: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
 
 
 class ContractResponse(BaseModel):

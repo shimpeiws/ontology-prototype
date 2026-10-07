@@ -394,6 +394,73 @@ def test_property_round_trip(tmp_path: Path) -> None:
     }
 
 
+def test_readonly_reads_pre_upgrade_schema(tmp_path: Path) -> None:
+    """A canon.db from before the migrated tables/columns reads through
+    a readonly store as empty sections and migration-equivalent values
+    — never as store errors, and without modifying the database."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    conn = sqlite3.connect(runtime / "canon.db")
+    conn.execute(
+        """
+        CREATE TABLE entities (
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            properties TEXT NOT NULL,
+            first_observation_id TEXT NOT NULL,
+            last_observation_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (entity_type, entity_id)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO entities VALUES ("
+        " 'Job', 'C01', '{}', 'obs-1', 'obs-2', '2026-09-01T00:00:00Z')"
+    )
+    conn.commit()
+    conn.close()
+
+    store = SqliteCanonicalStore(runtime, readonly=True)
+    try:
+        (entity,) = store.entities()
+        assert entity["properties_changed_at"] == "2026-09-01T00:00:00Z"
+        assert entity["last_ingest_id"] == ""
+
+        (typed,) = store.entities_of_type("Job")
+        assert typed["properties_changed_at"] == "2026-09-01T00:00:00Z"
+
+        assert store.diagnosis_runs() == []
+        assert store.diagnosis_run("dgx-x") is None
+        assert store.proposals() == []
+        assert store.proposal("dgx-x-p0") is None
+        assert store.decisions_for("dgx-x-p0") == []
+        assert store.executions_for_key("key") == []
+        assert store.executions_for_proposal("dgx-x-p0") == []
+        assert store.fact_links("fact") == []
+        assert store.links_for_target("target") == []
+        assert store.evaluation_runs() == []
+        assert store.evaluation_run("evl-x") is None
+    finally:
+        store.close()
+
+    # The read-only open never writes the missing schema back.
+    conn = sqlite3.connect(runtime / "canon.db")
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(entities)")
+    }
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        )
+    }
+    conn.close()
+    assert "properties_changed_at" not in columns
+    assert "last_ingest_id" not in columns
+    assert tables == {"entities"}
+
+
 def _observation(
     observation_id: str,
     *,
