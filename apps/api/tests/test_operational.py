@@ -683,7 +683,11 @@ class TestLegacyStoreCompat:
             client, "trace/subject", path=path, subject="Job/C01"
         )
         assert subject["ok"] is True
-        assert "trace" in subject
+        entity = subject["trace"]["entity"]
+        # The absent column reads as the migration backfill — the last
+        # winning observation time — not an empty string.
+        assert entity["properties_changed_at"] == entity["updated_at"]
+        assert entity["properties_changed_at"] != ""
 
         # Read-only inspection never writes the missing schema back.
         assert fingerprint(walked.workspace / ".ontology") == before
@@ -743,6 +747,22 @@ class TestPathGuards:
         runtime.unlink()
         runtime.mkdir()
         (runtime / "canon.db").symlink_to(external / "canon.db")
+        response = client.post(
+            "/api/v1/workspaces/trace",
+            json={"path": str(walked.workspace)},
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == (
+            "API.RUNTIME_OUTSIDE_ROOTS"
+        )
+
+        # A directory link that stays inside the roots can still hide a
+        # nested link to external state — the check traverses it.
+        hidden = roots / "hidden-observations"
+        hidden.mkdir()
+        (hidden / "evil.jsonl").symlink_to(external / "canon.db")
+        (runtime / "canon.db").unlink()
+        (runtime / "observations").symlink_to(hidden)
         response = client.post(
             "/api/v1/workspaces/trace",
             json={"path": str(walked.workspace)},

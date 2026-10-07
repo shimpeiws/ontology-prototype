@@ -748,17 +748,23 @@ class SqliteCanonicalStore:
         """SELECT fragment for ``entities`` reads.
 
         A readonly connection never runs ``_migrate``, so a ``canon.db``
-        that predates the migrated columns reads them as the same ``''``
-        the migration default carries. ``columns`` is a fixed literal at
-        every call site — never user input.
+        that predates the migrated columns reads the values a migration
+        would have produced: ``properties_changed_at`` falls back to
+        ``updated_at`` (the same backfill ``_migrate`` writes) and
+        ``last_ingest_id`` to the schema default ``''``. ``columns`` is
+        a fixed literal at every call site — never user input.
         """
         if self._entity_cols is None:
             self._entity_cols = {
                 row[1]
                 for row in conn.execute("PRAGMA table_info(entities)")
             }
+        empty = "''"
+        backfill = {"properties_changed_at": "updated_at"}
         return ", ".join(
-            name if name in self._entity_cols else f"'' AS {name}"
+            name
+            if name in self._entity_cols
+            else f"{backfill.get(name, empty)} AS {name}"
             for name in columns
         )
 

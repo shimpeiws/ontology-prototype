@@ -9,7 +9,6 @@ can inject a different implementation without touching the transport.
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import timezone
@@ -450,20 +449,15 @@ class CoreWorkspaceService:
     def _check_runtime(self, runtime: Path) -> None:
         """Reject a runtime tree that escapes the configured roots.
 
-        ``os.walk`` does not follow directory symlinks, so a symlinked
-        child is checked by its own resolution rather than traversed.
+        Every entry — including those reached through a symlinked
+        directory — is checked by its resolved target, so a link chain
+        cannot hide a path outside the roots. Resolved directories are
+        visited once, which also breaks link cycles.
         """
-        entries = [runtime]
-        try:
-            if runtime.is_dir():
-                for dirpath, dirnames, filenames in os.walk(runtime):
-                    entries += [
-                        Path(dirpath) / name
-                        for name in (*dirnames, *filenames)
-                    ]
-        except OSError:
-            pass
-        for entry in entries:
+        pending = [runtime]
+        seen: set[Path] = set()
+        while pending:
+            entry = pending.pop()
             real = _resolve(entry)
             if real is None or not any(
                 real.is_relative_to(root) for root in self._roots
@@ -475,6 +469,14 @@ class CoreWorkspaceService:
                     "outside the configured roots; refusing to read "
                     "runtime state",
                 )
+            if real in seen:
+                continue
+            seen.add(real)
+            try:
+                if entry.is_dir():
+                    pending += list(entry.iterdir())
+            except OSError:
+                continue
 
     def _trace_view(
         self, resolved: Path, view
