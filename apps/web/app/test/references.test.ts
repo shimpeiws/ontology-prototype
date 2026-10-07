@@ -14,7 +14,13 @@ import {
   SYNTHETIC_BUNDLE_FILES,
   SYNTHETIC_EVALUATION_YAML,
   SYNTHETIC_MAPPING_YAML,
+  SYNTHETIC_MULTI_SOURCE_MAPPING_YAML,
 } from "./fixtures";
+
+const MULTI_SOURCE_BUNDLE_FILES: Record<string, string> = {
+  ...SYNTHETIC_BUNDLE_FILES,
+  "mapping.yaml": SYNTHETIC_MULTI_SOURCE_MAPPING_YAML,
+};
 
 const BROKEN = "foo: [unclosed";
 
@@ -160,6 +166,64 @@ describe("applyRename", () => {
       "state: { field: status }",
     );
     expect(result.files["agent.yaml"]).toBeUndefined();
+  });
+
+  it("renames an entity across every sources[] binding scope", () => {
+    // FIND-005: the scanner reports hits under mapping.sources[i] but the
+    // renamer originally walked only top-level bindings, leaving dangling
+    // names in multi-source drafts.
+    const concept: Concept = { kind: "entity", name: "Job" };
+    const result = applyRename(
+      MULTI_SOURCE_BUNDLE_FILES,
+      concept,
+      "WorkItem",
+    );
+
+    const mapping = result.files["mapping.yaml"]!;
+    expect(mapping).not.toContain("entity: Job");
+    expect(mapping).toContain("entity: WorkItem");
+    // All three binding positions retargeted: sources[0] entity binding,
+    // sources[0] event subject, sources[1] event subject.
+    expect(mapping.match(/entity: WorkItem/g)).toHaveLength(3);
+    // The domain keeps unrelated names (JobCompleted, job-invoicing) —
+    // only Job's declaration key and its references retarget.
+    expect(result.files["domain.yaml"]).toContain("WorkItem:");
+    expect(result.files["domain.yaml"]).not.toContain("subject: Job");
+    expect(result.files["domain.yaml"]).toContain("JobCompleted:");
+    expect(result.files["agent.yaml"]).toContain("ref: WorkItem");
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("renames an event inside its sources[] binding", () => {
+    const concept: Concept = { kind: "event", name: "InvoiceIssued" };
+    const result = applyRename(
+      MULTI_SOURCE_BUNDLE_FILES,
+      concept,
+      "Billed",
+    );
+
+    const mapping = result.files["mapping.yaml"]!;
+    expect(mapping).toContain("event: Billed");
+    expect(mapping).not.toContain("InvoiceIssued");
+    expect(result.files["evaluation.yaml"]).toContain("end_event: Billed");
+  });
+
+  it("renames an entity property inside a sources[] binding", () => {
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Job",
+      name: "status",
+    };
+    const result = applyRename(
+      MULTI_SOURCE_BUNDLE_FILES,
+      concept,
+      "state",
+    );
+
+    const mapping = result.files["mapping.yaml"]!;
+    expect(mapping).toContain("state: { field: status }");
+    expect(mapping).not.toContain("status: { field: status }");
   });
 
   it("renames a projection and the agent task reference", () => {

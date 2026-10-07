@@ -16,9 +16,10 @@ The differences from ingest are the point of the type:
 - Versions are explicit: the result carries the sample's content digest and
   the same ``mapping_digest`` recipe ingest records, and the preview id and
   observation ids are derived deterministically from the input, mapping, and
-  domain digests — a preview result states exactly which input and which
-  definitions produced it. Resolution consults the domain (required
-  properties, event-time policy), so the domain is part of preview identity.
+  domain digests plus the selected source name — a preview result states
+  exactly which input, which definitions, and which source produced it.
+  Resolution consults the domain (required properties, event-time policy),
+  so the domain is part of preview identity.
 
 Never raises on bad input: encoding errors, parse failures, and malformed
 records all become diagnostics, same as ingest.
@@ -67,8 +68,9 @@ class PreviewResult:
 
     ``record_count`` counts every record the parser produced, including ones
     dropped by the record cap; ``truncated`` marks that drop. ``preview_id``
-    is deterministic — derived from the input, mapping, and domain digests —
-    so an identical re-run reports identical observation ids.
+    is deterministic — derived from the input, mapping, and domain digests
+    plus the selected source name — so an identical re-run reports identical
+    observation ids.
     """
 
     diagnostics: list[Diagnostic] = field(default_factory=list)
@@ -174,9 +176,12 @@ def preview_snapshot(
     if not records:
         diag.warning("INGEST.EMPTY", "sample contains no records", file=label)
 
+    # The selected source is part of preview identity: identical bytes
+    # resolved under different sources produce different facts, so their
+    # preview and observation ids must differ too.
     result.preview_id = (
         f"prev-{result.content_digest[7:19]}-{result.mapping_digest[7:19]}"
-        f"-{_domain_digest(workspace)[7:19]}"
+        f"-{_domain_digest(workspace)[7:19]}-{selected.name}"
     )
     pending: list[tuple[Observation, _UnresolvedRef]] = []
     for row, raw in records:

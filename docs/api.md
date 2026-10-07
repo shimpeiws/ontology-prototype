@@ -243,8 +243,10 @@ Response `200`:
 - `preview` is `null` when the draft bundle did not validate; the draft
   `diagnostics` explain why.
 - `input_digest`/`mapping_digest` and the derived `preview_id`/
-  `observation_id`s make the input and mapping versions of a result
-  explicit — a rerun over identical bytes reports identical ids.
+  `observation_id`s make the input, mapping versions, and selected source
+  of a result explicit — a rerun over identical bytes under the same
+  source reports identical ids, while identical bytes under a different
+  source do not.
 - `observations[].record` holds the normalized record (blanks/nulls as
   `null`); rejected rows keep the record and the diagnostics that
   rejected it — a record is accepted whole or rejected whole.

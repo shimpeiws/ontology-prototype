@@ -467,6 +467,39 @@ def test_preview_reports_selected_source_and_format(tmp_path: Path) -> None:
     assert "INGEST.UNRESOLVED_REF" in codes_of(result.observations[0])
 
 
+def test_preview_ids_differ_across_sources_for_identical_bytes(
+    tmp_path: Path,
+) -> None:
+    # FIND-006: identical sample bytes resolved under different sources
+    # produce different facts, so the preview id (and the observation ids
+    # derived from it) must carry the selected source — reruns under the
+    # same source stay stable.
+    workspace = make_multi(tmp_path)
+    sample = INVOICES_CSV.encode()
+
+    jobs = preview_snapshot(
+        workspace, sample, source="jobs", observed_at=FIXED_NOW
+    )
+    invoices = preview_snapshot(
+        workspace, sample, source="invoices", observed_at=FIXED_NOW
+    )
+    invoices_again = preview_snapshot(
+        workspace, sample, source="invoices", observed_at=FIXED_NOW
+    )
+
+    assert jobs.preview_id != invoices.preview_id
+    assert jobs.preview_id is not None
+    assert jobs.preview_id.endswith("-jobs")
+    assert invoices.preview_id.endswith("-invoices")
+    job_obs = {o.observation_id for o in jobs.observations}
+    inv_obs = {o.observation_id for o in invoices.observations}
+    assert job_obs.isdisjoint(inv_obs)
+    assert invoices_again.preview_id == invoices.preview_id
+    assert {
+        o.observation_id for o in invoices_again.observations
+    } == inv_obs
+
+
 def test_preview_matches_ingest_per_source(tmp_path: Path) -> None:
     workspace = make_multi(tmp_path)
     preview = preview_snapshot(

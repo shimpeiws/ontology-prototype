@@ -383,15 +383,15 @@ function renameInDomain(
   return changed;
 }
 
-function renameInMapping(
+/** Retarget bindings inside one binding scope (mapping or a source entry). */
+function renameInBindingScope(
   doc: Document,
+  scope: YAMLMap,
   concept: Concept,
   newName: string,
 ): boolean {
-  const mapping = doc.get("mapping");
-  if (!isMap(mapping)) return false;
   let changed = false;
-  const entityBindings = mapping.get("entities");
+  const entityBindings = scope.get("entities");
   if (isSeq(entityBindings)) {
     for (const item of entityBindings.items) {
       if (!isMap(item)) continue;
@@ -409,7 +409,7 @@ function renameInMapping(
       }
     }
   }
-  const eventBindings = mapping.get("events");
+  const eventBindings = scope.get("events");
   if (isSeq(eventBindings)) {
     for (const item of eventBindings.items) {
       if (!isMap(item)) continue;
@@ -421,6 +421,27 @@ function renameInMapping(
         if (isMap(subject) && retarget(doc, subject, "entity", concept.name, newName))
           changed = true;
       }
+    }
+  }
+  return changed;
+}
+
+function renameInMapping(
+  doc: Document,
+  concept: Concept,
+  newName: string,
+): boolean {
+  const mapping = doc.get("mapping");
+  if (!isMap(mapping)) return false;
+  // Legacy top-level bindings plus every `sources[]` entry — the scanner
+  // reports hits under both, so the rename must retarget both or the draft
+  // keeps dangling names the validator flags as unknown.
+  let changed = renameInBindingScope(doc, mapping, concept, newName);
+  const sources = mapping.get("sources");
+  if (isSeq(sources)) {
+    for (const entry of sources.items) {
+      if (!isMap(entry)) continue;
+      if (renameInBindingScope(doc, entry, concept, newName)) changed = true;
     }
   }
   return changed;

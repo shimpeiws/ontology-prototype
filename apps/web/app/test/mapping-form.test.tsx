@@ -820,6 +820,35 @@ describe("PreviewPanel", () => {
     expect(screen.queryByLabelText("Source")).toBeNull();
   });
 
+  it("drops a stale source selection after a workspace switch", async () => {
+    // FIND-007: a remembered source name must not leak into the request
+    // after the draft stops declaring it — the picker disappears but the
+    // next preview used to send the stale name (INGEST.UNKNOWN_SOURCE).
+    const user = userEvent.setup();
+    renderForm(
+      <>
+        <PreviewPanel />
+        <SwitchProbe />
+      </>,
+      SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE,
+    );
+    await waitForContract();
+
+    await user.selectOptions(screen.getByLabelText("Source"), "invoices");
+
+    // Open a workspace that declares only "jobs".
+    await user.click(screen.getByTestId("switch-workspace"));
+    expect(screen.queryByLabelText("Source")).toBeNull();
+
+    await user.type(screen.getByLabelText(/Sample input/), "a,b");
+    await user.click(screen.getByRole("button", { name: "Run preview" }));
+    await waitFor(() => expect(previewMock).toHaveBeenCalledOnce());
+    expect(previewMock.mock.calls[0][2]).toEqual({
+      text: "a,b",
+      source: "jobs",
+    });
+  });
+
   it("marks the result stale after a draft edit until rerun", async () => {
     const user = userEvent.setup();
     renderForm(

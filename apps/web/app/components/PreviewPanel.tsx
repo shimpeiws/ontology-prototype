@@ -215,7 +215,12 @@ export function PreviewPanel() {
   const mappingFallback = state.workspace?.definitions?.mapping ?? null;
   const sources = draftSourceNames(mappingDraft, mappingFallback);
   const [source, setSource] = useState("");
-  const effectiveSource = source || sources[0] || "";
+  // A remembered selection is only honored while the current draft still
+  // declares that source — after a workspace switch or a source removal the
+  // stale name must not leak into the request.
+  const effectiveSource = sources.includes(source)
+    ? source
+    : sources[0] || "";
   const format = draftSourceFormat(
     mappingDraft,
     mappingFallback,
