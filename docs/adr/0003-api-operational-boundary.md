@@ -19,12 +19,16 @@ API process and CLI invocations share the same `.ontology/` store.
 The operational store today:
 
 - `SqliteCanonicalStore` holds canonical facts, frozen runs, proposals,
-  decisions, executions, and evaluation reports in `.ontology/canon.db`. Every
-  table is append-only by trigger. Each write runs in a single transaction
-  that commits whole or rolls back. Connections carry no `busy_timeout` and
-  the journal mode is the SQLite default, so a writer that meets a held lock
-  fails immediately with `SQLITE_BUSY`, and a reader can block behind a write
-  transaction.
+  decisions, executions, and evaluation reports in `.ontology/canon.db`.
+  History tables — events, runs, proposals, decisions, executions, fact
+  links — are append-only by trigger. The `entities` table is different: a
+  current-state read model updated by upsert (`ON CONFLICT DO UPDATE`),
+  not history. Each write runs in a single transaction that commits whole
+  or rolls back. Connections carry Python's default five-second SQLite
+  timeout rather than an explicit `busy_timeout`, so a writer that meets a
+  held lock waits up to five seconds before failing with `SQLITE_BUSY`,
+  and with the default rollback journal a reader can hit the same lock
+  while a write transaction is open.
 - `.ontology/trace.jsonl` is an append-only evidence journal; single-line
   appends from two processes can interleave at worst. It is audit evidence,
   not correctness state.
@@ -51,13 +55,18 @@ with exactly these capabilities:
   never queries it with its own SQL, and never reimplements assembly logic
   the core already owns.
 - **Decision writes.** The API may record human decisions — and nothing else
-  — by calling `decisions.decide` directly. The request carries an explicit
-  non-empty `reviewer`, enforced by the same `DECISION.NO_REVIEWER`
-  diagnostic the CLI relies on. Reviewer identity is self-asserted, the same
-  trust level as `ontology decide --reviewer` on this single-user local
-  tool. An API-recorded decision is an ordinary row in the append-only
-  `decisions` table: `check_approval` and `ontology execute` honor it
-  exactly like a CLI decision because there is one gate and one store.
+  — by calling `decisions.decide` directly. That call also runs its
+  documented, idempotent proposal-index backfill (`backfill_proposals`) for
+  diagnosis runs recorded before the `proposals` index existed: the repair
+  writes append-only index rows inside the same path and is part of the
+  decision operation's contract, not a second mutation surface. The request
+  carries an explicit non-empty `reviewer`, enforced by the same
+  `DECISION.NO_REVIEWER` diagnostic the CLI relies on. Reviewer identity is
+  self-asserted, the same trust level as `ontology decide --reviewer` on
+  this single-user local tool. An API-recorded decision is an ordinary row
+  in the append-only `decisions` table: `check_approval` and
+  `ontology execute` honor it exactly like a CLI decision because there is
+  one gate and one store.
 - **No run triggers in v0.4.** Ingest, project, diagnose, and evaluate stay
   CLI-invoked. The console follows recorded runs; it does not start them.
 - **Execution is never exposed.** `execute` and the write-back adapters stay
@@ -78,11 +87,13 @@ invocations. Coordination is decided as follows:
   a CLI process, and a second lock registry would drift from the store it
   claims to guard. In-process serialization inside the API may complement
   the engine's arbitration but never replaces it.
-- **The store runs in WAL journal mode with a bounded `busy_timeout`.**
-  Readers never block behind a writer and never see a partial transaction —
-  a read returns the last committed state. A writer that cannot obtain the
-  write lock within the bounded wait fails instead of holding the request
-  open.
+- **The store runs in WAL journal mode with an explicit bounded
+  `busy_timeout`.** Readers never block behind a writer and never see a
+  partial transaction — a read returns the last committed state. Writers
+  already wait under Python's five-second default; making the bound
+  explicit lets each surface choose it deliberately instead of inheriting a
+  library constant. A writer that cannot obtain the write lock within the
+  bounded wait fails instead of holding the request open.
 - **The named failure behavior for concurrent CLI/API writes is
   `STORAGE.WRITE_BUSY`.** The losing writer's transaction rolls back whole —
   never a partial write — and the failure is surfaced as a typed, retryable
@@ -92,16 +103,21 @@ invocations. Coordination is decided as follows:
   append-only and the newest *recorded* decision wins by insertion order,
   not wall-clock `decided_at`. Two racing decides on the same proposal both
   persist and stay inspectable; the record arbitrates, not a lock. The same
-  holds for every append-only table — races append, they do not overwrite.
+  holds for every append-only history table — races append, they do not
+  overwrite. The `entities` current-state table is the exception:
+  concurrent merges are serialized writers, each committing whole — the
+  last committed merge wins the row, with the event stream still carrying
+  every observation behind it.
 - **`trace.jsonl` stays best-effort.** Concurrent appends may interleave on
   oversized events; the journal is evidence, so no lock is taken on it.
   Correctness state lives only in `canon.db`.
 
-Enabling WAL and `busy_timeout` on `SqliteCanonicalStore`, plus the
-`STORAGE.WRITE_BUSY` mapping in the CLI and API, lands with the first
-operational endpoint issues — this record names the contract they must
-implement. Until then, the current fail-fast `SQLITE_BUSY` behavior is the
-degraded but safe version of the same contract.
+Enabling WAL and an explicit `busy_timeout` on `SqliteCanonicalStore`,
+plus the `STORAGE.WRITE_BUSY` mapping in the CLI and API, lands with the
+first operational endpoint issues — this record names the contract they
+must implement. Until then, the store's implicit five-second default wait
+and untyped `database is locked` error are the degraded but safe version
+of the same contract.
 
 ### Document amendments
 
@@ -147,25 +163,28 @@ second source of truth that can leak or drift (stale locks after a crash)
 and still leaves readers racing writers. Rejected in favor of the engine's
 own arbitration.
 
-### Fail fast instead of a bounded wait
+### Keep the implicit default wait
 
-Keeping the current zero `busy_timeout` — immediate `SQLITE_BUSY` on any
-held lock — is simpler but turns every sub-second CLI transaction overlap
-into a spurious console error. A short bounded wait covers the common
-overlap while preserving the same typed failure for real contention. The
-degraded fail-fast behavior remains the fallback until the pragma lands.
+Python's `sqlite3` already applies a five-second busy handler, so the
+store today does wait — silently and untyped. Depending on an implicit
+library default leaves the bound undocumented and unversioned: it cannot
+be tuned per surface, and the failure still arrives as a bare
+`database is locked` with no contract name. Rejected: the wait itself is
+fine — it is the implicitness that fails the coordination requirement.
 
 ## Consequences
 
 - The `operations` list in `GET /api/v1/contract` will grow when the v0.4
   endpoints land; `test_contract_exposes_no_action_authority` is updated
   then to keep `execute`, `diagnose`, and run triggers forbidden.
-- `SqliteCanonicalStore` gains WAL mode and a bounded `busy_timeout`, and
-  busy errors get the `STORAGE.WRITE_BUSY` name in the CLI and `503` in the
-  API — small core and transport changes owned by the endpoint issues.
-- The append-only model carries the concurrency story: races between
-  writers produce ordered appends, not corruption, and the busy failure is
-  the only coordination error a caller ever sees.
+- `SqliteCanonicalStore` gains WAL mode and an explicit `busy_timeout`,
+  and busy errors get the `STORAGE.WRITE_BUSY` name in the CLI and `503`
+  in the API — small core and transport changes owned by the endpoint
+  issues.
+- Append-only history plus serialized entity upserts carry the concurrency
+  story: races between writers produce ordered appends or whole
+  transactions, not corruption, and the busy failure is the only
+  coordination error a caller ever sees.
 - Reviewer identity is self-asserted on both surfaces. Any future
   multi-user or network-exposed deployment must revisit this — it is a
   deliberate consequence of the single-user local tool, not an oversight.
