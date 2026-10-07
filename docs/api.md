@@ -68,7 +68,8 @@ authoritative constants: API version, core version, supported
 the operation list, and the vocabularies the editors need
 (`property_types`, `scalar_types`, `cast_types`, `time_casts`,
 `source_formats`, `preview_limits`, condition operators, evaluation
-metrics/aggregations/units/comparators, deliverables).
+metrics/aggregations/units/comparators, projection-selection
+comparators/duration units, deliverables).
 
 ### `POST /api/v1/workspaces/open`
 

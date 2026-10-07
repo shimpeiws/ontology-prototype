@@ -35,7 +35,13 @@ from ontology_core.evaluation import (
     UNITS,
 )
 from ontology_core.mapping import SOURCE_FORMATS, TIME_CASTS
-from ontology_core.model import CAST_TYPES, PROPERTY_TYPES, SCALAR_TYPES
+from ontology_core.model import (
+    CAST_TYPES,
+    DURATION_UNITS,
+    ORDER_COMPARATORS,
+    PROPERTY_TYPES,
+    SCALAR_TYPES,
+)
 from ontology_core.preview import (
     MAX_PREVIEW_BYTES,
     MAX_PREVIEW_RECORDS,
@@ -436,6 +442,10 @@ def contract_metadata() -> dict[str, Any]:
                 "units": list(UNITS),
                 "comparators": list(COMPARATORS),
                 "guardrail_comparators": list(GUARDRAIL_COMPARATORS),
+            },
+            "projection_selection": {
+                "comparators": list(ORDER_COMPARATORS),
+                "duration_units": list(DURATION_UNITS),
             },
             "deliverables": list(DELIVERABLES),
         },

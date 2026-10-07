@@ -77,12 +77,14 @@ describe("findReferences", () => {
     expect(unrelated.hits).toEqual([]);
   });
 
-  it("an event's blast radius covers mapping bindings and the evaluation interval", () => {
+  it("an event's blast radius covers bindings, interval, and select", () => {
     const result = findReferences(SYNTHETIC_BUNDLE_FILES, {
       kind: "event",
       name: "JobCompleted",
     });
     expect(paths(result)).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.elapsed.event",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.required_events[0]",
       "evaluation.yaml:evaluation.interval.start_event",
       "mapping.yaml:mapping.events[0].event",
     ]);
@@ -271,6 +273,201 @@ describe("applyRename", () => {
     const result = applyRename(SYNTHETIC_BUNDLE_FILES, concept, "Person");
     expect(result.skipped).toEqual(["domain.yaml"]);
     expect(result.files).toEqual({});
+  });
+
+  it("retargets aliased event references inside select", () => {
+    // `findReferences` works on toJS() where aliases are already resolved,
+    // so an alias is reported as a hit — the rename must update it too.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SYNTHETIC_BUNDLE_FILES["domain.yaml"]!.replace(
+        "        absent_events: [InvoiceIssued]",
+        "        absent_events: [*evt]",
+      ).replace(
+        "        required_events: [JobCompleted]",
+        "        required_events: [&evt JobCompleted]",
+      ),
+    };
+    const concept: Concept = { kind: "event", name: "JobCompleted" };
+    const result = applyRename(drafts, concept, "JobDone");
+    const text = result.files["domain.yaml"]!;
+    // The anchored scalar is renamed and keeps its anchor, so *evt in
+    // absent_events now resolves to JobDone — no dangling reference.
+    expect(text).toContain("&evt JobDone");
+    expect(text).toContain("*evt");
+    expect(text).not.toContain("JobCompleted");
+    // Round-trip: the scanner sees the renamed name through the alias.
+    expect(
+      paths(findReferences({ "domain.yaml": text }, { kind: "event", name: "JobDone" })),
+    ).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.absent_events[0]",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.elapsed.event",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.required_events[0]",
+    ]);
+  });
+
+  it("retargets an alias to an anchored non-reference scalar", () => {
+    // The anchor lives on a description (not a reference position), so the
+    // aliased list item itself must be replaced with a literal.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SYNTHETIC_BUNDLE_FILES["domain.yaml"]!.replace(
+        "  description: Minimal model.",
+        "  description: &evt JobCompleted",
+      ).replace(
+        "        required_events: [JobCompleted]",
+        "        required_events: [*evt]",
+      ),
+    };
+    const concept: Concept = { kind: "event", name: "JobCompleted" };
+    const result = applyRename(drafts, concept, "JobDone");
+    const text = result.files["domain.yaml"]!;
+    // The alias position now holds the literal new name; the anchored
+    // description is not a reference and is left alone.
+    expect(text).toContain("description: &evt JobCompleted");
+    expect(
+      paths(findReferences({ "domain.yaml": text }, { kind: "event", name: "JobDone" })),
+    ).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.elapsed.event",
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.required_events[0]",
+    ]);
+  });
+
+  it("detaches an aliased where condition instead of editing the shared anchor", () => {
+    // PersonDone anchors a condition over its own subject's property;
+    // CompletedButNotInvoiced borrows it via *filter. Renaming Job.status
+    // must update only the Job projection's copy — mutating the anchored
+    // node would corrupt the Person projection (status is a Person field
+    // there).
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SYNTHETIC_BUNDLE_FILES["domain.yaml"]!.replace(
+        `    CompletedButNotInvoiced:`,
+        `    PersonDone:
+      subject: Person
+      select:
+        required_events: [JobCompleted]
+        where: &filter { op: eq, field: status, value: open }
+    CompletedButNotInvoiced:`,
+      ).replace(
+        `        elapsed: { event: JobCompleted, comparator: gt, value: 2, unit: days }`,
+        `        elapsed: { event: JobCompleted, comparator: gt, value: 2, unit: days }
+        where: *filter`,
+      ),
+    };
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Job",
+      name: "status",
+    };
+    const result = applyRename(drafts, concept, "state");
+    const text = result.files["domain.yaml"]!;
+    // The anchored condition on PersonDone is untouched.
+    expect(text).toContain("&filter { op: eq, field: status, value: open }");
+    // The Job projection's alias position now holds a detached copy with
+    // the renamed field.
+    expect(text).toContain("field: state");
+    // Person.status still resolves to PersonDone's condition alone.
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Person", name: "status" },
+        ),
+      ),
+    ).toEqual(["domain.yaml:domain.projections.PersonDone.select.where"]);
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Job", name: "state" },
+        ),
+      ),
+    ).toEqual([
+      "domain.yaml:domain.projections.CompletedButNotInvoiced.select.where",
+    ]);
+  });
+
+  const SHARED_WHERE_DOMAIN = `schema_version: 1
+kind: domain
+domain:
+  name: t
+  entities:
+    Job:
+      properties:
+        status: { type: string }
+    Person:
+      properties:
+        status: { type: string }
+  projections:
+    PersonOpen:
+      subject: Person
+      select:
+        where: &filter { op: eq, field: status, value: open }
+    JobOpen:
+      subject: Job
+      select:
+        where: *filter
+`;
+
+  it("an aliased where retargets the copy, not the owner's anchor", () => {
+    // JobOpen borrows PersonOpen's condition via *filter. Renaming
+    // Job.status must retarget JobOpen's condition only — mutating the
+    // shared target would leave PersonOpen naming a field Person lacks.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SHARED_WHERE_DOMAIN,
+    };
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Job",
+      name: "status",
+    };
+    const result = applyRename(drafts, concept, "state");
+    const text = result.files["domain.yaml"]!;
+    expect(text).toContain("&filter { op: eq, field: status, value: open }");
+    expect(text).not.toContain("*filter");
+    expect(text).toContain("where: { op: eq, field: state, value: open }");
+    // JobOpen's materialized condition names the renamed property.
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Job", name: "state" },
+        ),
+      ),
+    ).toEqual(["domain.yaml:domain.projections.JobOpen.select.where"]);
+  });
+
+  it("an anchor rename leaves borrowed copies of other subjects alone", () => {
+    // The other direction: renaming Person.status edits PersonOpen's
+    // anchored condition while JobOpen — a different subject — keeps
+    // its own field: status.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SHARED_WHERE_DOMAIN,
+    };
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Person",
+      name: "status",
+    };
+    const result = applyRename(drafts, concept, "state");
+    const text = result.files["domain.yaml"]!;
+    expect(text).toContain("&filter { op: eq, field: state, value: open }");
+    expect(text).toContain("where: { op: eq, field: status, value: open }");
+    // JobOpen still reports a reference to Job.status.
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Job", name: "status" },
+        ),
+      ),
+    ).toEqual(["domain.yaml:domain.projections.JobOpen.select.where"]);
   });
 
   it("does not touch a same-named scalar elsewhere", () => {

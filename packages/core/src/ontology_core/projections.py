@@ -1,17 +1,17 @@
 """Deterministic projections over canonical state, frozen per run.
 
-v0.1 implements one projection semantic, registered under the domain
-projection name ``CompletedButNotInvoiced``: subjects where the evaluation
-contract's ``interval.start_event`` occurred but no ``interval.end_event``
-exists, and the elapsed time from the start event's ``occurred_at`` to an
-explicit ``as_of`` is strictly greater than two days.
+Projection semantics are declared on the domain projection itself — the
+``select`` block names the required/absent events, an optional
+as-of-relative elapsed comparison, and an optional condition over the
+subject entity's latest observed properties. There is no code registry:
+a new workflow authors its selection in ``domain.yaml``.
 
 A run requires an explicit aware ``as_of`` and persists the projection
 definition digest, the per-subject input references it examined, and the
 full candidate set into ``projection_runs`` — so a historical run is
-inspectable and unchanged by later ingestion or definition edits. A generic
-projection language is a v0.1 non-goal; new projection kinds need their own
-registered semantics.
+inspectable and unchanged by later ingestion or definition edits. A
+generic projection language is a non-goal; the selection vocabulary is
+deliberately restricted.
 """
 
 from __future__ import annotations
@@ -21,25 +21,24 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .canonical import CanonicalStore, SqliteCanonicalStore
+from .conditions import evaluate_condition
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
-from .model import ProjectionSpec, Workspace
+from .model import ElapsedSpec, ProjectionSpec, Workspace
 from .trace import JsonlTraceSink, TraceSink
 from .workspace import SUPPORTED_SCHEMA_VERSION
 
-# Fixed v0.1 threshold for CompletedButNotInvoiced (see issue #4): strictly
-# greater than two days — exactly two days is not a candidate.
-DELAY_THRESHOLD = timedelta(days=2)
-
-# Version of the registered ``start-without-end-delayed`` semantic. Bump when
-# the selection rules change so previously frozen runs carry a different
-# definition digest.
+# Version of the declarative selection evaluator. Bump when the selection
+# rules change so previously frozen runs carry a different definition
+# digest.
 _SEMANTIC_VERSION = 1
+
+_UNIT_SECONDS = {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400}
 
 
 @dataclass(frozen=True)
@@ -99,7 +98,7 @@ def run_projection(
 ) -> ProjectionResult:
     """Compute one projection at an explicit ``as_of`` and freeze the run.
 
-    Never raises on bad input: an unknown or unimplemented projection, a
+    Never raises on bad input: an unknown or unselectable projection, a
     naive ``as_of``, and store failures all become diagnostics.
     """
     diag = Diagnostics()
@@ -115,11 +114,12 @@ def run_projection(
                 + ", ".join(sorted(workspace.domain.projections))
             ),
         )
-    semantic = _SEMANTICS.get(projection)
-    if spec is not None and semantic is None:
+    elif spec.select is None or not spec.select.required_events:
+        # Unreachable through the loader — 'select' is required — but a
+        # programmatically built ProjectionSpec can still lack one.
         diag.error(
-            "PROJECTION.UNSUPPORTED_PROJECTION",
-            f"projection {projection!r} has no registered semantics in schema v1",
+            "PROJECTION.MISSING_SELECTION",
+            f"projection {projection!r} declares no selection",
         )
 
     if as_of.tzinfo is None or as_of.tzinfo.utcoffset(as_of) is None:
@@ -131,7 +131,7 @@ def run_projection(
     else:
         result.as_of = as_of.astimezone(timezone.utc)
 
-    if diag.has_errors or spec is None or semantic is None or result.as_of is None:
+    if diag.has_errors or spec is None or result.as_of is None:
         result.diagnostics = diag.items
         return result
 
@@ -146,8 +146,8 @@ def run_projection(
     )
     result.definition_digest = _definition_digest(workspace, projection, spec)
     try:
-        result.candidates, result.inputs = semantic(
-            workspace, store, spec.subject, result.as_of, diag
+        result.candidates, result.inputs = _select_candidates(
+            workspace, store, spec, result.as_of, diag
         )
     except Exception as exc:
         # Canonical reads go through the pluggable store boundary: a locked or
@@ -215,58 +215,60 @@ def get_projection_run(
     return store.projection_run(run_id)
 
 
-def _completed_but_not_invoiced(
+def _select_candidates(
     workspace: Workspace,
     store: CanonicalStore,
-    subject_entity: str,
+    spec: ProjectionSpec,
     as_of: datetime,
     diag: Diagnostics,
 ) -> tuple[list[ProjectionCandidate], list[dict[str, Any]]]:
-    """Subjects whose interval start event is more than two days old and whose
-    interval end event had not occurred by ``as_of``.
+    """Evaluate the projection's declared ``select`` over canonical events.
 
-    The event pair comes from the workspace evaluation contract's
-    ``interval`` — for the v0.1 job-invoicing loop that is JobCompleted →
-    InvoiceIssued on the same Job subject.
+    A subject is a candidate when every required event had occurred, no
+    absent event had occurred by ``as_of``, the optional ``elapsed``
+    comparison on the anchor event's earliest occurrence holds, and the
+    optional ``where`` condition matches the subject's latest observed
+    entity properties. The anchor is ``elapsed.event`` — the first
+    required event when ``elapsed`` is undeclared.
     """
-    interval = workspace.evaluation.interval
-    start_event = workspace.domain.events.get(interval.start_event)
-    end_event = workspace.domain.events.get(interval.end_event)
-    if (
-        start_event is None
-        or end_event is None
-        or start_event.subject != subject_entity
-        or end_event.subject != subject_entity
-    ):
+    sel = spec.select
+    anchor = sel.elapsed.event if sel.elapsed is not None else sel.required_events[0]
+    absent_set = set(sel.absent_events)
+
+    # Defense for programmatically built specs: every referenced event
+    # must exist and be bound to the projection subject. The loader
+    # reports this earlier as DOMAIN.EVENT_SUBJECT_MISMATCH.
+    referenced = dict.fromkeys((*sel.required_events, *sel.absent_events))
+    offending = [
+        name
+        for name in referenced
+        if name not in workspace.domain.events
+        or workspace.domain.events[name].subject != spec.subject
+    ]
+    if offending:
         diag.error(
             "PROJECTION.SUBJECT_MISMATCH",
-            f"projection subject {subject_entity!r} does not match the "
-            f"evaluation interval subjects "
-            f"({interval.start_event}: "
-            f"{start_event.subject if start_event else 'unknown'}, "
-            f"{interval.end_event}: "
-            f"{end_event.subject if end_event else 'unknown'})",
+            f"projection subject {spec.subject!r} does not match the "
+            f"selection's event subjects ({', '.join(offending)})",
         )
         return [], []
 
     candidates: list[ProjectionCandidate] = []
     inputs: list[dict[str, Any]] = []
-    for subject_id in store.subject_ids_with_event(
-        interval.start_event, subject_entity
-    ):
-        facts = store.events_for_subject(subject_entity, subject_id)
-        starts = [f for f in facts if f.event == interval.start_event]
-        # Only end events that had occurred by as_of close the interval — an
+    for subject_id in store.subject_ids_with_event(anchor, spec.subject):
+        facts = store.events_for_subject(spec.subject, subject_id)
+        starts = [f for f in facts if f.event == anchor]
+        # Only absent events that had occurred by as_of exclude — an
         # invoice issued later does not change what was true at as_of.
         ends = [
             f
             for f in facts
-            if f.event == interval.end_event and f.occurred_at <= as_of
+            if f.event in absent_set and f.occurred_at <= as_of
         ]
         future_ends = [
             f
             for f in facts
-            if f.event == interval.end_event and f.occurred_at > as_of
+            if f.event in absent_set and f.occurred_at > as_of
         ]
         first = min(starts, key=lambda f: f.occurred_at)
         entry: dict[str, Any] = {
@@ -277,37 +279,73 @@ def _completed_but_not_invoiced(
         if future_ends:
             entry["future_end_fact_keys"] = [f.fact_key for f in future_ends]
         inputs.append(entry)
+
         if ends:
             entry["excluded"] = "interval end event exists"
             continue
+
+        missing = False
+        for name in sel.required_events:
+            if name == anchor:
+                continue
+            occurrences = [f for f in facts if f.event == name]
+            by_as_of = [f for f in occurrences if f.occurred_at <= as_of]
+            keys = entry.setdefault("required_fact_keys", {})
+            keys[name] = [f.fact_key for f in occurrences]
+            if by_as_of:
+                continue
+            entry["excluded"] = f"required event {name!r} had not occurred"
+            if occurrences:
+                diag.warning(
+                    "PROJECTION.FUTURE_EVENT",
+                    f"{spec.subject}/{subject_id}: {name} "
+                    f"occurred at {_iso_z(occurrences[0].occurred_at)}, "
+                    f"after as_of {_iso_z(as_of)}",
+                )
+            missing = True
+            break
+        if missing:
+            continue
+
         elapsed = (as_of - first.occurred_at).total_seconds()
         if elapsed < 0:
             entry["excluded"] = "future-dated start event"
             diag.warning(
                 "PROJECTION.FUTURE_EVENT",
-                f"{subject_entity}/{subject_id}: {interval.start_event} "
+                f"{spec.subject}/{subject_id}: {anchor} "
                 f"occurred at {_iso_z(first.occurred_at)}, after as_of "
                 f"{_iso_z(as_of)}",
             )
             continue
-        if elapsed <= DELAY_THRESHOLD.total_seconds():
-            entry["excluded"] = "elapsed within threshold"
+        if sel.elapsed is not None and not _meets_elapsed(elapsed, sel.elapsed):
+            entry["excluded"] = (
+                "elapsed within threshold"
+                if sel.elapsed.comparator in ("gt", "gte")
+                else "elapsed outside threshold"
+            )
             continue
+
         links = store.event_links(first.fact_key)
-        entity = store.entity_state(subject_entity, subject_id)
+        entity = store.entity_state(spec.subject, subject_id)
+        properties = entity["properties"] if entity else {}
+        if sel.where is not None and not evaluate_condition(
+            sel.where, properties
+        ):
+            entry["excluded"] = "subject condition not met"
+            continue
         candidates.append(
             ProjectionCandidate(
-                subject_entity=subject_entity,
+                subject_entity=spec.subject,
                 subject_id=subject_id,
                 occurred_at=first.occurred_at,
                 elapsed_seconds=elapsed,
-                properties=entity["properties"] if entity else {},
+                properties=properties,
                 property_types={
                     name: (
                         f"{spec.type}:{spec.ref}" if spec.ref else spec.type
                     )
                     for name, spec in workspace.domain.entities[
-                        subject_entity
+                        spec.subject
                     ].properties.items()
                 },
                 evidence={
@@ -327,12 +365,16 @@ def _completed_but_not_invoiced(
     return candidates, inputs
 
 
-_SEMANTICS: dict[
-    str,
-    Callable[[Workspace, CanonicalStore, str, datetime, Diagnostics], Any],
-] = {
-    "CompletedButNotInvoiced": _completed_but_not_invoiced,
-}
+def _meets_elapsed(elapsed_seconds: float, elapsed: ElapsedSpec) -> bool:
+    """The declared as-of-relative duration comparison, in seconds."""
+    threshold = elapsed.value * _UNIT_SECONDS[elapsed.unit]
+    if elapsed.comparator == "lt":
+        return elapsed_seconds < threshold
+    if elapsed.comparator == "lte":
+        return elapsed_seconds <= threshold
+    if elapsed.comparator == "gt":
+        return elapsed_seconds > threshold
+    return elapsed_seconds >= threshold
 
 
 def _definition_digest(
@@ -340,32 +382,40 @@ def _definition_digest(
 ) -> str:
     """Digest of everything that defines what this run computes.
 
-    Covers the schema version, the projection declaration, the semantic
-    identifier and version, the full evaluation contract the semantic reads
-    (interval, metric, aggregation, target, guardrails), the interval events'
-    domain declarations, the date-only timezone policy, and the fixed
-    threshold — so a definition or contract edit changes the digest even
-    when the candidate list happens to stay the same.
+    Covers the schema version, the projection declaration (including the
+    full declarative selection), the evaluator version, the full
+    evaluation contract, the referenced events' domain declarations, and
+    the date-only timezone policy — so a definition or contract edit
+    changes the digest even when the candidate list happens to stay the
+    same.
     """
     interval = workspace.evaluation.interval
+    sel = spec.select
+    referenced = dict.fromkeys(
+        (
+            *(sel.required_events if sel is not None else ()),
+            *(sel.absent_events if sel is not None else ()),
+            interval.start_event,
+            interval.end_event,
+        )
+    )
     raw = json.dumps(
         {
             "schema_version": SUPPORTED_SCHEMA_VERSION,
             "projection": dataclasses.asdict(spec),
             "semantics": {
-                "id": "start-without-end-delayed",
+                "id": "declared-selection",
                 "version": _SEMANTIC_VERSION,
             },
             "evaluation": dataclasses.asdict(workspace.evaluation),
             "events": {
                 name: dataclasses.asdict(workspace.domain.events[name])
-                for name in (interval.start_event, interval.end_event)
+                for name in referenced
                 if name in workspace.domain.events
             },
             "date_only_timezone": (
                 workspace.domain.policies.event_times.date_only_timezone
             ),
-            "threshold_seconds": DELAY_THRESHOLD.total_seconds(),
         },
         sort_keys=True,
     ).encode("utf-8")
@@ -377,7 +427,6 @@ def _iso_z(value: datetime) -> str:
 
 
 __all__ = [
-    "DELAY_THRESHOLD",
     "ProjectionCandidate",
     "ProjectionResult",
     "get_projection_run",

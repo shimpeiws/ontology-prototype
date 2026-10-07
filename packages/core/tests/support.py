@@ -46,7 +46,14 @@ DOMAIN = {
             "InvoiceIssued": {"subject": "Job"},
         },
         "projections": {
-            "CompletedButNotInvoiced": {"subject": "Job"},
+            "CompletedButNotInvoiced": {
+                "subject": "Job",
+                "select": {
+                    "required_events": ["JobCompleted"],
+                    "absent_events": ["InvoiceIssued"],
+                    "elapsed": {"comparator": "gt", "value": 2, "unit": "days"},
+                },
+            },
         },
     },
 }

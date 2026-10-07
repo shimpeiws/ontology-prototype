@@ -1,10 +1,10 @@
 """Deterministic checks for the second workflow workspace (ticket-sla).
 
-Pins the documented state of examples/ticket-sla (#54): the four
-definitions validate, the committed snapshots ingest cleanly, and
-evaluation reports the recorded reference outcome — while the projection
-and diagnosis stages stay blocked on the code-registered projection
-semantics (#55) and the reopen-rate guardrail reports unavailable (#56).
+Pins the documented state of examples/ticket-sla (#54, #55): the four
+definitions validate, the committed snapshots ingest cleanly, the
+declaratively-selected projection and the stub diagnosis run, and
+evaluation reports the recorded reference outcome — while the
+reopen-rate guardrail reports unavailable (#56).
 """
 
 from __future__ import annotations
@@ -92,24 +92,35 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     assert current["rejected"] == 0
     assert current["canonical"]["events_appended"] == 9
 
-    # The projection name has no registered semantics: project and the
-    # diagnosis that depends on it both refuse (documented gap, #55).
-    assert main(["project", str(workspace), "--as-of", AS_OF]) != 0
-    assert "UNSUPPORTED_PROJECTION" in capsys.readouterr().out
-    assert (
-        main(
-            [
-                "diagnose",
-                str(workspace),
-                "--as-of",
-                AS_OF,
-                "--provider",
-                "stub",
-            ]
-        )
-        != 0
+    # The selection is declared on the projection itself (#55): T-C00 is
+    # opened 16h without a first response (> 4h SLA); T-C03 is 3h old and
+    # stays inside it.
+    projection = run_json(
+        capsys, ["project", str(workspace), "--as-of", AS_OF, "--json"]
     )
-    assert "UNSUPPORTED_PROJECTION" in capsys.readouterr().out
+    assert projection["ok"] is True
+    assert projection["recorded"] is True
+    assert [c["subject"]["id"] for c in projection["candidates"]] == ["T-C00"]
+    assert projection["candidates"][0]["elapsed_seconds"] == 16 * 3600
+    inputs = {i["subject_id"]: i for i in projection["inputs"]}
+    assert inputs["T-C03"]["excluded"] == "elapsed within threshold"
+    assert inputs["T-C01"]["excluded"] == "interval end event exists"
+
+    # Diagnosis proceeds past the projection stage with the stub provider.
+    diagnosis = run_json(
+        capsys,
+        [
+            "diagnose",
+            str(workspace),
+            "--as-of",
+            AS_OF,
+            "--provider",
+            "stub",
+            "--json",
+        ],
+    )
+    assert diagnosis["ok"] is True
+    assert diagnosis["candidate_count"] == 1
 
     followup = run_json(
         capsys,

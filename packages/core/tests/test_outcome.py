@@ -470,6 +470,9 @@ def test_guardrail_not_applicable_to_non_job_subjects(
     docs = support.base_docs()
     for name in ("JobCompleted", "InvoiceIssued"):
         docs["domain"]["domain"]["events"][name]["subject"] = "Person"
+    docs["domain"]["domain"]["projections"]["CompletedButNotInvoiced"][
+        "subject"
+    ] = "Person"
     for event in docs["mapping"]["mapping"]["events"]:
         event["subject"]["entity"] = "Person"
     ws_dir = support.make_workspace(tmp_path / "ws", docs)

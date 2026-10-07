@@ -165,9 +165,24 @@ export interface EventType {
   description: string | null;
 }
 
+export interface ElapsedSpec {
+  event: string;
+  comparator: string;
+  value: number;
+  unit: string;
+}
+
+export interface SelectionSpec {
+  required_events: string[];
+  absent_events: string[];
+  elapsed: ElapsedSpec | null;
+  where: { raw: Record<string, unknown> } | null;
+}
+
 export interface ProjectionSpec {
   name: string;
   subject: string;
+  select: SelectionSpec;
   description: string | null;
 }
 

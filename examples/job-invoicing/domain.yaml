@@ -48,3 +48,9 @@ domain:
     CompletedButNotInvoiced:
       subject: Job
       description: Jobs whose completion is observed without a later invoice.
+      select:
+        required_events: [JobCompleted]
+        absent_events: [InvoiceIssued]
+        # Strictly more than two days since completion — exactly two days
+        # is not a candidate.
+        elapsed: { comparator: gt, value: 2, unit: days }

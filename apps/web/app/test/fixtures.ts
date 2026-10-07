@@ -184,7 +184,12 @@ domain:
       properties:
         invoice: { type: ref, ref: Invoice }
   projections:
-    CompletedButNotInvoiced: { subject: Job }
+    CompletedButNotInvoiced:
+      subject: Job
+      select:
+        required_events: [JobCompleted]
+        absent_events: [InvoiceIssued]
+        elapsed: { event: JobCompleted, comparator: gt, value: 2, unit: days }
 `;
 
 export const SYNTHETIC_MAPPING_YAML = `schema_version: 1
@@ -374,6 +379,10 @@ export const SYNTHETIC_CONTRACT_RESPONSE: ContractResponse = {
       units: ["seconds", "minutes", "hours", "days"],
       comparators: ["lt", "lte", "gt", "gte"],
       guardrail_comparators: ["not_increase", "lt", "lte", "gt", "gte"],
+    },
+    projection_selection: {
+      comparators: ["lt", "lte", "gt", "gte"],
+      duration_units: ["seconds", "minutes", "hours", "days"],
     },
     deliverables: [
       "explanation",
