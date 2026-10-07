@@ -174,6 +174,73 @@ describe("workspace store", () => {
     expect(files["evaluation.yaml"]).toBe("");
   });
 
+  it("revert restores a file that was removed from the draft", () => {
+    let state = opened();
+    state = workspaceReducer(state, {
+      type: "fileRemoved",
+      file: "agent.yaml",
+    });
+    expect(state.drafts["agent.yaml"]).toBeNull();
+
+    state = workspaceReducer(state, {
+      type: "reverted",
+      file: "agent.yaml",
+    });
+    expect(state.drafts["agent.yaml"]).toBe(
+      SYNTHETIC_OPEN_RESPONSE.files["agent.yaml"],
+    );
+    expect(isDraftDirty(state)).toBe(false);
+  });
+
+  it("a per-file revert leaves other dirty files untouched", () => {
+    let state = opened();
+    state = workspaceReducer(state, {
+      type: "edited",
+      file: "domain.yaml",
+      text: "changed: true",
+    });
+    state = workspaceReducer(state, {
+      type: "edited",
+      file: "mapping.yaml",
+      text: "also: changed",
+    });
+
+    state = workspaceReducer(state, {
+      type: "reverted",
+      file: "domain.yaml",
+    });
+
+    expect(state.drafts["domain.yaml"]).toBe(
+      SYNTHETIC_OPEN_RESPONSE.files["domain.yaml"],
+    );
+    expect(isFileDirty(state, "domain.yaml")).toBe(false);
+    expect(state.drafts["mapping.yaml"]).toBe("also: changed");
+    expect(isDraftDirty(state)).toBe(true);
+  });
+
+  it("revert invalidates the displayed validation result like an edit", () => {
+    let state = dirtyState();
+    state = workspaceReducer(state, {
+      type: "validationStarted",
+      requestId: 1,
+    });
+    state = workspaceReducer(state, {
+      type: "validationFinished",
+      requestId: 1,
+      revision: state.draftRevision,
+      valid: true,
+      digest: "d1",
+      diagnostics: [],
+    });
+    expect(isValidationStale(state)).toBe(false);
+
+    state = workspaceReducer(state, {
+      type: "reverted",
+      file: "domain.yaml",
+    });
+    expect(isValidationStale(state)).toBe(true);
+  });
+
   it("revertedAll restores every file to the exact active text", () => {
     let state = opened();
     state = workspaceReducer(state, {

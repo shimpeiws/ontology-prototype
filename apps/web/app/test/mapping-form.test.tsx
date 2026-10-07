@@ -23,6 +23,7 @@ import { useWorkspace, WorkspaceProvider } from "../workspace/context";
 import type { OpenResponse, WorkspaceFileName } from "../lib/types";
 import { MappingForm } from "../components/MappingForm";
 import { PreviewPanel } from "../components/PreviewPanel";
+import { DraftEditor } from "../components/DraftEditor";
 import {
   SYNTHETIC_CONTRACT_RESPONSE,
   SYNTHETIC_MAPPING_FORM_OPEN_RESPONSE,
@@ -677,6 +678,37 @@ describe("PreviewPanel", () => {
     await waitFor(() =>
       expect(screen.queryByText("stale")).toBeNull(),
     );
+  });
+
+  it("marks the result stale after a confirmed revert (#53)", async () => {
+    const user = userEvent.setup();
+    renderForm(
+      <>
+        <PreviewPanel />
+        <DraftEditor file="mapping.yaml" />
+      </>,
+    );
+    await waitForContract();
+
+    await user.type(screen.getByLabelText(/Sample input/), "a,b");
+    await user.click(screen.getByRole("button", { name: "Run preview" }));
+    expect(await screen.findByText("prev-aaaabbbbcccc-dddd"))
+      .toBeInTheDocument();
+    expect(screen.queryByText("stale")).toBeNull();
+
+    // Edit the draft, then revert it through the real UI path: the revert
+    // bumps the draft revision, so the shown result must go stale exactly
+    // like an edit — never presented as current.
+    fireEvent.change(screen.getByLabelText("mapping.yaml draft YAML"), {
+      target: { value: "schema_version: 1\n" },
+    });
+    await user.click(
+      screen.getByRole("button", { name: "Revert to active" }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Discard changes" }),
+    );
+    expect(await screen.findByText("stale")).toBeInTheDocument();
   });
 
   it("changing the sample text marks the result stale", async () => {

@@ -26,6 +26,7 @@ import {
   workspaceReducer,
 } from "../workspace/store";
 import type { WorkspaceState } from "../workspace/store";
+import type { SaveResponse } from "../lib/types";
 import {
   SYNTHETIC_DIAGNOSTIC,
   SYNTHETIC_OPEN_RESPONSE,
@@ -198,32 +199,220 @@ describe("workspace layout", () => {
     await screen.findByText("home route");
   });
 
-  it("Revert all asks first and Keep editing keeps the draft", async () => {
+  it("Revert all asks for confirmation, then clears the draft", async () => {
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    // The first click only arms the confirmation — nothing is discarded.
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    expect(
+      screen.getByText(
+        /Unsaved draft changes in every file will be discarded/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("unsaved draft")).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    );
+
+    // The bundle is back to active: badge flips, Save disables, and
+    // navigation is no longer blocked.
+    expect(screen.getByText("active")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(screen.getByRole("link", { name: "Domain" }));
+    await screen.findByText("domain page");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("cancelling the Revert all confirmation keeps the draft", async () => {
     const user = userEvent.setup();
     renderLayout(dirtyState());
 
     await user.click(screen.getByRole("button", { name: "Revert all" }));
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Discard all unsaved draft changes and restore the active bundle?",
-    );
-    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+    await user.click(screen.getByRole("button", { name: "Keep draft" }));
 
-    expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    // The draft survives — the badge stays dirty and navigation still
+    // prompts before leaving.
+    expect(screen.getByText("unsaved draft")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        /Unsaved draft changes in every file will be discarded/,
+      ),
+    ).toBeNull();
+    await user.click(screen.getByRole("link", { name: "Domain" }));
+    await screen.findByRole("alertdialog");
   });
 
-  it("a confirmed Revert all clears the draft so navigation is no longer blocked", async () => {
+  it("arming Revert all dismisses an armed Close confirmation", async () => {
     const user = userEvent.setup();
     renderLayout(dirtyState());
+
+    await user.click(
+      screen.getByRole("button", { name: "Close workspace" }),
+    );
+    expect(
+      screen.getByText("Unsaved draft changes will be discarded."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Discard draft and close" }),
+    ).toBeInTheDocument();
+
+    // Only one discard confirmation is armed at a time.
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    expect(
+      screen.queryByText("Unsaved draft changes will be discarded."),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    ).toBeInTheDocument();
+  });
+
+  it("the armed Close confirmation clears once the draft is clean", async () => {
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(
+      screen.getByRole("button", { name: "Close workspace" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Discard draft and close" }),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Revert all" }));
     await user.click(
       screen.getByRole("button", { name: "Discard all changes" }),
     );
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    await user.click(screen.getByRole("link", { name: "Domain" }));
-    await screen.findByText("domain page");
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    // Draft is clean — the armed close-confirm reverts to a plain close.
+    expect(
+      screen.getByRole("button", { name: "Close workspace" }),
+    ).toBeEnabled();
+  });
+
+  it("an armed Revert all confirmation does not return after a save settles", async () => {
+    let resolveSave!: (r: SaveResponse) => void;
+    saveWorkspace.mockReturnValue(
+      new Promise<SaveResponse>((r) => {
+        resolveSave = r;
+      }),
+    );
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    ).toBeInTheDocument();
+
+    // A save disarms the pending confirmation — the baseline it described
+    // may move when the save lands.
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      screen.queryByRole("button", { name: "Discard all changes" }),
+    ).toBeNull();
+
+    // A conflicted save leaves the draft dirty, but the confirm must not
+    // reappear on its own — the FDE has to arm it again.
+    resolveSave({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "conflict",
+      digest: "on-disk-now",
+      message: "workspace files changed on disk",
+    });
+    await screen.findByRole("alert");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Revert all" }),
+      ).toBeEnabled(),
+    );
+    expect(
+      screen.queryByRole("button", { name: "Discard all changes" }),
+    ).toBeNull();
+    expect(screen.getByText("unsaved draft")).toBeInTheDocument();
+  });
+
+  it("an armed Revert all confirmation does not survive an active reload", async () => {
+    saveWorkspace.mockResolvedValue({
+      ...SYNTHETIC_SAVE_RESPONSE,
+      outcome: "conflict",
+      digest: "on-disk-now",
+      message: "workspace files changed on disk",
+    });
+    openWorkspace.mockResolvedValue({
+      ...SYNTHETIC_OPEN_RESPONSE,
+      workspace: {
+        ...SYNTHETIC_OPEN_RESPONSE.workspace,
+        digest: "on-disk-now",
+      },
+      files: {
+        ...SYNTHETIC_OPEN_RESPONSE.files,
+        "agent.yaml": "# changed outside the UI\n",
+      },
+    });
+    const user = userEvent.setup();
+    renderLayout(dirtyState());
+
+    // The save conflicts — the on-disk bundle moved under the draft.
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByRole("alert");
+
+    // Arm Revert all against the pre-reload baseline, then reload the
+    // new on-disk bundle for review.
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Reload active bundle" }),
+    );
+    await waitFor(() =>
+      expect(openWorkspace).toHaveBeenCalledWith("job-invoicing"),
+    );
+
+    // The baseline the confirmation described is gone — the arm must not
+    // fire a revert against the reloaded active files. The draft is
+    // preserved and still dirty, and the control can be re-armed against
+    // the new baseline.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Discard all changes" }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.queryByText(
+        /Unsaved draft changes in every file will be discarded/,
+      ),
+    ).toBeNull();
+    expect(screen.getByText("unsaved draft")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Revert all" })).toBeEnabled();
+  });
+
+  it("a shown validation result goes stale after Revert all", async () => {
+    let state = dirtyState();
+    state = workspaceReducer(state, {
+      type: "validationStarted",
+      requestId: 1,
+    });
+    state = workspaceReducer(state, {
+      type: "validationFinished",
+      requestId: 1,
+      revision: state.draftRevision,
+      valid: false,
+      digest: "d1",
+      diagnostics: [SYNTHETIC_DIAGNOSTIC],
+    });
+    const user = userEvent.setup();
+    renderLayout(state);
+    expect(screen.getByText("draft invalid")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Revert all" }));
+    await user.click(
+      screen.getByRole("button", { name: "Discard all changes" }),
+    );
+    // The result keyed to the pre-revert revision can never render as
+    // current again — exactly like an edit.
+    expect(screen.getByText("validation stale")).toBeInTheDocument();
   });
 
   it("Validate draft sends the requested path and current draft files", async () => {
@@ -307,12 +496,8 @@ describe("workspace layout", () => {
     const user = userEvent.setup();
     renderLayout(dirtyState());
 
-    await user.click(screen.getByRole("button", { name: "Revert all" }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(screen.getByRole("button", { name: "Revert all" })).toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: "Discard all changes" }),
-    ).toBeDisabled();
     expect(
       screen.getByRole("button", { name: "Close workspace" }),
     ).toBeDisabled();
@@ -325,22 +510,6 @@ describe("workspace layout", () => {
 
     await user.click(screen.getByRole("button", { name: "Stay" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
-  });
-
-  it("a save that cleans the draft dismisses a pending Revert all confirmation", async () => {
-    saveWorkspace.mockResolvedValue(SYNTHETIC_SAVE_RESPONSE);
-    const user = userEvent.setup();
-    renderLayout(dirtyState());
-
-    await user.click(screen.getByRole("button", { name: "Revert all" }));
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "Discard all changes" }),
-      ).toBeNull(),
-    );
-    expect(screen.getByRole("button", { name: "Revert all" })).toBeDisabled();
   });
 
   it("a conflicted save offers an explicit reload that preserves the draft", async () => {

@@ -23,6 +23,10 @@ The Web app is presentation only:
 - Draft edits live in browser memory: a draft layer over the byte-exact
   active bundle. Editing marks a file `unsaved`, never mutates the active
   baseline, and invalidates any displayed draft-validation result.
+  "Revert to active" (per file) and "Revert all" (whole bundle) restore the
+  byte-exact active text behind an explicit, cancellable confirmation; a
+  revert bumps the draft revision, so shown validation and preview results
+  go stale exactly like an edit.
   "Validate draft" posts the whole bundle to `/api/v1/workspaces/drafts/validate`.
   "Save" is explicit only (never autosave): it posts the draft with the
   active digest as `base_digest` to `/api/v1/workspaces/save`, and the four
@@ -34,12 +38,12 @@ The Web app is presentation only:
   unavailable, because a baseless save can never be conflict-checked.
   Save and reload are mutually exclusive in flight — a late save response
   is discarded rather than allowed to roll the reloaded baseline back.
-  Discarding edits is explicit too (#53): "Revert to active" (one file) and
-  "Revert all" (the bundle) first ask for confirmation, then restore the
-  byte-exact active text. Like an edit, a revert advances the draft
-  revision, so a displayed validation or preview result turns stale. Every
-  discard path — revert, close, and leave — is disabled while a save is in
-  flight, because a sent save cannot be recalled.
+  Every discard path — revert, remove from draft, close, and leave — is
+  disabled while a save is in flight, because a sent save cannot be
+  recalled. A pending revert confirmation is bound to the active baseline
+  it was armed against: it is withdrawn when a save starts, when the draft
+  turns clean, or when a landed save or reload replaces the baseline, so it
+  can never discard against on-disk text the FDE did not confirm.
 - The Domain page offers structured authoring on top of the raw editor: a
   visual graph of entities/events/projections, an inspectable list, and
   per-concept forms that mutate the draft `domain.yaml` through the
