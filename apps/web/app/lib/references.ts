@@ -23,7 +23,7 @@
  */
 
 import { isAlias, isMap, isScalar, isSeq, parseDocument } from "yaml";
-import type { Document, YAMLMap, YAMLSeq } from "yaml";
+import type { Alias, Document, YAMLMap, YAMLSeq } from "yaml";
 
 import type { Concept } from "./domainEdit";
 import { mapValue, renameMapKey } from "./domainEdit";
@@ -438,6 +438,111 @@ function retargetSeqItems(
   return changed;
 }
 
+/** True when `target` sits inside `root`'s own node tree — aliases are
+ * not followed, so a target borrowed via `*alias` counts as outside. */
+function insideSubtree(root: unknown, target: unknown): boolean {
+  if (root === target) return true;
+  if (isMap(root)) {
+    return root.items.some((p) => insideSubtree(p.value, target));
+  }
+  if (isSeq(root)) {
+    return root.items.some((i) => insideSubtree(i, target));
+  }
+  return false;
+}
+
+/** Drop every anchor name in a materialized subtree so the copy can
+ * never redefine an anchor the original still owns. Alias nodes
+ * themselves resolve by name and are left untouched. */
+function stripAnchors(node: unknown): void {
+  if (isMap(node)) {
+    node.anchor = undefined;
+    for (const p of node.items) {
+      stripAnchors(p.key);
+      stripAnchors(p.value);
+    }
+  } else if (isSeq(node)) {
+    node.anchor = undefined;
+    for (const i of node.items) stripAnchors(i);
+  } else if (isScalar(node)) {
+    node.anchor = undefined;
+  }
+}
+
+/**
+ * Replace an alias inside `root` whose target lives outside `spec` with
+ * a materialized copy. Retargeting edits select subtrees in place, so
+ * walking an alias into a shared target would either corrupt the
+ * owning spec's anchored node or silently retarget another
+ * projection's reference. Copies are walked too: an alias nested inside
+ * a copied target still resolves through the document's anchors, i.e.
+ * back to the original. `active` stops recursion through self-referring
+ * anchors like `&a {x: *a}`.
+ */
+function materializeExternalAliases(
+  doc: Document,
+  root: unknown,
+  spec: unknown,
+  active: Set<unknown>,
+): void {
+  const materialize = (alias: Alias): unknown => {
+    const resolved = alias.resolve(doc);
+    if (
+      resolved == null ||
+      active.has(resolved) ||
+      insideSubtree(spec, resolved)
+    ) {
+      return undefined;
+    }
+    const copy = resolved.clone();
+    stripAnchors(copy);
+    active.add(resolved);
+    materializeExternalAliases(doc, copy, spec, active);
+    active.delete(resolved);
+    return copy;
+  };
+  if (isMap(root)) {
+    for (const pair of root.items) {
+      if (isAlias(pair.value)) {
+        const copy = materialize(pair.value);
+        if (copy !== undefined) pair.value = copy;
+      } else {
+        materializeExternalAliases(doc, pair.value, spec, active);
+      }
+    }
+  } else if (isSeq(root)) {
+    for (let i = 0; i < root.items.length; i++) {
+      const item = root.items[i];
+      if (isAlias(item)) {
+        const copy = materialize(item);
+        if (copy !== undefined) root.items[i] = copy;
+      } else {
+        materializeExternalAliases(doc, item, spec, active);
+      }
+    }
+  }
+}
+
+/**
+ * Break cross-spec alias sharing in a projection's `select` before a
+ * rename walks it. Must run for every projection spec before any spec
+ * is edited — detaching only the in-scope specs would still leak a
+ * shared-target edit into out-of-scope aliases.
+ */
+function detachSelectAliases(doc: Document, spec: YAMLMap): void {
+  const node = spec.get("select", true);
+  if (isAlias(node)) {
+    const resolved = node.resolve(doc);
+    if (resolved == null) return;
+    const copy = resolved.clone();
+    stripAnchors(copy);
+    materializeExternalAliases(doc, copy, spec, new Set([resolved]));
+    spec.set("select", copy);
+  } else {
+    materializeExternalAliases(doc, node, spec, new Set());
+  }
+}
+
 /** Retarget `field:` scalars anywhere inside a `where` condition tree. */
 function retargetConditionFields(
   doc: Document,
@@ -570,8 +675,12 @@ function renameInDomain(
       throw new Error(`event '${concept.name}' not found in domain.yaml`);
     }
     changed = true;
-    // `select` blocks reference event names — retarget them too.
-    for (const [, spec] of specMaps(projections)) {
+    // `select` blocks reference event names — retarget them too. Cross-
+    // spec aliases are detached first so an in-place edit cannot leak
+    // into a projection that only borrows the shared node.
+    const specs = specMaps(projections);
+    for (const [, spec] of specs) detachSelectAliases(doc, spec);
+    for (const [, spec] of specs) {
       if (retargetSelect(doc, spec, concept, newName)) changed = true;
     }
   } else if (concept.kind === "projection") {
@@ -595,8 +704,10 @@ function renameInDomain(
       }
       changed = true;
       // `where` conditions over this entity name the renamed property.
-      for (const [, pspec] of specMaps(projections)) {
-        if (retargetSelect(doc, pspec, concept, newName)) changed = true;
+      const pspecs = specMaps(projections);
+      for (const [, spec] of pspecs) detachSelectAliases(doc, spec);
+      for (const [, spec] of pspecs) {
+        if (retargetSelect(doc, spec, concept, newName)) changed = true;
       }
     } else {
       throw new Error(

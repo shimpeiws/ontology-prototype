@@ -325,6 +325,87 @@ describe("applyRename", () => {
     ]);
   });
 
+  const SHARED_WHERE_DOMAIN = `schema_version: 1
+kind: domain
+domain:
+  name: t
+  entities:
+    Job:
+      properties:
+        status: { type: string }
+    Person:
+      properties:
+        status: { type: string }
+  projections:
+    PersonOpen:
+      subject: Person
+      select:
+        where: &filter { op: eq, field: status, value: open }
+    JobOpen:
+      subject: Job
+      select:
+        where: *filter
+`;
+
+  it("an aliased where retargets the copy, not the owner's anchor", () => {
+    // JobOpen borrows PersonOpen's condition via *filter. Renaming
+    // Job.status must retarget JobOpen's condition only — mutating the
+    // shared target would leave PersonOpen naming a field Person lacks.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SHARED_WHERE_DOMAIN,
+    };
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Job",
+      name: "status",
+    };
+    const result = applyRename(drafts, concept, "state");
+    const text = result.files["domain.yaml"]!;
+    expect(text).toContain("&filter { op: eq, field: status, value: open }");
+    expect(text).not.toContain("*filter");
+    expect(text).toContain("where: { op: eq, field: state, value: open }");
+    // JobOpen's materialized condition names the renamed property.
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Job", name: "state" },
+        ),
+      ),
+    ).toEqual(["domain.yaml:domain.projections.JobOpen.select.where"]);
+  });
+
+  it("an anchor rename leaves borrowed copies of other subjects alone", () => {
+    // The other direction: renaming Person.status edits PersonOpen's
+    // anchored condition while JobOpen — a different subject — keeps
+    // its own field: status.
+    const drafts = {
+      ...SYNTHETIC_BUNDLE_FILES,
+      "domain.yaml": SHARED_WHERE_DOMAIN,
+    };
+    const concept: Concept = {
+      kind: "property",
+      ownerKind: "entities",
+      owner: "Person",
+      name: "status",
+    };
+    const result = applyRename(drafts, concept, "state");
+    const text = result.files["domain.yaml"]!;
+    expect(text).toContain("&filter { op: eq, field: state, value: open }");
+    expect(text).toContain("where: { op: eq, field: status, value: open }");
+    // JobOpen still reports a reference to Job.status.
+    expect(
+      paths(
+        findReferences(
+          { "domain.yaml": text },
+          { kind: "property", ownerKind: "entities", owner: "Job", name: "status" },
+        ),
+      ),
+    ).toEqual(["domain.yaml:domain.projections.JobOpen.select.where"]);
+  });
+
   it("does not touch a same-named scalar elsewhere", () => {
     // mapping `field: status` value must not be renamed — only keys.
     const concept: Concept = {
