@@ -43,8 +43,6 @@ def apply_ui_edits(files: dict[str, str]) -> dict[str, str]:
         "        notes:\n          type: string\n"
         "    Invoice:\n      description: A bill issued for a job.",
     )
-    # UI drafts keep comments authored in the raw editor.
-    files["domain.yaml"] = "# Edited in the authoring UI.\n" + files["domain.yaml"]
     replace(
         "mapping.yaml",
         "description: Maps jobs.csv rows to canonical entities and business events.",
@@ -72,6 +70,12 @@ def cli(capsys, *args: str) -> str:
 
 def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) -> None:
     client = make_client(roots)
+
+    # A hand-authored comment survives the UI's CST-preserving edits.
+    domain_path = workspace / "domain.yaml"
+    domain_path.write_text(
+        "# Field notes maintained by the FDE.\n" + domain_path.read_text()
+    )
 
     # Open the workspace — the web app's entry point.
     opened = client.post(
