@@ -186,7 +186,7 @@ export const api = {
   previewDraft: (
     path: string,
     files: Record<string, string>,
-    sample: { text: string },
+    sample: { text: string; source?: string },
     signal?: AbortSignal,
   ) =>
     post<DraftPreviewResponse>(

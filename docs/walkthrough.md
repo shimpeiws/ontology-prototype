@@ -30,6 +30,8 @@ The demonstration snapshots live in `examples/job-invoicing/data/`:
 | `jobs-baseline.csv` | B01–B03 | Historical export: jobs completed before the intervention, invoiced 9, 8, and 10 days later (median 9 days). |
 | `jobs-current.csv` | C01–C04 | Current snapshot: C01 and C02 completed but not invoiced (candidates), C03 completed exactly 2 days before as-of (threshold edge, not a candidate), C04 in progress. |
 | `jobs-followup.csv` | C01–C05 | Later snapshot: C01–C03 invoiced 3, 3, and 4 days after completion; C05 completed after the boundary and still uninvoiced (pending outcome). |
+| `invoices-baseline.csv` | INV-B01–B03 | Invoice-system export for the baseline jobs: one row per issued invoice with `job` (a cross-source ref to `Job`) and `error` — the invoice-error-rate guardrail's evidence source. |
+| `invoices-followup.csv` | INV-C01–C03 | Invoice-system export for the after cohort: no errored invoices. |
 
 The older `jobs.csv` / `jobs-later.csv` pair belongs to the ingestion
 documentation examples and is not part of this run.
@@ -54,11 +56,21 @@ fresh checkout or remove any prior `.ontology/` first. Nothing under
 ontology check examples/job-invoicing
 # → workspace valid: examples/job-invoicing (0 errors, 0 warnings)
 
-# 2. Ingest the historical export and the current snapshot.
-ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-baseline.csv
+# 2. Ingest the historical export and the current snapshot. The mapping
+#    declares two sources (jobs, invoices), so --source selects which
+#    bindings apply.
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-baseline.csv --source jobs
 # → 3 accepted, 0 rejected; 6 events appended (3 JobCompleted + 3 InvoiceIssued)
-ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-current.csv
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-current.csv --source jobs
 # → 4 accepted, 0 rejected; 3 events appended (C01–C03 JobCompleted)
+
+# 2b. The invoice system is a second source: each row creates an Invoice
+#     entity whose `job` ref resolves cross-source against the canonical
+#     Jobs by exact stable id. The same InvoiceIssued facts arrive again
+#     and are re-observed, never duplicated.
+ontology ingest examples/job-invoicing examples/job-invoicing/data/invoices-baseline.csv --source invoices
+# → 3 accepted, 0 rejected; 3 Invoice entities upserted;
+#   3 InvoiceIssued events re-observed (0 appended)
 
 # 3. Freeze the projection at the diagnosis time.
 ontology project examples/job-invoicing --as-of 2026-10-21T00:00:00Z
@@ -84,10 +96,13 @@ ontology execute examples/job-invoicing <proposal-id>
 # (decide is append-only by design — each call records another decision, so
 # repeat approvals are not a no-op.)
 
-# 7. Re-observe the source after the outcome arrives.
-ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-followup.csv
+# 7. Re-observe both sources after the outcome arrives.
+ontology ingest examples/job-invoicing examples/job-invoicing/data/jobs-followup.csv --source jobs
 # → 5 accepted; 4 events appended; the new InvoiceIssued facts link to the
 #   intervention as correlated_intervention — correlation, never causation.
+ontology ingest examples/job-invoicing examples/job-invoicing/data/invoices-followup.csv --source invoices
+# → 3 accepted; 3 InvoiceIssued events re-observed (0 appended);
+#   re-ingesting this unchanged snapshot appends nothing.
 
 # 8. Evaluate baseline vs after cohorts at the intervention boundary.
 ontology evaluate examples/job-invoicing --boundary 2026-10-15T00:00:00Z --as-of 2026-10-26T00:00:00Z
@@ -95,8 +110,8 @@ ontology evaluate examples/job-invoicing --boundary 2026-10-15T00:00:00Z --as-of
 #   after:    median 3 days (3 paired, 1 pending — C05)
 #   change:   6 days (improvement)
 #   target lt 4 days: attained
-#   guardrail invoice-error-rate: unavailable — no invoice-error evidence
-#   overall:  unverified
+#   guardrail invoice-error-rate: passed — no errored invoices in evidence
+#   overall:  success
 
 # 9. Inspect the linked trace end to end.
 ontology trace examples/job-invoicing
@@ -111,10 +126,12 @@ ontology trace examples/job-invoicing --export trace-export.json
 
 The report shows an observed difference between two time-based cohorts of
 synthetic data. `target attained` means the after median cleared the strict
-threshold; `overall: unverified` — not `met` — because the invoice-error
-guardrail has no evidence to evaluate. The machinery is verified; the
-demonstration does not claim the synthetic data proves a real business
-improvement. A 4-day after median would report `missed` / `not_met`, which
+threshold; `overall: success` requires every guardrail `passed` — here the
+invoice-error-rate guardrail evaluated real evidence from the `invoices`
+source. Without that second source the guardrail would report `unavailable`
+and overall `unverified`. The machinery is verified; the demonstration does
+not claim the synthetic data proves a real business improvement. A 4-day
+after median would report `missed` / `not_met`, which
 `test_loop_median_exactly_at_target_is_a_miss` pins.
 
 ## Required negative cases and where they are covered
@@ -133,7 +150,7 @@ improvement. A 4-day after median would report `missed` / `not_met`, which
 | Repeated write-back | `test_execution.py::test_repeated_execute_does_not_duplicate`, `test_csv_adapter_dedupes_idempotency_key`; e2e re-execute |
 | Failed / uncertain execution | `test_execution.py::test_failed_attempt_can_retry`, `test_uncertain_attempt_blocks_blind_retry`, `test_unrecorded_outcome_blocks_blind_retry` |
 | Pending outcomes | `test_outcome.py::test_pending_negative_and_ambiguous_intervals`; C05 in this walkthrough |
-| Unavailable / failed guardrails | `test_outcome.py::test_guardrail_unavailable_passed_and_failed`, `test_guardrail_unsupported_metric`; the live report's `unavailable` |
+| Unavailable / failed guardrails | `test_outcome.py::test_guardrail_unavailable_passed_and_failed`, `test_guardrail_unsupported_metric`; a run without the `invoices` source reports `unavailable` |
 
 ## Live model
 

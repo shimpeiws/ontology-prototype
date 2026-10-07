@@ -227,7 +227,11 @@ class CoreWorkspaceService:
         )
 
     def preview_draft(
-        self, path: str, files: Mapping[str, str], sample_text: str
+        self,
+        path: str,
+        files: Mapping[str, str],
+        sample_text: str,
+        sample_source: str | None = None,
     ) -> DraftPreviewResult:
         """Resolve a draft mapping against an in-memory sample.
 
@@ -240,7 +244,7 @@ class CoreWorkspaceService:
         self._check_file_names(files)
         result = load_workspace_texts(files, path=resolved)
         preview = (
-            _preview_payload(result.workspace, sample_text)
+            _preview_payload(result.workspace, sample_text, sample_source)
             if result.workspace is not None
             else None
         )
@@ -575,7 +579,9 @@ def _definitions(workspace: Workspace | None) -> dict[str, Any] | None:
     }
 
 
-def _preview_payload(workspace: Workspace, sample_text: str) -> dict[str, Any]:
+def _preview_payload(
+    workspace: Workspace, sample_text: str, source: str | None
+) -> dict[str, Any]:
     """Run the core preview over the sample text and shape the response.
 
     ``surrogatepass`` mirrors ``bundle_digest``: a stray surrogate in the
@@ -583,7 +589,7 @@ def _preview_payload(workspace: Workspace, sample_text: str) -> dict[str, Any]:
     preview as an ``INGEST.ENCODING_ERROR`` diagnostic — never a crash.
     """
     content = sample_text.encode("utf-8", errors="surrogatepass")
-    result = preview_snapshot(workspace, content)
+    result = preview_snapshot(workspace, content, source=source)
     observed_at = (
         result.observed_at.astimezone(timezone.utc)
         .isoformat()

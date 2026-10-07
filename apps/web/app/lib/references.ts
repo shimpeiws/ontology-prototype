@@ -134,17 +134,18 @@ function scanDomain(
   }
 }
 
-function scanMapping(
-  js: unknown,
+function scanMappingBindings(
+  scope: unknown,
+  base: string,
   concept: Concept,
   hits: ReferenceHit[],
 ): void {
-  const mapping = isRecord(js) && isRecord(js.mapping) ? js.mapping : {};
-  list(mapping.entities).forEach((binding, i) => {
+  const bindings = isRecord(scope) ? scope : {};
+  list(bindings.entities).forEach((binding, i) => {
     if (concept.kind === "entity" && scalarEq(binding.entity, concept.name)) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.entities[${i}].entity`,
+        path: `${base}.entities[${i}].entity`,
         label: `entity binding ${i + 1}`,
       });
     }
@@ -157,16 +158,16 @@ function scanMapping(
     ) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.entities[${i}].properties.${concept.name}`,
+        path: `${base}.entities[${i}].properties.${concept.name}`,
         label: `property binding for ${binding.entity}.${concept.name}`,
       });
     }
   });
-  list(mapping.events).forEach((binding, i) => {
+  list(bindings.events).forEach((binding, i) => {
     if (concept.kind === "event" && scalarEq(binding.event, concept.name)) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.events[${i}].event`,
+        path: `${base}.events[${i}].event`,
         label: `event binding ${i + 1}`,
       });
     }
@@ -177,11 +178,23 @@ function scanMapping(
     ) {
       hits.push({
         file: "mapping.yaml",
-        path: `mapping.events[${i}].subject.entity`,
+        path: `${base}.events[${i}].subject.entity`,
         label: `subject of event binding ${i + 1}`,
       });
     }
   });
+}
+
+function scanMapping(
+  js: unknown,
+  concept: Concept,
+  hits: ReferenceHit[],
+): void {
+  const mapping = isRecord(js) && isRecord(js.mapping) ? js.mapping : {};
+  scanMappingBindings(mapping, "mapping", concept, hits);
+  list(mapping.sources).forEach((source, i) =>
+    scanMappingBindings(source, `mapping.sources[${i}]`, concept, hits),
+  );
 }
 
 function scanEvaluation(
@@ -370,15 +383,15 @@ function renameInDomain(
   return changed;
 }
 
-function renameInMapping(
+/** Retarget bindings inside one binding scope (mapping or a source entry). */
+function renameInBindingScope(
   doc: Document,
+  scope: YAMLMap,
   concept: Concept,
   newName: string,
 ): boolean {
-  const mapping = doc.get("mapping");
-  if (!isMap(mapping)) return false;
   let changed = false;
-  const entityBindings = mapping.get("entities");
+  const entityBindings = scope.get("entities");
   if (isSeq(entityBindings)) {
     for (const item of entityBindings.items) {
       if (!isMap(item)) continue;
@@ -396,7 +409,7 @@ function renameInMapping(
       }
     }
   }
-  const eventBindings = mapping.get("events");
+  const eventBindings = scope.get("events");
   if (isSeq(eventBindings)) {
     for (const item of eventBindings.items) {
       if (!isMap(item)) continue;
@@ -408,6 +421,27 @@ function renameInMapping(
         if (isMap(subject) && retarget(doc, subject, "entity", concept.name, newName))
           changed = true;
       }
+    }
+  }
+  return changed;
+}
+
+function renameInMapping(
+  doc: Document,
+  concept: Concept,
+  newName: string,
+): boolean {
+  const mapping = doc.get("mapping");
+  if (!isMap(mapping)) return false;
+  // Legacy top-level bindings plus every `sources[]` entry — the scanner
+  // reports hits under both, so the rename must retarget both or the draft
+  // keeps dangling names the validator flags as unknown.
+  let changed = renameInBindingScope(doc, mapping, concept, newName);
+  const sources = mapping.get("sources");
+  if (isSeq(sources)) {
+    for (const entry of sources.items) {
+      if (!isMap(entry)) continue;
+      if (renameInBindingScope(doc, entry, concept, newName)) changed = true;
     }
   }
   return changed;

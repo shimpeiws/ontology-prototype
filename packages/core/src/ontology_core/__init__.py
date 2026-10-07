@@ -82,6 +82,7 @@ from .ingest import (
     ResolvedEntity,
     ResolvedEvent,
     ingest_snapshot,
+    select_source,
 )
 from .model import (
     ActionSpec,
@@ -101,7 +102,7 @@ from .model import (
     MappingDefinition,
     ProjectionSpec,
     PropertySpec,
-    SourceSpec,
+    SourceMapping,
     SubjectRef,
     TargetSpec,
     TaskSpec,
@@ -215,7 +216,7 @@ __all__ = [
     "SaveResult",
     "Scenario",
     "ScenarioResult",
-    "SourceSpec",
+    "SourceMapping",
     "SqliteCanonicalStore",
     "SubjectRef",
     "SubjectReport",
@@ -258,6 +259,7 @@ __all__ = [
     "run_suite",
     "save_workspace",
     "score_run",
+    "select_source",
     "trace_anchor",
     "trace_overview",
     "trace_subject",

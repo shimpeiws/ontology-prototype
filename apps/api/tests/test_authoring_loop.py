@@ -45,8 +45,8 @@ def apply_ui_edits(files: dict[str, str]) -> dict[str, str]:
     )
     replace(
         "mapping.yaml",
-        "description: Maps jobs.csv rows to canonical entities and business events.",
-        "description: Maps jobs.csv rows to canonical entities and business events (edited in UI).",
+        "description: Maps jobs.csv and invoices.csv rows to canonical entities and business events.",
+        "description: Maps jobs.csv and invoices.csv rows to canonical entities and business events (edited in UI).",
     )
     replace(
         "evaluation.yaml",
@@ -99,7 +99,7 @@ def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) 
         json={
             "path": str(workspace),
             "files": draft,
-            "sample": {"text": SAMPLE},
+            "sample": {"text": SAMPLE, "source": "jobs"},
         },
     ).json()
     assert preview["valid"] is True
@@ -133,8 +133,8 @@ def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) 
 
     # The saved definitions drive the CLI operational loop unchanged.
     cli(capsys, "check", str(workspace))
-    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-baseline.csv"))
-    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-current.csv"))
+    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-baseline.csv"), "--source", "jobs")
+    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-current.csv"), "--source", "jobs")
     project = json.loads(
         cli(capsys, "project", str(workspace), "--as-of", "2026-10-21T00:00:00Z", "--json")
     )
@@ -159,7 +159,7 @@ def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) 
     )
     cli(capsys, "execute", str(workspace), pid)
 
-    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-followup.csv"))
+    cli(capsys, "ingest", str(workspace), str(DEMO_DATA / "jobs-followup.csv"), "--source", "jobs")
     report = json.loads(
         cli(
             capsys, "evaluate", str(workspace),

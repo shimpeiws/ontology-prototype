@@ -35,7 +35,10 @@ def write_snapshot(tmp_path: Path, name: str, text: str) -> Path:
 def ingested_workspace(tmp_path: Path) -> Path:
     workspace = copy_example(tmp_path)
     snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     return workspace
 
 
@@ -174,7 +177,10 @@ def test_evaluate_count_aggregation_prints_intervals(
         lambda doc: doc["evaluation"].update(aggregation="count"),
     )
     snapshot = write_snapshot(tmp_path, "jobs.csv", JOBS_CSV)
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     capsys.readouterr()
 
     assert main(evaluate_args(workspace)) == EXIT_OK
@@ -298,7 +304,10 @@ def test_evaluate_not_met_still_exits_ok(tmp_path: Path, capsys) -> None:
         "B1,completed,taro,2026-09-21,2026-09-30\n"
         "A1,completed,hanako,2026-10-06,2026-10-10\n",
     )
-    assert main(["ingest", str(workspace), str(snapshot)]) == EXIT_OK
+    assert (
+        main(["ingest", str(workspace), str(snapshot), "--source", "jobs"])
+        == EXIT_OK
+    )
     capsys.readouterr()
 
     assert main(evaluate_args(workspace)) == EXIT_OK

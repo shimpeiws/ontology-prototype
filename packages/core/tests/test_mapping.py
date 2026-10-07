@@ -199,7 +199,7 @@ def test_observed_at_binding(tmp_path: Path) -> None:
     }
     result = load_workspace(make_workspace(tmp_path, docs))
     assert result.ok, [d.format() for d in result.diagnostics]
-    binding = result.workspace.mapping.events[0]
+    binding = result.workspace.mapping.sources[0].events[0]
     assert binding.observed_at is not None
     assert binding.observed_at.field == "seen_at"
 
@@ -233,10 +233,12 @@ def test_typed_mapping_model(valid_workspace: Path) -> None:
     result = load_workspace(valid_workspace)
     assert result.ok
     mapping = result.workspace.mapping
-    job = next(b for b in mapping.entities if b.entity == "Job")
+    job = next(b for b in mapping.sources[0].entities if b.entity == "Job")
     assert job.id.field == "id"
     assert job.properties["amount"].cast == "number"
-    completed = next(b for b in mapping.events if b.event == "JobCompleted")
+    completed = next(
+        b for b in mapping.sources[0].events if b.event == "JobCompleted"
+    )
     assert completed.when is not None
     assert completed.when.raw["op"] == "eq"
     assert completed.occurred_at.cast == "date"

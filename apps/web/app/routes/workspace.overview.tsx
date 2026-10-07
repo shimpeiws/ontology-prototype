@@ -57,8 +57,18 @@ export default function WorkspaceOverview() {
             </li>
             <li>
               <Link to="/workspace/mapping">Mapping</Link> —{" "}
-              {definitions.mapping.entities.length} entity bindings,{" "}
-              {definitions.mapping.events.length} event bindings
+              {definitions.mapping.sources.length}{" "}
+              {definitions.mapping.sources.length === 1 ? "source" : "sources"},{" "}
+              {definitions.mapping.sources.reduce(
+                (n, s) => n + s.entities.length,
+                0,
+              )}{" "}
+              entity bindings,{" "}
+              {definitions.mapping.sources.reduce(
+                (n, s) => n + s.events.length,
+                0,
+              )}{" "}
+              event bindings
             </li>
             <li>
               <Link to="/workspace/evaluation">Evaluation</Link> —{" "}
