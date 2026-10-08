@@ -6,7 +6,7 @@ A workspace is a directory containing four YAML definition files. The FDE checks
 | --- | --- |
 | `domain.yaml` | Typed entity/event model, projections, and explicit policies |
 | `mapping.yaml` | Declarative mapping from source snapshots to entities and events |
-| `evaluation.yaml` | Outcome contract: interval, aggregation, baseline, strict target, guardrails |
+| `evaluation.yaml` | Outcome contract: interval, aggregation, baseline, strict target, guardrails, declared metrics |
 | `agent.yaml` | Diagnosis task: projection to inspect, deliverables, permitted action schemas |
 
 Validate a workspace with `ontology check <dir>` (or `load_workspace(<dir>)` from Python). Validation collects diagnostics; it never fails fast. Each diagnostic carries a severity (`error`/`warning`), a stable code, the file, a dotted path into the document, and a hint where the fix is guessable (for example, `did you mean 'Person'?`). Exit status is `0` only with zero errors; warnings never fail a workspace.
@@ -126,6 +126,12 @@ evaluation:
   unit: days              # seconds | minutes | hours | days
   baseline: { value: 9 }
   target: { comparator: lt, value: 4 }
+  metrics:                            # the rates a guardrail may name
+    invoice_error_rate:
+      entity: Invoice                 # the counted domain entity
+      ref: job                        # ref property linking it to the interval subject
+      flag: error                     # boolean predicate — or `where: <condition>`
+      # noun: errors                  # optional report noun for the numerator
   guardrails:
     - { name: invoice-error-rate, metric: invoice_error_rate, comparator: not_increase }
 ```
@@ -133,6 +139,7 @@ evaluation:
 - `start_event` and `end_event` must be different domain events sharing one subject.
 - `target.comparator` is `lt | lte | gt | gte`; `lt` is strict, so a 4-day median misses a `< 4` target.
 - Guardrail comparator `not_increase` compares against the baseline and takes no `value`; other comparators require a numeric `value`.
+- Each `metrics` entry declares a per-cohort rate: `entity` and `ref` must name a domain entity and a ref-typed property on it, and exactly one predicate is required — `flag` (a declared boolean property) or `where` (a condition over the entity's properties). The ref's target must match the interval's subject entity, or the guardrail reports `unavailable` at evaluate time.
 - `ontology evaluate` executes the contract — see [evaluation.md](evaluation.md) for cohort, pairing, and guardrail-evidence rules.
 
 ## agent.yaml

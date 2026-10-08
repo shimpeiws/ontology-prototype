@@ -123,6 +123,23 @@ def _check_field(node: dict, err: ErrorFn, path: str) -> bool:
     return True
 
 
+def condition_fields(node: Any) -> list[str]:
+    """Collect the ``field`` operands of a validated condition tree."""
+    fields: list[str] = []
+    if not isinstance(node, dict):
+        return fields
+    field = node.get("field")
+    if isinstance(field, str):
+        fields.append(field)
+    args = node.get("args")
+    if isinstance(args, list):
+        for arg in args:
+            fields.extend(condition_fields(arg))
+    if "arg" in node:
+        fields.extend(condition_fields(node["arg"]))
+    return fields
+
+
 def evaluate_condition(condition: Condition, record: dict[str, Any]) -> bool:
     """Evaluate a validated condition tree against a normalized record.
 

@@ -33,6 +33,7 @@ DOMAIN = {
             "Invoice": {
                 "properties": {
                     "job": {"type": "ref", "ref": "Job"},
+                    "error": {"type": "boolean"},
                 }
             },
             "Person": {
@@ -108,6 +109,13 @@ EVALUATION = {
         "unit": "days",
         "baseline": {"value": 9},
         "target": {"comparator": "lt", "value": 4},
+        "metrics": {
+            "invoice_error_rate": {
+                "entity": "Invoice",
+                "ref": "job",
+                "flag": "error",
+            }
+        },
         "guardrails": [
             {
                 "name": "invoice-error-rate",

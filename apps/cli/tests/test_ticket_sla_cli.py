@@ -1,10 +1,11 @@
 """Deterministic checks for the second workflow workspace (ticket-sla).
 
-Pins the documented state of examples/ticket-sla (#54, #55): the four
-definitions validate, the committed snapshots ingest cleanly, the
+Pins the documented state of examples/ticket-sla (#54, #55, #56): the
+four definitions validate, the committed snapshots ingest cleanly, the
 declaratively-selected projection and the stub diagnosis run, and
-evaluation reports the recorded reference outcome — while the
-reopen-rate guardrail reports unavailable (#56).
+evaluation reports the recorded reference outcome — including the
+declared reopen-rate guardrail, which needs no registered Python
+semantics.
 """
 
 from __future__ import annotations
@@ -156,8 +157,26 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     assert repeat["canonical"]["events_appended"] == 0
     assert repeat["canonical"]["events_reobserved"] == 16
 
-    # Evaluation of the declared interval works end to end; only the
-    # unregistered reopen_rate guardrail stays unavailable (#56).
+    # The second source feeds the Resolution entities the declared
+    # reopen_rate metric counts (#56, #57).
+    for name in ("resolutions-baseline", "resolutions-followup"):
+        resolutions = run_json(
+            capsys,
+            [
+                "ingest",
+                str(workspace),
+                str(snapshots[name]),
+                "--source",
+                "resolutions",
+                "--json",
+            ],
+        )
+        assert resolutions["rejected"] == 0
+    assert resolutions["canonical"]["entities_upserted"] == 5
+
+    # Evaluation of the declared interval works end to end, and the
+    # reopen-rate guardrail evaluates from its declared metric with no
+    # registered semantics: baseline 1/3 reopens, after 0/5.
     evaluation = run_json(
         capsys,
         [
@@ -183,9 +202,28 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
         "value": 4.0,
         "status": "attained",
     }
-    assert report["guardrails"][0]["metric"] == "reopen_rate"
-    assert report["guardrails"][0]["status"] == "unavailable"
-    assert report["overall"]["status"] == "unverified"
+    guardrail = report["guardrails"][0]
+    assert guardrail["metric"] == "reopen_rate"
+    assert guardrail["status"] == "passed"
+    evidence = guardrail["evidence"]
+    assert evidence["convention"] == {
+        "entity": "Resolution",
+        "ticket_ref": "ticket",
+        "reopened_flag": "reopened",
+        "subject_entity": "Ticket",
+    }
+    assert evidence["baseline"]["resolutions"] == 3
+    assert evidence["baseline"]["reopens"] == 1
+    assert evidence["baseline"]["rate"] == 1 / 3
+    assert evidence["after"] == {
+        "resolutions": 5,
+        "reopens": 0,
+        "rate": 0.0,
+        "resolutions_missing_reopened": 0,
+        "postdating_as_of": 0,
+        "entity_ids": ["R-C00", "R-C01", "R-C02", "R-C03", "R-C04"],
+    }
+    assert report["overall"]["status"] == "success"
     pending = {p["subject_id"] for p in report["cohorts"]["after"]["pending"]}
     assert pending == {"T-C05"}
 

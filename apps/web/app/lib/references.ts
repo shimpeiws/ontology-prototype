@@ -7,14 +7,16 @@
  *
  * - entity names: `ref:` targets (domain properties, event properties,
  *   agent action params), event/projection `subject`, mapping entity
- *   bindings, mapping event `subject.entity`
+ *   bindings, mapping event `subject.entity`, the `entity` a declared
+ *   evaluation metric counts
  * - event names: mapping event bindings, evaluation
  *   `start_event`/`end_event`, projection `select` event lists and
  *   `elapsed.event`
  * - projection names: agent `projection`
  * - entity property names: mapping `properties` keys of bindings for that
  *   entity, `field` operands in projection `select.where` conditions over
- *   that entity
+ *   that entity, a metric's `ref`/`flag` and `where` `field` operands
+ *   over the entity it counts
  *
  * This is a navigation/confirmation aid, not validation — the core's
  * diagnostics remain the only verdict on the draft. Files that are absent
@@ -273,17 +275,63 @@ function scanEvaluation(
   concept: Concept,
   hits: ReferenceHit[],
 ): void {
-  if (concept.kind !== "event") return;
-  const interval =
-    isRecord(js) && isRecord(js.evaluation) && isRecord(js.evaluation.interval)
-      ? js.evaluation.interval
-      : {};
-  for (const key of ["start_event", "end_event"] as const) {
-    if (scalarEq(interval[key], concept.name)) {
+  const evaluation = isRecord(js) && isRecord(js.evaluation) ? js.evaluation : {};
+  if (concept.kind === "event") {
+    const interval = isRecord(evaluation.interval) ? evaluation.interval : {};
+    for (const key of ["start_event", "end_event"] as const) {
+      if (scalarEq(interval[key], concept.name)) {
+        hits.push({
+          file: "evaluation.yaml",
+          path: `evaluation.interval.${key}`,
+          label: `evaluation ${key}`,
+        });
+      }
+    }
+    return;
+  }
+  // Declared metrics name the entity they count and, among that
+  // entity's properties, the `ref` to the cohort subject and the `flag`
+  // or `where` fields forming the predicate.
+  for (const [name, metric] of entries(evaluation.metrics)) {
+    const base = `evaluation.metrics.${name}`;
+    if (concept.kind === "entity") {
+      if (scalarEq(metric.entity, concept.name)) {
+        hits.push({
+          file: "evaluation.yaml",
+          path: `${base}.entity`,
+          label: `counted entity of metric ${name}`,
+        });
+      }
+      continue;
+    }
+    if (
+      concept.kind !== "property" ||
+      concept.ownerKind !== "entities" ||
+      !scalarEq(metric.entity, concept.owner)
+    ) {
+      continue;
+    }
+    if (scalarEq(metric.ref, concept.name)) {
       hits.push({
         file: "evaluation.yaml",
-        path: `evaluation.interval.${key}`,
-        label: `evaluation ${key}`,
+        path: `${base}.ref`,
+        label: `subject ref of metric ${name}`,
+      });
+    }
+    if (scalarEq(metric.flag, concept.name)) {
+      hits.push({
+        file: "evaluation.yaml",
+        path: `${base}.flag`,
+        label: `flag property of metric ${name}`,
+      });
+    }
+    const fields: string[] = [];
+    conditionFields(metric.where, fields);
+    if (fields.includes(concept.name)) {
+      hits.push({
+        file: "evaluation.yaml",
+        path: `${base}.where`,
+        label: `condition field '${concept.name}' of metric ${name}`,
       });
     }
   }
@@ -556,6 +604,25 @@ function detachSelectAliases(doc: Document, spec: YAMLMap): void {
   }
 }
 
+/**
+ * Break cross-spec alias sharing in a metric's `where` before a rename
+ * walks it — same hazard as `select` on projections (see
+ * detachSelectAliases).
+ */
+function detachWhereAliases(doc: Document, spec: YAMLMap): void {
+  const node = spec.get("where", true);
+  if (isAlias(node)) {
+    const resolved = node.resolve(doc);
+    if (resolved == null) return;
+    const copy = resolved.clone();
+    stripAnchors(copy);
+    materializeExternalAliases(doc, copy, spec, new Set([resolved]));
+    spec.set("where", copy);
+  } else {
+    materializeExternalAliases(doc, node, spec, new Set());
+  }
+}
+
 /** Retarget `field:` scalars anywhere inside a `where` condition tree. */
 function retargetConditionFields(
   doc: Document,
@@ -800,12 +867,49 @@ function renameInEvaluation(
   concept: Concept,
   newName: string,
 ): boolean {
-  if (concept.kind !== "event") return false;
-  const interval = doc.getIn(["evaluation", "interval"]);
-  if (!isMap(interval)) return false;
+  const evaluation = doc.get("evaluation");
+  if (!isMap(evaluation)) return false;
   let changed = false;
-  for (const key of ["start_event", "end_event"]) {
-    if (retarget(doc, interval, key, concept.name, newName)) changed = true;
+  if (concept.kind === "event") {
+    const interval = evaluation.get("interval");
+    if (isMap(interval)) {
+      for (const key of ["start_event", "end_event"]) {
+        if (retarget(doc, interval, key, concept.name, newName))
+          changed = true;
+      }
+    }
+    return changed;
+  }
+  const metrics = evaluation.get("metrics");
+  if (!isMap(metrics)) return changed;
+  const specs = specMaps(metrics);
+  if (concept.kind === "entity") {
+    for (const [, spec] of specs) {
+      if (retarget(doc, spec, "entity", concept.name, newName))
+        changed = true;
+    }
+    return changed;
+  }
+  if (concept.kind !== "property" || concept.ownerKind !== "entities") {
+    return false;
+  }
+  // Metric `where` trees share the alias hazard of projection `select`
+  // conditions: detach every borrowed node before retargeting, or an
+  // in-place edit leaks into the anchor's owner.
+  for (const [, spec] of specs) {
+    detachWhereAliases(doc, spec);
+  }
+  for (const [, spec] of specs) {
+    if (!scalarIs(doc, spec, "entity", concept.owner)) continue;
+    for (const key of ["ref", "flag"]) {
+      if (retarget(doc, spec, key, concept.name, newName)) changed = true;
+    }
+    if (
+      editAt(doc, spec, "where", (m) =>
+        retargetConditionFields(doc, m, concept.name, newName),
+      )
+    )
+      changed = true;
   }
   return changed;
 }

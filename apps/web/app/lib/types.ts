@@ -235,6 +235,16 @@ export interface MappingDefinition {
   sources: SourceMapping[];
 }
 
+export interface MetricSpec {
+  name: string;
+  entity: string;
+  ref: string;
+  flag: string | null;
+  where: { raw: Record<string, unknown> } | null;
+  noun: string | null;
+  description: string | null;
+}
+
 export interface EvaluationDefinition {
   name: string;
   description: string | null;
@@ -251,6 +261,7 @@ export interface EvaluationDefinition {
     value: number | null;
     description: string | null;
   }[];
+  metrics: Record<string, MetricSpec>;
 }
 
 export interface AgentDefinition {

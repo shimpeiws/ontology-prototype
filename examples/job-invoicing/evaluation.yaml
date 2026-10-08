@@ -16,6 +16,12 @@ evaluation:
     comparator: lt
     value: 4
     description: Strict target; a median of exactly 4 days is a miss.
+  metrics:
+    invoice_error_rate:
+      entity: Invoice
+      ref: job
+      flag: error
+      description: Rate of Invoice entities carrying a boolean error flag that is true, per cohort.
   guardrails:
     - name: invoice-error-rate
       metric: invoice_error_rate

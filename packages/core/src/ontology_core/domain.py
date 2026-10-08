@@ -6,7 +6,7 @@ import difflib
 import math
 from typing import Any
 
-from .conditions import validate_condition
+from .conditions import condition_fields, validate_condition
 from .diagnostics import Diagnostics
 from .model import (
     DURATION_UNITS,
@@ -450,7 +450,7 @@ def _validate_select(
             ok = False
         elif subject is not None and subject in entities:
             properties = entities[subject].properties
-            for field_name in _condition_fields(where.raw):
+            for field_name in condition_fields(where.raw):
                 if field_name not in properties:
                     err(
                         "DOMAIN.UNKNOWN_FIELD",
@@ -611,20 +611,3 @@ def _validate_elapsed(
     return ElapsedSpec(
         event=event, comparator=comparator, value=value, unit=unit
     )
-
-
-def _condition_fields(node: Any) -> list[str]:
-    """Collect the ``field`` operands of a validated condition tree."""
-    fields: list[str] = []
-    if not isinstance(node, dict):
-        return fields
-    field = node.get("field")
-    if isinstance(field, str):
-        fields.append(field)
-    args = node.get("args")
-    if isinstance(args, list):
-        for arg in args:
-            fields.extend(_condition_fields(arg))
-    if "arg" in node:
-        fields.extend(_condition_fields(node["arg"]))
-    return fields

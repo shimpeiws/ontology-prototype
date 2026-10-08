@@ -16,6 +16,13 @@ evaluation:
     comparator: lt
     value: 4
     description: Strict target; a median of exactly 4 hours is a miss.
+  metrics:
+    reopen_rate:
+      entity: Resolution
+      ref: ticket
+      flag: reopened
+      noun: reopens
+      description: Rate of Resolution entities carrying a boolean reopened flag that is true, per cohort.
   guardrails:
     - name: reopen-rate
       metric: reopen_rate

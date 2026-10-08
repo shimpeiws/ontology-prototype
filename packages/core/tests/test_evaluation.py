@@ -122,6 +122,133 @@ def test_duplicate_guardrail_name(tmp_path: Path) -> None:
     assert "EVAL.DUPLICATE_GUARDRAIL" in codes(result)
 
 
+def test_metrics_must_be_a_mapping(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["evaluation"]["evaluation"]["metrics"] = ["invoice_error_rate"]
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "SCHEMA.INVALID_TYPE" in codes(result)
+
+
+def test_metric_requires_exactly_one_predicate(tmp_path: Path) -> None:
+    for predicate in (
+        {},
+        {
+            "flag": "error",
+            "where": {"op": "eq", "field": "error", "value": True},
+        },
+    ):
+        docs = base_docs()
+        docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"] = {
+            "entity": "Invoice",
+            "ref": "job",
+            **predicate,
+        }
+        result = load_workspace(make_workspace(tmp_path / str(len(predicate)), docs))
+        assert not result.ok
+        assert "EVAL.INVALID_PREDICATE" in codes(result)
+
+
+def test_metric_unknown_entity(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"][
+        "entity"
+    ] = "Bill"
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "EVAL.UNKNOWN_ENTITY" in codes(result)
+
+
+def test_metric_ref_must_be_ref_typed(tmp_path: Path) -> None:
+    docs = base_docs()
+    metric = docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"]
+    metric["ref"] = "error"  # a boolean property, not a ref
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "EVAL.INVALID_METRIC_REF" in codes(result)
+
+
+def test_metric_flag_must_be_boolean(tmp_path: Path) -> None:
+    docs = base_docs()
+    metric = docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"]
+    metric["flag"] = "job"  # a ref property, not a boolean
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "EVAL.INVALID_METRIC_FLAG" in codes(result)
+
+
+def test_metric_unknown_fields(tmp_path: Path) -> None:
+    docs = base_docs()
+    metric = docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"]
+    metric["ref"] = "jobb"
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "EVAL.UNKNOWN_FIELD" in codes(result)
+
+    docs = base_docs()
+    metric = docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"]
+    metric["flag"] = "err"
+    result = load_workspace(make_workspace(tmp_path / "flag", docs))
+    assert not result.ok
+    assert "EVAL.UNKNOWN_FIELD" in codes(result)
+
+
+def test_metric_rejects_unknown_keys(tmp_path: Path) -> None:
+    docs = base_docs()
+    docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"][
+        "python"
+    ] = "count_errors"
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "SCHEMA.UNEXPECTED_KEY" in codes(result)
+
+
+def test_metric_where_condition_is_validated(tmp_path: Path) -> None:
+    docs = base_docs()
+    metric = docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"]
+    del metric["flag"]
+    metric["where"] = {"op": "equals", "field": "error", "value": True}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert not result.ok
+    assert "CONDITION.UNKNOWN_OP" in codes(result)
+
+    docs = base_docs()
+    metric = docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"]
+    del metric["flag"]
+    metric["where"] = {"op": "eq", "field": "missing_field", "value": True}
+    result = load_workspace(make_workspace(tmp_path / "field", docs))
+    assert not result.ok
+    assert "EVAL.UNKNOWN_FIELD" in codes(result)
+
+
+def test_metric_where_condition_loads(tmp_path: Path) -> None:
+    docs = base_docs()
+    metric = docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"]
+    del metric["flag"]
+    metric["where"] = {"op": "eq", "field": "error", "value": True}
+    result = load_workspace(make_workspace(tmp_path, docs))
+    assert result.ok, [d.format() for d in result.diagnostics]
+    spec = result.workspace.evaluation.metrics["invoice_error_rate"]
+    assert spec.flag is None
+    assert spec.where.raw == {"op": "eq", "field": "error", "value": True}
+
+
+def test_metric_rejects_evidence_key_collisions(tmp_path: Path) -> None:
+    # Derived or declared nouns that collide with each other or with the
+    # fixed evidence keys would silently overwrite evidence fields, so
+    # the declaration is rejected at check time.
+    for i, noun in enumerate(
+        ["invoices", "rate", "invoices_missing_error"]
+    ):
+        docs = base_docs()
+        docs["evaluation"]["evaluation"]["metrics"]["invoice_error_rate"][
+            "noun"
+        ] = noun
+        result = load_workspace(make_workspace(tmp_path / str(i), docs))
+        assert not result.ok
+        assert "EVAL.METRIC_NOUN_COLLISION" in codes(result)
+
+
 def test_reference_contract() -> None:
     # The committed workspace preserves baseline median 9, strict target < 4,
     # and an explicit invoice-error guardrail.
@@ -138,6 +265,12 @@ def test_reference_contract() -> None:
     assert guardrail.comparator == "not_increase"
     assert evaluation.interval.start_event == "JobCompleted"
     assert evaluation.interval.end_event == "InvoiceIssued"
+    # The guardrail's semantics are a declared metric, not registered code.
+    metric = evaluation.metrics["invoice_error_rate"]
+    assert metric.entity == "Invoice"
+    assert metric.ref == "job"
+    assert metric.flag == "error"
+    assert metric.where is None
 
 
 def test_strict_target_is_lt_not_lte() -> None:

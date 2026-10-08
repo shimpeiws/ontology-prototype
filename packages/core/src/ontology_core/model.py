@@ -208,6 +208,58 @@ class GuardrailSpec:
 
 
 @dataclass(frozen=True)
+class MetricSpec:
+    """A declared guardrail metric: a numerator/denominator rate over
+    entities related to the interval's cohort subjects through a ref.
+
+    ``entity`` is the counted entity type and ``ref`` its ref-typed
+    property linking each entity to a cohort subject — the ref's declared
+    target types the metric to intervals on that subject entity. Exactly
+    one predicate form is declared:
+
+    - ``flag`` — a boolean property. Entities carrying a boolean value
+      form the denominator and ``true`` values the numerator; an entity
+      without a boolean value is an evidence gap.
+    - ``where`` — a condition over the entity's properties. Every linked
+      entity is in the denominator and matching entities the numerator.
+
+    ``noun`` is the report noun for the numerator count (default
+    ``"<flag>s"`` for a flag predicate, ``"matched"`` for a ``where``
+    predicate)."""
+
+    name: str
+    entity: str
+    ref: str
+    flag: str | None = None
+    where: Condition | None = None
+    noun: str | None = None
+    description: str | None = None
+
+    def evidence_nouns(self) -> tuple[str, str]:
+        """The report nouns for the metric's denominator and numerator.
+
+        The denominator names the counted entities — ``invoices`` for
+        ``Invoice``. The numerator names the predicate-true count: the
+        declared ``noun``, else ``"<flag>s"`` for a flag predicate or
+        ``"matched"`` for a ``where`` predicate.
+        """
+        denominator = f"{self.entity.lower()}s"
+        numerator = self.noun or (
+            f"{self.flag}s" if self.flag is not None else "matched"
+        )
+        return denominator, numerator
+
+    def evidence_keys(self) -> list[str]:
+        """The report keys a cohort evidence bucket emits, in order."""
+        denominator, numerator = self.evidence_nouns()
+        keys = [denominator, numerator, "rate"]
+        if self.flag is not None:
+            keys.append(f"{denominator}_missing_{self.flag}")
+        keys += ["postdating_as_of", "entity_ids"]
+        return keys
+
+
+@dataclass(frozen=True)
 class EvaluationDefinition:
     name: str
     interval: IntervalSpec
@@ -217,6 +269,7 @@ class EvaluationDefinition:
     baseline: float
     target: TargetSpec
     guardrails: list[GuardrailSpec] = field(default_factory=list)
+    metrics: dict[str, MetricSpec] = field(default_factory=dict)
     description: str | None = None
 
 

@@ -87,11 +87,12 @@ ontology project examples/ticket-sla --as-of 2026-10-24T00:00:00Z
 ontology diagnose examples/ticket-sla --as-of 2026-10-24T00:00:00Z --provider stub
 # → diagnosis run recorded over 1 candidate (stub proposal)
 
-# 5. Evaluation of the declared interval does run — interval pairing,
-#    cohorts, and the strict target are all generic. Reopen evidence now
-#    ingests from the resolutions export, but the reopen-rate guardrail
-#    still reports unavailable because reopen_rate has no registered
-#    metric semantics (gap G-02 → #56).
+# 5. Evaluation of the declared interval runs — interval pairing,
+#    cohorts, and the strict target are all generic, and the
+#    reopen-rate guardrail evaluates from the metric declared in
+#    evaluation.yaml (gap G-02 → #56): Resolution entities linked to
+#    cohort Tickets through the typed `ticket` ref, scored on the
+#    boolean `reopened` flag — no metric semantics live in code.
 ontology ingest examples/ticket-sla examples/ticket-sla/data/tickets-followup.csv --source tickets
 # → 6 accepted, 0 rejected; 7 events appended; 9 re-observed
 ontology ingest examples/ticket-sla examples/ticket-sla/data/resolutions-followup.csv --source resolutions
@@ -101,21 +102,24 @@ ontology evaluate examples/ticket-sla --boundary 2026-10-20T00:00:00Z --as-of 20
 #   after:    median 3 hours (5 paired, 1 pending — T-C05)
 #   change:   23 hours (improvement)
 #   target lt 4 hours: attained
-#   guardrail reopen-rate: unavailable — no registered semantics
-#   overall:  unverified
+#   guardrail reopen-rate: passed — after 0/5 reopens vs baseline 1/3
+#   overall:  success
 ```
 
 The parts that run — validation, ingestion with observation evidence and
 re-observation idempotency, declared candidate selection, diagnosis,
-interval pairing, cohort evaluation, strict targets — are
-workflow-agnostic. What still stops is the reopen-rate guardrail and its
-evidence source — gaps G-02/G-03.
+interval pairing, cohort evaluation, strict targets, and declared
+guardrail metrics — are workflow-agnostic. The runtime gaps the
+walkthrough exposed (G-01–G-03) are all resolved; what remains accepted
+for v0.3 are the delivery-adapter key, the authoring gap, and the
+pre-computed `first_response_at` (G-04–G-06).
 
 ## Reading the result honestly
 
 The report shows an observed difference between two time-based cohorts
 of synthetic data. `target attained` means the after median cleared the
-strict threshold; `overall: unverified` — not `met` — because the
-reopen-rate guardrail has no registered semantics even though its
-evidence now ingests from the `resolutions` source. The demonstration
-does not claim the synthetic data proves a real business improvement.
+strict threshold; `overall: success` because the reopen-rate guardrail
+evaluated real evidence from the `resolutions` source — after 0/5
+reopens against a 1/3 baseline satisfies `not_increase`. The
+demonstration does not claim the synthetic data proves a real business
+improvement.

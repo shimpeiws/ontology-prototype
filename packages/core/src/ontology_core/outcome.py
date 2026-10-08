@@ -3,12 +3,15 @@
 The workspace evaluation contract (``evaluation.yaml``, validated in
 evaluation.py) declares an interval — a start event and an end event on
 one subject — plus the aggregation, a declared baseline, a strict target,
-and guardrails. ``run_evaluation`` pairs those interval events per
-canonical subject at an explicit ``as_of``, splits subjects into a
-baseline and an after cohort at an explicit ``boundary``, and reports
-aggregates, pending and invalid intervals, the target verdict, and
-guardrail verdicts computed from explicit evidence counts — then freezes
-the full report into the append-only ``evaluation_runs`` table.
+guardrails, and the metrics guardrails measure (numerator/denominator
+over entities related to cohort subjects via a declared ref, gated by a
+boolean ``flag`` or a ``where`` condition). ``run_evaluation`` pairs
+those interval events per canonical subject at an explicit ``as_of``,
+splits subjects into a baseline and an after cohort at an explicit
+``boundary``, and reports aggregates, pending and invalid intervals, the
+target verdict, and guardrail verdicts computed from explicit evidence
+counts — then freezes the full report into the append-only
+``evaluation_runs`` table.
 
 Cohort and pairing rules
 ------------------------
@@ -77,30 +80,21 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .canonical import CanonicalStore, SqliteCanonicalStore
+from .conditions import condition_fields, evaluate_condition
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
-from .model import GuardrailSpec, Workspace
+from .model import GuardrailSpec, MetricSpec, Workspace
 from .trace import JsonlTraceSink, TraceSink
 from .workspace import SUPPORTED_SCHEMA_VERSION
 
-# Version of the cohort/pairing semantics. Bump when the selection rules
-# change so previously frozen reports carry a different contract digest.
-_SEMANTIC_VERSION = 2
+# Version of the cohort/pairing and evidence semantics. Bump when the
+# rules — including where guardrail semantics come from — change so
+# previously frozen reports carry a different contract digest.
+_SEMANTIC_VERSION = 3
 
 # Seconds in one declared contract unit; durations are reported in the
 # contract's unit rather than raw seconds.
 _UNIT_SECONDS = {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400}
-
-# Evidence convention of the registered ``invoice_error_rate`` guardrail
-# semantics: Invoice entities linked to a cohort subject through the
-# ``job`` ref — a typed Job reference — with the boolean ``error`` flag
-# as the error signal. These names are the v0.1 convention — a workspace
-# whose domain uses different names, or whose interval subject is not
-# Job, simply has no evidence and reports the guardrail unavailable.
-_INVOICE_ENTITY = "Invoice"
-_INVOICE_JOB_REF = "job"
-_INVOICE_ERROR_FLAG = "error"
-_INVOICE_SUBJECT = "Job"
 
 _COMPARATORS: dict[str, Callable[[float, float], bool]] = {
     "lt": lambda a, b: a < b,
@@ -651,20 +645,27 @@ def _evaluate_guardrail(
         "metric": spec.metric,
         "comparator": spec.comparator,
     }
-    metric = _GUARDRAIL_METRICS.get(spec.metric)
+    metric = workspace.evaluation.metrics.get(spec.metric)
     if metric is None:
         report["status"] = "unavailable"
         report["reason"] = (
-            f"no registered semantics for metric {spec.metric!r}"
+            f"metric {spec.metric!r} is not declared in "
+            "evaluation.metrics"
         )
         diag.warning(
             "EVALUATION.UNSUPPORTED_GUARDRAIL",
             f"guardrail {spec.name!r} uses metric {spec.metric!r}, which "
-            "has no registered semantics",
+            "is not declared in evaluation.metrics",
         )
         return report
 
-    evidence = metric(workspace, store, cohort_subjects, subject_entity, as_of)
+    # The evidence label is the metric's own name minus a trailing
+    # "_rate" — "invoice_error_rate" reports "no invoice-error
+    # evidence", "reopen_rate" reports "no reopen evidence".
+    label = spec.metric.removesuffix("_rate").replace("_", "-")
+    evidence = _metric_evidence(
+        workspace, store, metric, cohort_subjects, subject_entity, as_of
+    )
     report["evidence"] = evidence
     baseline_rate = evidence["baseline"]["rate"]
     after_rate = evidence["after"]["rate"]
@@ -684,7 +685,7 @@ def _evaluate_guardrail(
             ]
             report["status"] = "unavailable"
             report["reason"] = (
-                "no invoice-error evidence for the "
+                f"no {label} evidence for the "
                 + " and ".join(missing)
                 + " cohort"
             )
@@ -696,7 +697,7 @@ def _evaluate_guardrail(
         if after_rate is None:
             report["status"] = "unavailable"
             report["reason"] = (
-                "no invoice-error evidence for the after cohort"
+                f"no {label} evidence for the after cohort"
             )
         else:
             report["status"] = (
@@ -713,69 +714,94 @@ def _evaluate_guardrail(
     return report
 
 
-def _invoice_error_rate(
+def _metric_evidence(
     workspace: Workspace,
     store: CanonicalStore,
+    metric: MetricSpec,
     cohort_subjects: dict[str, set[str]],
     subject_entity: str,
     as_of: datetime,
 ) -> dict[str, Any]:
-    """Explicit error counts and denominators for the registered
-    ``invoice_error_rate`` guardrail.
+    """Explicit numerator/denominator counts for a declared metric.
 
-    The denominator of a cohort is the number of Invoice entities linked
-    (through the ``job`` ref) to a subject of that cohort and carrying a
-    boolean ``error`` value; the numerator is those flagged ``true``.
-    Invoices without a boolean flag, invoices whose job is in no cohort,
-    and invoices whose last state-changing observation postdates
-    ``as_of`` — stored entity state cannot prove what its properties
-    were at the instant — are reported as evidence gaps, never silently
-    folded into the rate.
+    The denominator of a cohort is the number of ``metric.entity``
+    entities linked (through the ``metric.ref`` ref) to a subject of
+    that cohort; for a ``flag`` predicate only entities carrying a
+    boolean flag value count — an entity whose flag is absent or not
+    boolean is an evidence gap — while a ``where`` predicate is total:
+    every linked entity is scored and condition-matching entities count
+    toward the numerator. Entities linked to no cohort subject, and
+    entities whose last state-changing observation postdates ``as_of``
+    — stored entity state cannot prove what its properties were at the
+    instant — are reported as evidence gaps, never silently folded into
+    the rate.
 
-    The ``job`` ref is a typed Job reference, so the semantics applies
-    only to Job-subject intervals; for any other subject entity the
-    convention is not applicable and the guardrail reports unavailable.
+    The ``ref`` is a typed reference, so the metric applies only to
+    intervals whose subject is the ref's declared target; for any other
+    subject entity the declaration is not applicable and the guardrail
+    reports unavailable.
     """
-    convention = {
-        "entity": _INVOICE_ENTITY,
-        "job_ref": _INVOICE_JOB_REF,
-        "error_flag": _INVOICE_ERROR_FLAG,
-        "subject_entity": _INVOICE_SUBJECT,
+    entity_spec = workspace.domain.entities.get(metric.entity)
+    ref_spec = (
+        entity_spec.properties.get(metric.ref) if entity_spec else None
+    )
+    ref_target = ref_spec.ref if ref_spec is not None else None
+
+    nouns = metric.evidence_nouns()
+    convention: dict[str, Any] = {
+        "entity": metric.entity,
+        f"{metric.ref}_ref": metric.ref,
     }
-    if subject_entity != _INVOICE_SUBJECT:
-        # Without the typed gate, an unrelated Invoice's job ref could
-        # collide with a same-id non-Job cohort subject.
+    if metric.flag is not None:
+        convention[f"{metric.flag}_flag"] = metric.flag
+    elif metric.where is not None:
+        convention["where"] = metric.where.raw
+    convention["subject_entity"] = ref_target
+
+    if ref_target is None or ref_target != subject_entity:
+        # Without the typed gate, an unrelated entity's ref could
+        # collide with a same-id cohort subject of another type. An
+        # unresolved declaration — possible only for a directly
+        # constructed Workspace, since load_workspace validates the
+        # metric against the domain — is not applicable either.
+        if ref_target is None:
+            reason = (
+                f"{metric.entity}.{metric.ref} is not a declared "
+                "reference in the domain"
+            )
+        else:
+            reason = (
+                f"{metric.entity}.{metric.ref} is a {ref_target} "
+                "reference; the interval subject is "
+                f"{subject_entity}, so this guardrail does not apply"
+            )
         return {
             "convention": convention,
             "applicable": False,
-            "reason": (
-                f"{_INVOICE_ENTITY}.{_INVOICE_JOB_REF} is a "
-                f"{_INVOICE_SUBJECT} reference; the interval subject is "
-                f"{subject_entity}, so this guardrail does not apply"
-            ),
-            "baseline": _empty_evidence_bucket(),
-            "after": _empty_evidence_bucket(),
+            "reason": reason,
+            "baseline": _empty_evidence_bucket(metric),
+            "after": _empty_evidence_bucket(metric),
         }
 
     buckets: dict[str, dict[str, Any]] = {
         name: {
-            "errors": 0,
-            "invoices": 0,
-            "missing_error": 0,
+            "scored": 0,
+            "counted": 0,
+            "missing": 0,
             "postdating_as_of": 0,
             "entity_ids": [],
         }
         for name in ("baseline", "after")
     }
     unmatched = 0
-    for entity in store.entities_of_type(_INVOICE_ENTITY):
+    for entity in store.entities_of_type(metric.entity):
         properties = entity["properties"]
-        job = properties.get(_INVOICE_JOB_REF)
+        linked = properties.get(metric.ref)
         cohort = next(
             (
                 name
                 for name in ("baseline", "after")
-                if isinstance(job, str) and job in cohort_subjects[name]
+                if isinstance(linked, str) and linked in cohort_subjects[name]
             ),
             None,
         )
@@ -794,76 +820,88 @@ def _invoice_error_rate(
             bucket["postdating_as_of"] += 1
             continue
         bucket["entity_ids"].append(entity["entity_id"])
-        error = properties.get(_INVOICE_ERROR_FLAG)
-        if isinstance(error, bool):
-            bucket["invoices"] += 1
-            if error:
-                bucket["errors"] += 1
+        if metric.flag is not None:
+            flag_value = properties.get(metric.flag)
+            if isinstance(flag_value, bool):
+                bucket["scored"] += 1
+                if flag_value:
+                    bucket["counted"] += 1
+            else:
+                bucket["missing"] += 1
         else:
-            bucket["missing_error"] += 1
+            bucket["scored"] += 1
+            if evaluate_condition(metric.where, properties):
+                bucket["counted"] += 1
 
     evidence: dict[str, Any] = {
         "convention": convention,
-        "unmatched_invoices": unmatched,
+        f"unmatched_{nouns[0]}": unmatched,
     }
     for name in ("baseline", "after"):
-        evidence[name] = _evidence_bucket(buckets[name])
+        evidence[name] = _evidence_bucket(metric, buckets[name])
     return evidence
 
 
-def _empty_evidence_bucket() -> dict[str, Any]:
+def _empty_evidence_bucket(metric: MetricSpec) -> dict[str, Any]:
     return _evidence_bucket(
+        metric,
         {
-            "errors": 0,
-            "invoices": 0,
-            "missing_error": 0,
+            "scored": 0,
+            "counted": 0,
+            "missing": 0,
             "postdating_as_of": 0,
             "entity_ids": [],
-        }
+        },
     )
 
 
-def _evidence_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "invoices": bucket["invoices"],
-        "errors": bucket["errors"],
-        "rate": (
-            bucket["errors"] / bucket["invoices"]
-            if bucket["invoices"]
+def _evidence_bucket(
+    metric: MetricSpec, bucket: dict[str, Any]
+) -> dict[str, Any]:
+    values: list[Any] = [
+        bucket["scored"],
+        bucket["counted"],
+        (
+            bucket["counted"] / bucket["scored"]
+            if bucket["scored"]
             else None
         ),
-        "invoices_missing_error": bucket["missing_error"],
-        "postdating_as_of": bucket["postdating_as_of"],
-        "entity_ids": sorted(bucket["entity_ids"]),
-    }
-
-
-# Registered guardrail metric semantics, keyed by the contract's metric
-# name — the same pattern as projection _SEMANTICS. A contract that names
-# an unregistered metric evaluates its guardrail as unavailable. Each
-# metric receives the interval's subject entity and the run's as_of so
-# its evidence can be typed and time-bounded.
-_GUARDRAIL_METRICS: dict[
-    str,
-    Callable[
-        [Workspace, CanonicalStore, dict[str, set[str]], str, datetime],
-        dict[str, Any],
-    ],
-] = {
-    "invoice_error_rate": _invoice_error_rate,
-}
+    ]
+    if metric.flag is not None:
+        values.append(bucket["missing"])
+    values += [bucket["postdating_as_of"], sorted(bucket["entity_ids"])]
+    return dict(zip(metric.evidence_keys(), values))
 
 
 def _contract_digest(workspace: Workspace) -> str:
     """Digest of everything that defines what a run computes.
 
     Covers the schema version, the semantics id and version, the full
-    evaluation contract, the interval events' domain declarations, the
-    date-only timezone policy, and the guardrail evidence conventions —
-    so a definition or contract edit changes the digest even when the
-    report happens to stay the same.
+    evaluation contract — including the declared guardrail metric
+    semantics — the domain property specs each metric's verdict depends
+    on (the ref's target gates applicability), the interval events'
+    domain declarations, and the date-only timezone policy, so a
+    definition or contract edit changes the digest even when the report
+    happens to stay the same.
     """
     interval = workspace.evaluation.interval
+    metric_fields: dict[str, Any] = {}
+    for name, metric in workspace.evaluation.metrics.items():
+        fields = [metric.ref]
+        if metric.flag is not None:
+            fields.append(metric.flag)
+        if metric.where is not None:
+            fields += condition_fields(metric.where.raw)
+        entity_spec = workspace.domain.entities.get(metric.entity)
+        metric_fields[name] = {
+            "entity": metric.entity,
+            "properties": {
+                field: dataclasses.asdict(entity_spec.properties[field])
+                for field in fields
+                if entity_spec is not None
+                and field in entity_spec.properties
+            },
+        }
     raw = json.dumps(
         {
             "schema_version": SUPPORTED_SCHEMA_VERSION,
@@ -872,6 +910,7 @@ def _contract_digest(workspace: Workspace) -> str:
                 "version": _SEMANTIC_VERSION,
             },
             "evaluation": dataclasses.asdict(workspace.evaluation),
+            "metric_fields": metric_fields,
             "events": {
                 name: dataclasses.asdict(workspace.domain.events[name])
                 for name in (interval.start_event, interval.end_event)
@@ -880,15 +919,6 @@ def _contract_digest(workspace: Workspace) -> str:
             "date_only_timezone": (
                 workspace.domain.policies.event_times.date_only_timezone
             ),
-            "guardrail_evidence": {
-                "invoice_error_rate": {
-                    "entity": _INVOICE_ENTITY,
-                    "job_ref": _INVOICE_JOB_REF,
-                    "error_flag": _INVOICE_ERROR_FLAG,
-                    "subject_entity": _INVOICE_SUBJECT,
-                    "evidence_time_bound": "properties_changed_at <= as_of",
-                }
-            },
         },
         sort_keys=True,
     ).encode("utf-8")

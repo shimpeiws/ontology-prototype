@@ -499,6 +499,72 @@ def test_guardrail_not_applicable_to_non_job_subjects(
     assert "Person" in guardrail["reason"]
 
 
+def test_where_predicate_metric(tmp_path: Path) -> None:
+    # A metric declared with a `where` condition scores every linked,
+    # time-valid entity — unlike `flag`, an entity missing the property
+    # still enters the denominator (and fails the condition). The
+    # numerator counts condition matches; the comparator is an ordinary
+    # bounded one, not `not_increase`.
+    docs = support.base_docs()
+    docs["evaluation"]["evaluation"]["guardrails"].append(
+        {
+            "name": "errored-share",
+            "metric": "errored_share",
+            "comparator": "lte",
+            "value": 0.5,
+        }
+    )
+    docs["evaluation"]["evaluation"]["metrics"]["errored_share"] = {
+        "entity": "Invoice",
+        "ref": "job",
+        "where": {"op": "eq", "field": "error", "value": True},
+    }
+    ws_dir = support.make_workspace(tmp_path / "ws", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok, [d.format() for d in loaded.diagnostics]
+    workspace = loaded.workspace
+    snapshot = write_snapshot(tmp_path, "jobs.csv", CSV_SAMPLE)
+    assert ingest_snapshot(
+        workspace, snapshot, observed_at=FIXED_NOW
+    ).ok
+    store = SqliteCanonicalStore(Path(workspace.path) / RUNTIME_DIR)
+    add_invoices(
+        store,
+        [
+            ("inv-b1", "B1", True),
+            ("inv-b2", "B2", False),
+            ("inv-b3", "B3", None),  # flag-less: still scored
+            ("inv-a1", "A1", False),
+            ("inv-a2", "A2", False),
+            ("inv-a3", "A3", True),
+        ],
+    )
+
+    result = run_evaluation(
+        workspace, as_of=AS_OF, boundary=BOUNDARY, store=store
+    )
+
+    assert result.ok, [d.format() for d in result.diagnostics]
+    guardrail = result.report["guardrails"][1]
+    assert guardrail["metric"] == "errored_share"
+    assert guardrail["status"] == "passed"  # 1/3 <= 0.5
+    evidence = guardrail["evidence"]
+    assert evidence["convention"]["where"] == {
+        "op": "eq",
+        "field": "error",
+        "value": True,
+    }
+    assert evidence["baseline"] == {
+        "invoices": 3,
+        "matched": 1,
+        "rate": 1 / 3,
+        "postdating_as_of": 0,
+        "entity_ids": ["inv-b1", "inv-b2", "inv-b3"],
+    }
+    assert evidence["after"]["invoices"] == 3
+    assert evidence["after"]["matched"] == 1
+
+
 def test_count_aggregation_never_fabricates_an_aggregate(
     tmp_path: Path,
 ) -> None:
@@ -793,6 +859,37 @@ def test_evaluation_is_deterministic(tmp_path: Path) -> None:
     assert first.report == second.report
     assert first.contract_digest == second.contract_digest
     assert first.run_id != second.run_id
+
+
+def test_metric_domain_change_moves_the_digest(tmp_path: Path) -> None:
+    # The digest pins the domain specs a declared metric's verdict
+    # depends on: retargeting Invoice.job away from the interval subject
+    # makes the metric inapplicable, and both configurations must not
+    # share a digest.
+    workspace = make_evaluated_ws(tmp_path)
+    first = run_evaluation(workspace, as_of=AS_OF, boundary=BOUNDARY)
+    assert first.ok
+
+    docs = support.base_docs()
+    docs["domain"]["domain"]["entities"]["Invoice"]["properties"]["job"][
+        "ref"
+    ] = "Person"
+    ws_dir = support.make_workspace(tmp_path / "retargeted", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok, [d.format() for d in loaded.diagnostics]
+    retargeted = loaded.workspace
+    ingest_snapshot(
+        retargeted,
+        write_snapshot(tmp_path, "jobs2.csv", CSV_SAMPLE),
+        observed_at=FIXED_NOW,
+    )
+    second = run_evaluation(retargeted, as_of=AS_OF, boundary=BOUNDARY)
+
+    assert second.ok
+    assert second.contract_digest != first.contract_digest
+    guardrail = second.report["guardrails"][0]
+    assert guardrail["status"] == "unavailable"
+    assert guardrail["evidence"]["applicable"] is False
 
 
 def test_report_has_no_causal_claim(tmp_path: Path) -> None:
