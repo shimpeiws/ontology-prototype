@@ -20,3 +20,6 @@ ontology = "ontology_cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv.sources]
+ontology-core = { workspace = true }
