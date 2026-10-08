@@ -861,6 +861,37 @@ def test_evaluation_is_deterministic(tmp_path: Path) -> None:
     assert first.run_id != second.run_id
 
 
+def test_metric_domain_change_moves_the_digest(tmp_path: Path) -> None:
+    # The digest pins the domain specs a declared metric's verdict
+    # depends on: retargeting Invoice.job away from the interval subject
+    # makes the metric inapplicable, and both configurations must not
+    # share a digest.
+    workspace = make_evaluated_ws(tmp_path)
+    first = run_evaluation(workspace, as_of=AS_OF, boundary=BOUNDARY)
+    assert first.ok
+
+    docs = support.base_docs()
+    docs["domain"]["domain"]["entities"]["Invoice"]["properties"]["job"][
+        "ref"
+    ] = "Person"
+    ws_dir = support.make_workspace(tmp_path / "retargeted", docs)
+    loaded = load_workspace(ws_dir)
+    assert loaded.ok, [d.format() for d in loaded.diagnostics]
+    retargeted = loaded.workspace
+    ingest_snapshot(
+        retargeted,
+        write_snapshot(tmp_path, "jobs2.csv", CSV_SAMPLE),
+        observed_at=FIXED_NOW,
+    )
+    second = run_evaluation(retargeted, as_of=AS_OF, boundary=BOUNDARY)
+
+    assert second.ok
+    assert second.contract_digest != first.contract_digest
+    guardrail = second.report["guardrails"][0]
+    assert guardrail["status"] == "unavailable"
+    assert guardrail["evidence"]["applicable"] is False
+
+
 def test_report_has_no_causal_claim(tmp_path: Path) -> None:
     # INV-006: the report describes time-based cohorts and never names a
     # proposal or intervention as the cause of the observed change.

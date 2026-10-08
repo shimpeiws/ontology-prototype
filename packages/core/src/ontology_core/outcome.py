@@ -80,7 +80,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .canonical import CanonicalStore, SqliteCanonicalStore
-from .conditions import evaluate_condition
+from .conditions import condition_fields, evaluate_condition
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
 from .model import GuardrailSpec, MetricSpec, Workspace
@@ -878,11 +878,30 @@ def _contract_digest(workspace: Workspace) -> str:
 
     Covers the schema version, the semantics id and version, the full
     evaluation contract — including the declared guardrail metric
-    semantics — the interval events' domain declarations, and the
-    date-only timezone policy, so a definition or contract edit changes
-    the digest even when the report happens to stay the same.
+    semantics — the domain property specs each metric's verdict depends
+    on (the ref's target gates applicability), the interval events'
+    domain declarations, and the date-only timezone policy, so a
+    definition or contract edit changes the digest even when the report
+    happens to stay the same.
     """
     interval = workspace.evaluation.interval
+    metric_fields: dict[str, Any] = {}
+    for name, metric in workspace.evaluation.metrics.items():
+        fields = [metric.ref]
+        if metric.flag is not None:
+            fields.append(metric.flag)
+        if metric.where is not None:
+            fields += condition_fields(metric.where.raw)
+        entity_spec = workspace.domain.entities.get(metric.entity)
+        metric_fields[name] = {
+            "entity": metric.entity,
+            "properties": {
+                field: dataclasses.asdict(entity_spec.properties[field])
+                for field in fields
+                if entity_spec is not None
+                and field in entity_spec.properties
+            },
+        }
     raw = json.dumps(
         {
             "schema_version": SUPPORTED_SCHEMA_VERSION,
@@ -891,6 +910,7 @@ def _contract_digest(workspace: Workspace) -> str:
                 "version": _SEMANTIC_VERSION,
             },
             "evaluation": dataclasses.asdict(workspace.evaluation),
+            "metric_fields": metric_fields,
             "events": {
                 name: dataclasses.asdict(workspace.domain.events[name])
                 for name in (interval.start_event, interval.end_event)
