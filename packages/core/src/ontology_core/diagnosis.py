@@ -389,7 +389,7 @@ def build_prompt(workspace: Workspace, candidates: list[dict[str, Any]]) -> str:
     which is enforced on the response regardless of prompt content.
     """
     agent = workspace.agent
-    # Params render as flat strings ("ref:Person (required)") rather than
+    # Params render as flat strings ("ref:<Entity> (required)") rather than
     # nested objects: models mirror object keys back as values, which
     # produces invalid param payloads.
     actions = {

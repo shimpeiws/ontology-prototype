@@ -18,7 +18,7 @@ The differences from ingest are the point of the type:
   observation ids are derived deterministically from the input, mapping, and
   domain digests plus the selected source name — a preview result states
   exactly which input, which definitions, and which source produced it.
-  Resolution consults the domain (required properties, event-time policy),
+  Binding resolution consults the domain (required properties, event-time policy),
   so the domain is part of preview identity.
 
 Never raises on bad input: encoding errors, parse failures, and malformed

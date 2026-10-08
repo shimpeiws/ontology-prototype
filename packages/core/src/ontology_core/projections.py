@@ -53,7 +53,7 @@ class ProjectionCandidate:
     # as_of — see ``evidence["entity_updated_at"]`` for its stamp.
     properties: dict[str, Any]
     evidence: dict[str, Any]
-    # Declared type of each property ("ref:Person", "string", ...) so
+    # Declared type of each property ("ref:<Entity>", "string", ...) so
     # consumers can match refs without re-reading the domain definition.
     property_types: dict[str, str] = field(default_factory=dict)
 

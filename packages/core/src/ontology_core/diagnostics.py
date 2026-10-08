@@ -17,8 +17,8 @@ class Diagnostic:
 
     ``file`` is the workspace file name (for example ``domain.yaml``) and
     ``path`` is a dotted location inside that document (for example
-    ``entities.Job.properties.assignee.ref``). ``line`` is the 1-based YAML
-    line number when the parser reports one.
+    ``entities.<Entity>.properties.<property>.ref``). ``line`` is the
+    1-based YAML line number when the parser reports one.
     """
 
     severity: str

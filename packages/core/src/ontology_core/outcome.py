@@ -660,8 +660,7 @@ def _evaluate_guardrail(
         return report
 
     # The evidence label is the metric's own name minus a trailing
-    # "_rate" — "invoice_error_rate" reports "no invoice-error
-    # evidence", "reopen_rate" reports "no reopen evidence".
+    # "_rate" — an "error_rate" metric reports "no error evidence".
     label = spec.metric.removesuffix("_rate").replace("_", "-")
     evidence = _metric_evidence(
         workspace, store, metric, cohort_subjects, subject_entity, as_of

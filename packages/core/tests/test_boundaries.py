@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import ast
+import re
 import sys
 from pathlib import Path
 
 import ontology_core
+import support
+import yaml
 
 CORE_SRC = Path(ontology_core.__file__).resolve().parent
+EXAMPLES = support.REPO_ROOT / "examples"
 
 FORBIDDEN_IMPORT_ROOTS = {
     "ontology_cli",
@@ -64,3 +68,89 @@ def test_core_runtime_dependencies() -> None:
     runtime = [r for r in requires if "extra" not in r]
     assert len(runtime) == 1
     assert runtime[0].lower().startswith("pyyaml")
+
+
+def _declared_identifiers(workspace_dir: Path) -> set[str]:
+    """Every name a workflow declares: the domain itself plus its
+    entities, events, projections, metrics, guardrails, and permitted
+    action names — the identifiers generality (#59) requires the core
+    to know nothing about."""
+    identifiers: set[str] = set()
+
+    def doc(name: str) -> dict:
+        return yaml.safe_load(
+            (workspace_dir / name).read_text(encoding="utf-8")
+        )
+
+    domain = doc("domain.yaml")["domain"]
+    identifiers.add(domain["name"])
+    for key in ("entities", "events", "projections"):
+        identifiers.update(domain.get(key) or {})
+
+    evaluation = doc("evaluation.yaml")["evaluation"]
+    identifiers.update(evaluation.get("metrics") or {})
+    identifiers.update(
+        g["name"] for g in evaluation.get("guardrails") or ()
+    )
+
+    agent = doc("agent.yaml")["agent"]
+    identifiers.update(agent.get("permitted_actions") or {})
+    return identifiers
+
+
+# The only paths under packages/core/src allowed to mention a declared
+# identifier, with the accepted reason for each coupling.
+ALLOWED_IDENTIFIERS: dict[str, set[str]] = {
+    # G-04 (docs/generality-gaps.md): the CSV reminder adapter is keyed on
+    # the SendReminder action name — an accepted v0.3 gap.
+    "execution.py": {"SendReminder"},
+    # diagnosis_eval.py is the #31 harness over the frozen job-invoicing
+    # fixture workspace committed under eval_fixtures/; its scenario text
+    # (injection probe) names that fixture's action and domain.
+    "diagnosis_eval.py": {"SendReminder", "job-invoicing"},
+}
+
+# eval_fixtures/ is the frozen harness input itself (a committed
+# job-invoicing workspace plus canned model outputs, issue #31) — data
+# the harness replays, not code the workflow's semantics live in.
+EXEMPT_DIRS = {"eval_fixtures"}
+
+
+def test_core_has_no_workflow_identifiers() -> None:
+    """v0.3 generality gate (#59): packages/core/src must not contain
+    identifiers declared by the example workflows, outside the allowlist."""
+    banned: set[str] = set()
+    for workspace_dir in sorted(EXAMPLES.iterdir()):
+        if (workspace_dir / "domain.yaml").is_file():
+            banned |= _declared_identifiers(workspace_dir)
+    assert banned, "no example workspaces found — check EXAMPLES path"
+
+    offenders: list[str] = []
+    stale: list[str] = []
+    scanned: set[str] = set()
+    for source in sorted(CORE_SRC.rglob("*.py")):
+        if EXEMPT_DIRS & set(
+            source.relative_to(CORE_SRC).parts
+        ):
+            continue
+        rel = source.relative_to(CORE_SRC).as_posix()
+        scanned.add(rel)
+        text = source.read_text(encoding="utf-8")
+        found = {
+            name
+            for name in banned
+            if re.search(rf"(?<!\w){re.escape(name)}(?!\w)", text)
+        }
+        allowed = ALLOWED_IDENTIFIERS.get(rel, set())
+        if extra := found - allowed:
+            offenders.append(f"{rel}: {sorted(extra)}")
+        if missing := allowed - found:
+            stale.append(f"{rel}: allowlisted but absent {sorted(missing)}")
+
+    unknown = set(ALLOWED_IDENTIFIERS) - scanned
+    assert not unknown, f"allowlist names unscanned files: {sorted(unknown)}"
+    assert not stale, f"stale allowlist entries: {stale}"
+    assert not offenders, (
+        "workflow identifiers in core outside the allowlist: "
+        f"{offenders}"
+    )
