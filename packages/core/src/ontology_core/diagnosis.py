@@ -35,7 +35,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from .canonical import CanonicalStore, SqliteCanonicalStore
+from .canonical import (
+    CanonicalStore,
+    SqliteCanonicalStore,
+    store_error_code,
+)
 from .decisions import build_proposal_rows
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
@@ -191,7 +195,7 @@ def run_diagnosis(
             record = store.projection_run(run_id)
         except Exception as exc:
             diag.error(
-                "DIAGNOSIS.STORE_ERROR",
+                store_error_code(exc, "DIAGNOSIS.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
             record = None
@@ -361,7 +365,7 @@ def run_diagnosis(
         result.recorded = True
     except Exception as exc:
         diag.error(
-            "DIAGNOSIS.STORE_ERROR",
+            store_error_code(exc, "DIAGNOSIS.STORE_ERROR"),
             f"cannot record diagnosis run: {exc}",
         )
         result.status = "failed"

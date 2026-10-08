@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import clisupport
@@ -186,3 +187,39 @@ def test_proposals_store_error_is_diagnosed(tmp_path, capsys) -> None:
     assert code == 1
     assert "DECISION.STORE_ERROR" in out
     assert "Traceback" not in out
+
+
+def test_decide_write_busy_is_stable_code(tmp_path, capsys) -> None:
+    """ADR 0003: lock contention reports the stable STORAGE.WRITE_BUSY —
+    a caller can retry — not the operation-local DECISION.STORE_ERROR."""
+    workspace = setup_workspace(tmp_path)
+    capsys.readouterr()
+    pid = proposal_id(tmp_path, workspace, capsys)
+
+    holder = sqlite3.connect(workspace / ".ontology" / "canon.db")
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        code = main(
+            [
+                "decide", str(workspace), pid,
+                "--approve", "--reviewer", "fde-sato",
+            ]
+        )
+        out = capsys.readouterr().out
+        assert code == 1
+        assert "STORAGE.WRITE_BUSY" in out
+        assert "Traceback" not in out
+    finally:
+        holder.rollback()
+        holder.close()
+
+    # Releasing the lock unblocks the same command.
+    assert (
+        main(
+            [
+                "decide", str(workspace), pid,
+                "--approve", "--reviewer", "fde-sato",
+            ]
+        )
+        == 0
+    )

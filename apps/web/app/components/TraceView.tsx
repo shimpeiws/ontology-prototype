@@ -85,7 +85,11 @@ function LinkList({ links }: { links: TraceLink[] }) {
 }
 
 /** Generic record rendering: scalars as a facts table, the rest as JSON. */
-function RecordDetails({ record }: { record: Record<string, unknown> }) {
+export function RecordDetails({
+  record,
+}: {
+  record: Record<string, unknown>;
+}) {
   const scalars = Object.entries(record).filter(
     ([, v]) => v === null || typeof v !== "object",
   );

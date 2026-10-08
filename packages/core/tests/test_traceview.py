@@ -675,6 +675,16 @@ def test_corrupt_journal_line_degrades_to_warning(tmp_path: Path) -> None:
     assert trace_anchor(asm, ctx["proposal_id"]) is not None
 
 
+def _canonical_dump(db: Path) -> str:
+    """Committed content of canon.db — read through the WAL so a
+    committed-but-uncheckpointed write is still visible."""
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return "\n".join(conn.iterdump())
+    finally:
+        conn.close()
+
+
 def test_assembly_does_not_mutate_runtime(tmp_path: Path) -> None:
     ctx = make_loop(tmp_path)
     runtime = Path(ctx["workspace"].path) / RUNTIME_DIR
@@ -682,11 +692,21 @@ def test_assembly_does_not_mutate_runtime(tmp_path: Path) -> None:
     def fingerprint() -> dict:
         entries = {}
         for path in sorted(runtime.rglob("*")):
-            if path.is_file():
-                entries[str(path.relative_to(runtime))] = (
+            if not path.is_file():
+                continue
+            rel = str(path.relative_to(runtime))
+            if path.name.startswith(f"{CANON_DB}-"):
+                # canon.db-shm/-wal are WAL engine bookkeeping — rebuilt
+                # on open and removed on last close, never durable
+                # state; committed content is what the canon.db dump
+                # already covers.
+                continue
+            entries[rel] = (
+                _canonical_dump(path) if path.name == CANON_DB else (
                     path.stat().st_size,
                     path.read_bytes(),
                 )
+            )
         return entries
 
     before = fingerprint()

@@ -12,11 +12,14 @@
 import type {
   ApiErrorBody,
   ContractResponse,
+  DecisionResponse,
   DraftPreviewResponse,
   DraftValidateResponse,
   EvaluationRunResponse,
   EvaluationRunsResponse,
   OpenResponse,
+  ProposalResponse,
+  ProposalsResponse,
   SaveResponse,
   TraceOverviewResponse,
   TraceViewResponse,
@@ -222,6 +225,32 @@ export const api = {
     post<EvaluationRunResponse>(
       "/workspaces/evaluations/run",
       { path, run_id: runId },
+      signal,
+    ),
+  proposals: (path: string, signal?: AbortSignal) =>
+    post<ProposalsResponse>("/workspaces/proposals", { path }, signal),
+  proposal: (path: string, proposalId: string, signal?: AbortSignal) =>
+    post<ProposalResponse>(
+      "/workspaces/proposals/show",
+      { path, proposal_id: proposalId },
+      signal,
+    ),
+
+  /* The surface's single write (ADR 0003): a human approve/reject on a
+   * persisted proposal, recorded through the core's `decide` and bound
+   * to the exact payload digest. Execution stays CLI-only — there is no
+   * run trigger on this surface. */
+  decide: (
+    path: string,
+    proposalId: string,
+    decision: "approved" | "rejected",
+    reviewer: string,
+    reason: string | null,
+    signal?: AbortSignal,
+  ) =>
+    post<DecisionResponse>(
+      "/workspaces/proposals/decide",
+      { path, proposal_id: proposalId, decision, reviewer, reason },
       signal,
     ),
 };

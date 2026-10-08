@@ -409,6 +409,62 @@ export interface EvaluationRunResponse extends OperationalResponse {
   run?: EvaluationRunRecord;
 }
 
+/* ---- Proposals & human decisions (ADR 0003 write surface) ---- */
+
+/**
+ * One persisted proposal as `proposal_view` returns it: the stored row
+ * plus derived lifecycle status, the full append-only decision history,
+ * and the execution history.
+ *
+ * `reason` and `evidence` are model output recorded at diagnosis time —
+ * hypotheses the reviewer weighs, never human-approved facts. The
+ * decision binds to `payload_digest`: an approval covers exactly this
+ * payload, nothing else.
+ */
+export interface ProposalView {
+  proposal_id: string;
+  diagnosis_run_id: string;
+  proposal_index: number;
+  action: string;
+  params: Record<string, unknown>;
+  /** AI rationale recorded with the proposal — a hypothesis. */
+  reason: string | null;
+  subject_entity: string | null;
+  subject_id: string | null;
+  related_entities: { entity: string; id: string }[];
+  /** Grounding evidence recorded with the proposal. */
+  evidence: Record<string, unknown>;
+  /** sha256 digest of the exact action/params payload. */
+  payload_digest: string;
+  created_at: string;
+  /** "proposed" | "approved" | "rejected" — the latest decision wins. */
+  status: string;
+  latest_decision: TraceDecision | null;
+  decisions: TraceDecision[];
+  /** Recorded execution attempts — status only; runs stay CLI-only. */
+  executions: TraceExecution[];
+}
+
+export interface ProposalsResponse extends OperationalResponse {
+  proposals?: ProposalView[];
+}
+
+export interface ProposalResponse extends OperationalResponse {
+  proposal?: ProposalView;
+}
+
+/**
+ * The `decide --json` payload: `ok:false` with `diagnostics` is a domain
+ * failure (invalid decision, unknown proposal, no reviewer); lock
+ * contention never reaches here — it arrives as 503 STORAGE.WRITE_BUSY.
+ */
+export interface DecisionResponse extends OperationalResponse {
+  decision_id?: string | null;
+  proposal_id?: string | null;
+  decision?: string | null;
+  recorded?: boolean | null;
+}
+
 /* ---- Frozen evaluation report (ontology_core.outcome) ---- */
 
 export interface CohortPair {

@@ -25,7 +25,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .canonical import CanonicalStore, SqliteCanonicalStore
+from .canonical import (
+    CanonicalStore,
+    SqliteCanonicalStore,
+    store_error_code,
+)
 from .conditions import evaluate_condition
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
@@ -154,7 +158,7 @@ def run_projection(
         # corrupt database (or a custom store's own exception) becomes a
         # diagnostic, never a traceback through the CLI.
         diag.error(
-            "PROJECTION.STORE_ERROR",
+            store_error_code(exc, "PROJECTION.STORE_ERROR"),
             f"cannot read canonical state: {exc}",
         )
 
@@ -176,7 +180,7 @@ def run_projection(
             result.recorded = True
         except Exception as exc:
             diag.error(
-                "PROJECTION.STORE_ERROR",
+                store_error_code(exc, "PROJECTION.STORE_ERROR"),
                 f"cannot record projection run: {exc}",
             )
 

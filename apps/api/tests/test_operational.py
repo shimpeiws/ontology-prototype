@@ -98,12 +98,56 @@ def walked(tmp_path, capsys, roots, workspace) -> SimpleNamespace:
     )
 
 
-def fingerprint(root: Path) -> dict[str, bytes]:
-    return {
-        str(p.relative_to(root)): p.read_bytes()
-        for p in sorted(root.rglob("*"))
-        if p.is_file()
-    }
+@pytest.fixture
+def proposed(tmp_path, capsys, roots, workspace) -> SimpleNamespace:
+    """One persisted, undecided proposal: the walkthrough up to the
+    stubbed diagnosis run, before any decision exists."""
+    for name in ("jobs-baseline", "jobs-current"):
+        cli(
+            capsys, "ingest", str(workspace),
+            str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+        )
+    cli(capsys, "project", str(workspace), "--as-of", "2026-10-21T00:00:00Z")
+    cli(
+        capsys, "diagnose", str(workspace),
+        "--as-of", "2026-10-21T00:00:00Z", "--provider", "stub",
+    )
+    pid = cli_json(capsys, "proposals", str(workspace), "--json")[
+        "proposals"
+    ][0]["proposal_id"]
+    return SimpleNamespace(workspace=workspace, proposal_id=pid)
+
+
+def _canonical_dump(db: Path) -> str:
+    """Committed content of canon.db — read through the WAL so a
+    committed-but-uncheckpointed write is still visible."""
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        return "\n".join(conn.iterdump())
+    finally:
+        conn.close()
+
+
+def fingerprint(root: Path) -> dict[str, object]:
+    """Runtime content for mutation checks.
+
+    Under WAL (ADR 0003) the ``canon.db-shm``/``canon.db-wal`` sidecars
+    are engine bookkeeping — rebuilt on open and removed on last close,
+    never durable state — so they carry no fingerprint weight, and
+    canon.db compares by committed content rather than bytes (a
+    checkpoint moves bytes without changing content).
+    """
+    entries: dict[str, object] = {}
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = str(p.relative_to(root))
+        if p.name.startswith("canon.db-"):
+            continue
+        entries[rel] = (
+            _canonical_dump(p) if p.name == "canon.db" else p.read_bytes()
+        )
+    return entries
 
 
 class TestContractSurface:
@@ -848,6 +892,329 @@ class TestPathGuards:
                 f"/api/v1/workspaces/{route}", json=body
             )
             assert response.status_code == 422, (route, body)
+            assert (
+                response.json()["error"]["code"] == "API.MALFORMED_REQUEST"
+            )
+
+
+class TestDecide:
+    """Issue #63 / ADR 0003: the operational surface's single write —
+    a human approve/reject on a persisted proposal, recorded through
+    the shared core's ``decide`` on the same ``canon.db`` the CLI uses.
+    A decision made over HTTP is honored by ``ontology execute``
+    exactly like a CLI decision; the API never gains an execute or
+    run-trigger route."""
+
+    ROUTE = "/api/v1/workspaces/proposals/decide"
+
+    def _decide(self, client: TestClient, workspace: Path, **over) -> dict:
+        body = {
+            "path": str(workspace),
+            "proposal_id": "p",
+            "decision": "approved",
+            "reviewer": "fde-sato",
+            **over,
+        }
+        response = client.post(self.ROUTE, json=body)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def test_contract_lists_decide(self, roots) -> None:
+        operations = make_client(roots).get("/api/v1/contract").json()[
+            "operations"
+        ]
+        assert operations["decide"] == (
+            "POST /api/v1/workspaces/proposals/decide"
+        )
+        # Still no run triggers or action authority anywhere.
+        for op in (
+            "execute", "diagnose", "project", "ingest", "evaluate",
+            "approve",
+        ):
+            assert op not in operations
+
+    def test_no_execute_route(self, roots, proposed) -> None:
+        response = make_client(roots).post(
+            "/api/v1/workspaces/execute",
+            json={
+                "path": str(proposed.workspace),
+                "proposal_id": proposed.proposal_id,
+            },
+        )
+        assert response.status_code == 404
+
+    def test_approve_is_recorded_and_visible(
+        self, proposed, roots
+    ) -> None:
+        client = make_client(roots)
+        body = self._decide(
+            client,
+            proposed.workspace,
+            proposal_id=proposed.proposal_id,
+            reason="oldest uninvoiced job",
+        )
+        assert body["ok"] is True
+        assert body["recorded"] is True
+        assert body["decision"] == "approved"
+        assert body["proposal_id"] == proposed.proposal_id
+        assert body["decision_id"].startswith("dec-")
+        assert body["diagnostics"] == []
+
+        view = post(
+            client, "proposals/show",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )
+        proposal = view["proposal"]
+        assert proposal["status"] == "approved"
+        assert proposal["latest_decision"]["reviewer"] == "fde-sato"
+        assert proposal["latest_decision"]["reason"] == (
+            "oldest uninvoiced job"
+        )
+        assert proposal["latest_decision"]["decision_id"] == (
+            body["decision_id"]
+        )
+        # The decision is bound to the exact persisted payload digest.
+        assert proposal["latest_decision"]["payload_digest"] == (
+            proposal["payload_digest"]
+        )
+        assert len(proposal["decisions"]) == 1
+
+    def test_api_decision_matches_cli_payload(
+        self, proposed, roots, capsys
+    ) -> None:
+        """Same decide call, same payload shape as ``decide --json`` —
+        plus ``api_version``."""
+        body = self._decide(
+            make_client(roots),
+            proposed.workspace,
+            proposal_id=proposed.proposal_id,
+        )
+        expected_keys = {
+            "workspace", "ok", "decision_id", "proposal_id",
+            "decision", "recorded", "diagnostics",
+        }
+        assert set(body) == {"api_version", *expected_keys}
+
+    def test_reject_records_and_latest_wins(
+        self, proposed, roots
+    ) -> None:
+        client = make_client(roots)
+        first = self._decide(
+            client, proposed.workspace,
+            proposal_id=proposed.proposal_id,
+        )
+        second = self._decide(
+            client, proposed.workspace,
+            proposal_id=proposed.proposal_id,
+            decision="rejected",
+            reviewer="fde-hana",
+            reason="needs more evidence",
+        )
+        assert second["ok"] is True
+        assert second["decision"] == "rejected"
+        assert second["decision_id"] != first["decision_id"]
+
+        proposal = post(
+            client, "proposals/show",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )["proposal"]
+        # Append-only: both attempts remain, latest decision wins.
+        assert [d["decision"] for d in proposal["decisions"]] == [
+            "approved", "rejected",
+        ]
+        assert proposal["status"] == "rejected"
+        assert proposal["latest_decision"]["reviewer"] == "fde-hana"
+
+    def test_api_approval_honored_by_cli_execute(
+        self, proposed, roots, capsys
+    ) -> None:
+        """The gate is shared: an API approval unlocks
+        ``ontology execute`` exactly like a CLI one."""
+        self._decide(
+            make_client(roots), proposed.workspace,
+            proposal_id=proposed.proposal_id,
+        )
+        cli(capsys, "execute", str(proposed.workspace),
+            proposed.proposal_id)
+
+    def test_api_rejection_blocks_cli_execute(
+        self, proposed, roots, capsys
+    ) -> None:
+        self._decide(
+            make_client(roots), proposed.workspace,
+            proposal_id=proposed.proposal_id,
+            decision="rejected",
+        )
+        body = cli_payload(
+            capsys, "execute", str(proposed.workspace),
+            proposed.proposal_id, "--json",
+        )
+        assert body["ok"] is False
+        assert any(
+            d["code"] == "DECISION.NOT_APPROVED"
+            for d in body["diagnostics"]
+        )
+
+    def test_undecided_proposal_refused_by_cli_execute(
+        self, proposed, capsys
+    ) -> None:
+        body = cli_payload(
+            capsys, "execute", str(proposed.workspace),
+            proposed.proposal_id, "--json",
+        )
+        assert body["ok"] is False
+        assert any(
+            d["code"] == "DECISION.NOT_APPROVED"
+            for d in body["diagnostics"]
+        )
+
+    def test_unknown_proposal(self, proposed, roots) -> None:
+        body = self._decide(
+            make_client(roots), proposed.workspace,
+            proposal_id="dgx-x-p9",
+        )
+        assert body["ok"] is False
+        assert body["recorded"] is False
+        assert body["decision_id"] is None
+        assert body["diagnostics"][0]["code"] == (
+            "DECISION.UNKNOWN_PROPOSAL"
+        )
+
+    def test_invalid_decision(self, proposed, roots) -> None:
+        body = self._decide(
+            make_client(roots), proposed.workspace,
+            proposal_id=proposed.proposal_id,
+            decision="maybe",
+        )
+        assert body["ok"] is False
+        assert body["recorded"] is False
+        assert any(
+            d["code"] == "DECISION.INVALID_DECISION"
+            for d in body["diagnostics"]
+        )
+
+    def test_blank_reviewer(self, proposed, roots) -> None:
+        """Whitespace slips past schema min_length and fails in the
+        core, same as the CLI."""
+        body = self._decide(
+            make_client(roots), proposed.workspace,
+            proposal_id=proposed.proposal_id,
+            reviewer="   ",
+        )
+        assert body["ok"] is False
+        assert body["recorded"] is False
+        assert any(
+            d["code"] == "DECISION.NO_REVIEWER"
+            for d in body["diagnostics"]
+        )
+
+    def test_failed_attempts_still_trace(
+        self, proposed, roots
+    ) -> None:
+        """A rejected decide attempt is itself auditable: the journal
+        gains a ``decision.failed`` event."""
+        self._decide(
+            make_client(roots), proposed.workspace,
+            proposal_id="dgx-x-p9",
+        )
+        journal = proposed.workspace / ".ontology" / "trace.jsonl"
+        events = [
+            json.loads(line)
+            for line in journal.read_text().splitlines()
+        ]
+        assert any(
+            e.get("stage") == "decision"
+            and e.get("kind") == "decision.failed"
+            and e.get("data", {}).get("proposal_id") == "dgx-x-p9"
+            for e in events
+        )
+
+    def test_write_contention_is_503(
+        self, proposed, roots, monkeypatch
+    ) -> None:
+        """Lock contention is a transport failure — 503
+        ``STORAGE.WRITE_BUSY`` — never a domain diagnostic, so the
+        caller knows a retry is meaningful."""
+        import ontology_api.service as service_module
+        from ontology_core import SqliteCanonicalStore
+
+        class FastBusyStore(SqliteCanonicalStore):
+            def __init__(self, runtime, **kwargs):
+                kwargs.setdefault("busy_timeout_ms", 50)
+                super().__init__(runtime, **kwargs)
+
+        monkeypatch.setattr(
+            service_module, "SqliteCanonicalStore", FastBusyStore
+        )
+
+        db = proposed.workspace / ".ontology" / "canon.db"
+        holder = sqlite3.connect(db)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            response = make_client(roots).post(
+                self.ROUTE,
+                json={
+                    "path": str(proposed.workspace),
+                    "proposal_id": proposed.proposal_id,
+                    "decision": "approved",
+                    "reviewer": "fde-sato",
+                },
+            )
+            assert response.status_code == 503
+            assert response.json()["error"]["code"] == (
+                "STORAGE.WRITE_BUSY"
+            )
+        finally:
+            holder.rollback()
+            holder.close()
+
+        # Retrying after the holder released the lock records normally.
+        body = self._decide(
+            make_client(roots), proposed.workspace,
+            proposal_id=proposed.proposal_id,
+        )
+        assert body["ok"] is True
+
+    def test_outside_roots(self, proposed, tmp_path) -> None:
+        outside = apisupport.copy_example(tmp_path, "outside")
+        response = make_client(  # no roots configured for `outside`
+        ).post(
+            self.ROUTE,
+            json={
+                "path": str(outside),
+                "proposal_id": "p",
+                "decision": "approved",
+                "reviewer": "r",
+            },
+        )
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "API.ROOTS_UNCONFIGURED"
+
+    def test_malformed_requests(self, roots) -> None:
+        client = make_client(roots)
+        bad = [
+            {},
+            {"path": "x"},
+            {"path": "x", "proposal_id": "p"},
+            {"path": "x", "proposal_id": "p", "decision": "approved"},
+            {
+                "path": "x", "proposal_id": "p",
+                "decision": "approved", "reviewer": "",
+            },
+            {
+                "path": "x", "proposal_id": "p",
+                "decision": 5, "reviewer": "r",
+            },
+            {
+                "path": "x", "proposal_id": "p",
+                "decision": "approved", "reviewer": 5,
+            },
+        ]
+        for body in bad:
+            response = client.post(self.ROUTE, json=body)
+            assert response.status_code == 422, body
             assert (
                 response.json()["error"]["code"] == "API.MALFORMED_REQUEST"
             )

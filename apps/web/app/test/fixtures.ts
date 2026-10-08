@@ -10,6 +10,7 @@
 
 import type {
   ContractResponse,
+  DecisionResponse,
   Diagnostic,
   DraftPreviewResponse,
   DraftValidateResponse,
@@ -18,6 +19,8 @@ import type {
   EvaluationRunsResponse,
   EvaluationRunResponse,
   OpenResponse,
+  ProposalView,
+  ProposalsResponse,
   SaveResponse,
   SubjectTrace,
   TraceAnchor,
@@ -1295,6 +1298,167 @@ export const SYNTHETIC_EVALUATION_UNKNOWN_RUN: EvaluationRunResponse = {
       line: null,
       hint: "reports are recorded only when an evaluation completes without errors",
     },
+  ],
+};
+
+/* ---- Proposal review (#63) ---- */
+
+/** One persisted, undecided proposal — the reviewer queue item. */
+export const SYNTHETIC_PROPOSAL_OPEN: ProposalView = {
+  proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+  diagnosis_run_id: "dgx-20261005T120600000000Z-cccc2222",
+  proposal_index: 0,
+  action: "SendReminder",
+  params: {
+    target: "taro",
+    related_entity: "101",
+    reason: "Job exceeded the two-day threshold.",
+  },
+  reason: "Job 101 completed 4 days ago without an invoice.",
+  subject_entity: "Job",
+  subject_id: "101",
+  related_entities: [{ entity: "Person", id: "taro" }],
+  evidence: {
+    fact_key: "fact-s1",
+    fact: "JobCompleted",
+    elapsed_days: 4,
+    threshold_days: 2,
+  },
+  payload_digest: "sha256:9f4c2d1e…payload",
+  created_at: "2026-10-05T12:06:00Z",
+  status: "proposed",
+  latest_decision: null,
+  decisions: [],
+  executions: [],
+};
+
+/** A decided+executed proposal — history shows, the form still offers
+ *  a later decision (append-only, latest wins). */
+export const SYNTHETIC_PROPOSAL_EXECUTED: ProposalView = {
+  proposal_id: "dgx-20261004T090000000000Z-bbbb1111-p0",
+  diagnosis_run_id: "dgx-20261004T090000000000Z-bbbb1111",
+  proposal_index: 0,
+  action: "SendReminder",
+  params: { target: "hanako" },
+  reason: null,
+  subject_entity: "Job",
+  subject_id: "103",
+  related_entities: [],
+  evidence: {},
+  payload_digest: "sha256:aa11bb22…payload",
+  created_at: "2026-10-04T09:00:00Z",
+  status: "approved",
+  latest_decision: {
+    decision_id: "dec-20261004T100000000000Z-ffff5555",
+    proposal_id: "dgx-20261004T090000000000Z-bbbb1111-p0",
+    decision: "approved",
+    reviewer: "fde-sato",
+    reason: null,
+    payload_digest: "sha256:aa11bb22…payload",
+    decided_at: "2026-10-04T10:00:00Z",
+  },
+  decisions: [
+    {
+      decision_id: "dec-20261004T100000000000Z-ffff5555",
+      proposal_id: "dgx-20261004T090000000000Z-bbbb1111-p0",
+      decision: "approved",
+      reviewer: "fde-sato",
+      reason: null,
+      payload_digest: "sha256:aa11bb22…payload",
+      decided_at: "2026-10-04T10:00:00Z",
+    },
+  ],
+  executions: [
+    {
+      execution_id: "exe-20261004T101000000000Z-aaaa6666",
+      idempotency_key: "idem-20261004T101000000000Z-bbbb7777",
+      proposal_id: "dgx-20261004T090000000000Z-bbbb1111-p0",
+      action: "SendReminder",
+      adapter: "csv",
+      attempt: 1,
+      status: "succeeded",
+      receipt: { path: ".ontology/reminders.csv", row: 2 },
+      error: null,
+      created_at: "2026-10-04T10:10:00Z",
+    },
+  ],
+};
+
+export const SYNTHETIC_PROPOSALS_RESPONSE: ProposalsResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  proposals: [SYNTHETIC_PROPOSAL_OPEN, SYNTHETIC_PROPOSAL_EXECUTED],
+};
+
+export const SYNTHETIC_PROPOSALS_EMPTY: ProposalsResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  proposals: [],
+};
+
+export const SYNTHETIC_DECIDE_RECORDED: DecisionResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  decision_id: "dec-20261005T140000000000Z-gggg8888",
+  proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+  decision: "approved",
+  recorded: true,
+  diagnostics: [],
+};
+
+export const SYNTHETIC_DECIDE_DOMAIN_FAILURE: DecisionResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: false,
+  decision_id: null,
+  proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+  decision: "approved",
+  recorded: false,
+  diagnostics: [
+    {
+      severity: "error",
+      code: "DECISION.UNKNOWN_PROPOSAL",
+      message: "no persisted proposal 'dgx-…-p0'",
+      file: null,
+      path: null,
+      line: null,
+      hint: "the list may be stale — refresh and decide again",
+    },
+  ],
+};
+
+/** The open proposal after a recorded approval — the refresh result. */
+export const SYNTHETIC_PROPOSALS_AFTER_APPROVE: ProposalsResponse = {
+  ...SYNTHETIC_PROPOSALS_RESPONSE,
+  proposals: [
+    {
+      ...SYNTHETIC_PROPOSAL_OPEN,
+      status: "approved",
+      latest_decision: {
+        decision_id: "dec-20261005T140000000000Z-gggg8888",
+        proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+        decision: "approved",
+        reviewer: "fde-hana",
+        reason: "verified against the ledger",
+        payload_digest: "sha256:9f4c2d1e…payload",
+        decided_at: "2026-10-05T14:00:00Z",
+      },
+      decisions: [
+        {
+          decision_id: "dec-20261005T140000000000Z-gggg8888",
+          proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+          decision: "approved",
+          reviewer: "fde-hana",
+          reason: "verified against the ledger",
+          payload_digest: "sha256:9f4c2d1e…payload",
+          decided_at: "2026-10-05T14:00:00Z",
+        },
+      ],
+    },
+    SYNTHETIC_PROPOSAL_EXECUTED,
   ],
 };
 

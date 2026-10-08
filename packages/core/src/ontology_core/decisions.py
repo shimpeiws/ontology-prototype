@@ -31,7 +31,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .canonical import CanonicalStore, SqliteCanonicalStore
+from .canonical import (
+    CanonicalStore,
+    SqliteCanonicalStore,
+    store_error_code,
+)
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
 from .model import Workspace, param_type_error
@@ -387,12 +391,12 @@ def decide(
     if diag.has_errors:
         return _finish()
 
-    backfill_proposals(workspace, store)
     try:
+        backfill_proposals(workspace, store)
         proposal = store.proposal(proposal_id)
     except Exception as exc:
         diag.error(
-            "DECISION.STORE_ERROR",
+            store_error_code(exc, "DECISION.STORE_ERROR"),
             f"cannot read canonical store: {exc}",
         )
         proposal = None
@@ -424,7 +428,7 @@ def decide(
         result.decision = decision
     except Exception as exc:
         diag.error(
-            "DECISION.STORE_ERROR",
+            store_error_code(exc, "DECISION.STORE_ERROR"),
             f"cannot record decision: {exc}",
         )
 
@@ -473,7 +477,7 @@ def check_approval(
         decisions = store.decisions_for(proposal_id)
     except Exception as exc:
         diag.error(
-            "DECISION.STORE_ERROR",
+            store_error_code(exc, "DECISION.STORE_ERROR"),
             f"cannot read canonical store: {exc}",
         )
         result.diagnostics = diag.items

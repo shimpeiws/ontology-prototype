@@ -21,7 +21,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .canonical import CanonicalStore, SqliteCanonicalStore
+from .canonical import (
+    CanonicalStore,
+    SqliteCanonicalStore,
+    store_error_code,
+)
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR, FileEvidenceStore, _atomic_write
 
@@ -252,7 +256,7 @@ def _read_store(
             return fn()
         except Exception as exc:
             diag.error(
-                "TRACE.STORE_ERROR",
+                store_error_code(exc, "TRACE.STORE_ERROR"),
                 f"cannot read {what} from canonical store: {exc}",
             )
             return []

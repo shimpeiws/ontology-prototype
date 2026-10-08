@@ -82,6 +82,36 @@ from urllib.parse import quote
 
 CANON_DB = "canon.db"
 
+# The explicit bounded lock-wait every connection declares (ADR 0003):
+# the same five seconds Python's sqlite3 already waits implicitly, made
+# visible and tunable per store so no surface silently inherits a
+# library default.
+BUSY_TIMEOUT_MS = 5000
+
+
+def is_write_busy(exc: BaseException) -> bool:
+    """True when ``exc`` is SQLite lock contention (``SQLITE_BUSY``).
+
+    Extended busy codes (``SQLITE_BUSY_SNAPSHOT``, ``_TIMEOUT``, …)
+    share the primary code's low byte, so every busy variant classifies
+    here regardless of which statement tripped the lock.
+    """
+    return (
+        isinstance(exc, sqlite3.OperationalError)
+        and getattr(exc, "sqlite_errorcode", 0) & 0xFF == sqlite3.SQLITE_BUSY
+    )
+
+
+def store_error_code(exc: BaseException, fallback: str) -> str:
+    """The diagnostic code for a store failure.
+
+    Lock contention carries the ADR 0003 coordination name
+    ``STORAGE.WRITE_BUSY`` on every surface — a typed, retryable failure
+    distinct from a broken or unreachable store, which keeps the
+    caller's own ``*.STORE_ERROR``.
+    """
+    return "STORAGE.WRITE_BUSY" if is_write_busy(exc) else fallback
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS entities (
     entity_type TEXT NOT NULL,
@@ -518,12 +548,24 @@ class SqliteCanonicalStore:
     mode and skips schema setup and migrations, for callers that promise
     not to write to the runtime directory — even when the database was
     created by an older schema revision.
+
+    ``busy_timeout_ms`` is the bounded wait each connection declares for
+    a contended lock (ADR 0003). The default preserves the historical
+    five-second behavior; a caller that wants a shorter or longer bound
+    chooses it explicitly.
     """
 
-    def __init__(self, root: str | Path, *, readonly: bool = False) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        readonly: bool = False,
+        busy_timeout_ms: int = BUSY_TIMEOUT_MS,
+    ) -> None:
         self.root = Path(root)
         self.db_path = self.root / CANON_DB
         self.readonly = readonly
+        self._busy_timeout_ms = int(busy_timeout_ms)
         self._conn: sqlite3.Connection | None = None
         self._entity_cols: set[str] | None = None
 
@@ -536,6 +578,14 @@ class SqliteCanonicalStore:
             else:
                 self.root.mkdir(parents=True, exist_ok=True)
                 conn = sqlite3.connect(self.db_path)
+            # PRAGMA values cannot be bound parameters — the timeout is
+            # int-coerced so only a numeric literal ever reaches SQLite.
+            conn.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
+            if not self.readonly:
+                # WAL lets readers see the last committed state while a
+                # writer holds the lock (ADR 0003: SQLite arbitrates the
+                # single writer, readers never queue behind it).
+                conn.execute("PRAGMA journal_mode=WAL")
                 conn.executescript(_SCHEMA)
                 self._migrate(conn)
             self._conn = conn
