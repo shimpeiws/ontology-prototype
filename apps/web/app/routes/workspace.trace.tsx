@@ -3,10 +3,11 @@
  *
  * Loads the `workspaces/trace` overview on mount, then offers the two
  * focused lookups — `trace/subject` (Entity/Id) and `trace/run` (any
- * artifact id). Lookup inputs are sent verbatim; the server owns
- * TRACE.INVALID_SUBJECT / TRACE.UNKNOWN_ID and returns them as domain
- * diagnostics, which render through DiagnosticsList — never as transport
- * errors.
+ * artifact id). Inputs are trimmed and blank submissions skipped
+ * client-side; everything else is sent verbatim and the server owns
+ * TRACE.INVALID_SUBJECT / TRACE.UNKNOWN_ID, returned as domain
+ * diagnostics which render through DiagnosticsList — never as
+ * transport errors.
  */
 
 import { useEffect, useId, useRef, useState } from "react";

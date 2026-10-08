@@ -184,7 +184,9 @@ export function TraceOverviewView({
           nature="observed"
           empty="No observations recorded."
         >
-          {overview.evidence && overview.evidence.observations > 0 ? (
+          {overview.evidence &&
+          (overview.evidence.observations > 0 ||
+            overview.evidence.snapshots > 0) ? (
             <dl className="definition-facts">
               <dt>Ingest runs</dt>
               <dd>
@@ -207,7 +209,8 @@ export function TraceOverviewView({
           nature="observed"
           empty="No canonical entities or facts."
         >
-          {overview.canonical && overview.canonical.facts > 0 ? (
+          {overview.canonical &&
+          (overview.canonical.entities > 0 || overview.canonical.facts > 0) ? (
             <dl className="definition-facts">
               <dt>Entities</dt>
               <dd>{overview.canonical.entities}</dd>

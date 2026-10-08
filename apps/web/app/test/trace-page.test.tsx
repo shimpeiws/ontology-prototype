@@ -109,6 +109,32 @@ describe("trace page overview", () => {
     expect(screen.queryByText(/No recorded history/)).toBeNull();
   });
 
+  it("renders the evidence counts when only snapshots exist", async () => {
+    traceOverview.mockResolvedValue({
+      ...SYNTHETIC_TRACE_OVERVIEW_EMPTY,
+      evidence: { ingest_runs: [], observations: 0, snapshots: 1 },
+    });
+    renderPage();
+
+    const heading = await screen.findByRole("heading", { name: /Evidence/ });
+    const section = within(heading.closest("section") as HTMLElement);
+    expect(section.getByText("Snapshots")).toBeInTheDocument();
+    expect(section.queryByText(/No observations recorded/)).toBeNull();
+  });
+
+  it("renders the canonical counts when only entities exist", async () => {
+    traceOverview.mockResolvedValue({
+      ...SYNTHETIC_TRACE_OVERVIEW_EMPTY,
+      canonical: { entities: 2, facts: 0, fact_links: 0 },
+    });
+    renderPage();
+
+    const heading = await screen.findByRole("heading", { name: /Canonical/ });
+    const section = within(heading.closest("section") as HTMLElement);
+    expect(section.getByText("Entities")).toBeInTheDocument();
+    expect(section.queryByText(/No canonical entities or facts/)).toBeNull();
+  });
+
   it("shows a retryable error state when the API is unreachable", async () => {
     traceOverview
       .mockRejectedValueOnce(
