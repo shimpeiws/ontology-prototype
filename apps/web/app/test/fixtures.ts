@@ -991,6 +991,25 @@ export const SYNTHETIC_TRACE_RUN_RESPONSE: TraceViewResponse = {
   diagnostics: [],
 };
 
+/** ok:true still carries warning-level diagnostics (test_corrupt_journal). */
+export const SYNTHETIC_TRACE_SUBJECT_WITH_WARNINGS: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  trace: SYNTHETIC_SUBJECT_TRACE,
+  diagnostics: [
+    {
+      severity: "warning",
+      code: "TRACE.JOURNAL_CORRUPT",
+      message: "trace.jsonl line 9 is not valid JSON; skipped",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    },
+  ],
+};
+
 export const SYNTHETIC_TRACE_INVALID_SUBJECT: TraceViewResponse = {
   api_version: "v1",
   workspace: "/abs/example/job-invoicing",
@@ -1194,6 +1213,31 @@ export const SYNTHETIC_EVALUATION_RUN_RECORD: EvaluationRunRecord = {
   created_at: "2026-10-15T00:00:01Z",
   contract_digest: "sha256:contract",
   report: SYNTHETIC_EVALUATION_REPORT,
+};
+
+/** A count-aggregation report: direction is interval movement, not a
+ * duration verdict, and no unit is attached to the target/change. */
+export const SYNTHETIC_EVALUATION_REPORT_COUNT: EvaluationReport = {
+  ...SYNTHETIC_EVALUATION_REPORT,
+  evaluation: "invoice-issuance-count",
+  metric: "duration",
+  aggregation: "count",
+  unit: "days",
+  declared_baseline: 1,
+  change: { status: "measured", value: 1, direction: "increase" },
+  target: { comparator: "lt", value: 3, status: "attained" },
+  guardrails: [],
+  overall: { status: "success" },
+};
+
+export const SYNTHETIC_EVALUATION_RUN_COUNT: EvaluationRunRecord = {
+  run_id: "evl-20261017T000000000000Z-aaaa6666",
+  evaluation: "invoice-issuance-count",
+  as_of: "2026-10-17T00:00:00Z",
+  boundary: "2026-10-06T00:00:00Z",
+  created_at: "2026-10-17T00:00:01Z",
+  contract_digest: "sha256:contract",
+  report: SYNTHETIC_EVALUATION_REPORT_COUNT,
 };
 
 export const SYNTHETIC_EVALUATION_RUN_UNVERIFIED: EvaluationRunRecord = {

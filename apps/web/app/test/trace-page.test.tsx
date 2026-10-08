@@ -18,13 +18,13 @@ import {
 } from "../workspace/store";
 import type { WorkspaceState } from "../workspace/store";
 import {
-  SYNTHETIC_ANCHOR_TRACE,
   SYNTHETIC_OPEN_RESPONSE,
   SYNTHETIC_TRACE_INVALID_SUBJECT,
   SYNTHETIC_TRACE_OVERVIEW,
   SYNTHETIC_TRACE_OVERVIEW_EMPTY,
   SYNTHETIC_TRACE_RUN_RESPONSE,
   SYNTHETIC_TRACE_SUBJECT_RESPONSE,
+  SYNTHETIC_TRACE_SUBJECT_WITH_WARNINGS,
 } from "./fixtures";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -83,8 +83,8 @@ describe("trace page overview", () => {
     expect(screen.getAllByText("failed").length).toBeGreaterThan(0);
     // The frozen evaluation's not_met verdict is styled as failure.
     const verdict = screen.getByText("not_met");
-    expect(verdict.className).toContain("status-bad");
-    expect(verdict.className).not.toContain("status-ok");
+    expect(verdict.classList.contains("status-bad")).toBe(true);
+    expect(verdict.classList.contains("status-ok")).toBe(false);
     // Unindexed proposals and unresolved links surface explicitly.
     expect(screen.getByText(/1 unindexed/)).toBeInTheDocument();
     expect(screen.getByText(/1 unresolved/)).toBeInTheDocument();
@@ -159,6 +159,29 @@ describe("trace page subject lookup", () => {
     expect(inTrace.getByText("dgx-missing")).toBeInTheDocument();
     // The failed journal event is flagged.
     expect(inTrace.getByText("diagnosis.failed")).toBeInTheDocument();
+  });
+
+  it("renders warning diagnostics alongside a successful trace", async () => {
+    // ok:true only rules out error-severity diagnostics; warnings such as
+    // TRACE.JOURNAL_CORRUPT are evidence and must not be dropped.
+    traceOverview.mockResolvedValue(SYNTHETIC_TRACE_OVERVIEW_EMPTY);
+    traceSubject.mockResolvedValue(SYNTHETIC_TRACE_SUBJECT_WITH_WARNINGS);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText(/No recorded history/);
+
+    await user.type(screen.getByLabelText("Subject"), "Job/101");
+    await user.click(
+      screen.getByRole("button", { name: "Follow subject" }),
+    );
+
+    await waitFor(() =>
+      expect(document.querySelector(".trace-subject")).not.toBeNull(),
+    );
+    const lookupArea = document.querySelector("[aria-live=polite]");
+    expect(
+      within(lookupArea as HTMLElement).getByText("TRACE.JOURNAL_CORRUPT"),
+    ).toBeInTheDocument();
   });
 
   it("renders domain failures as diagnostics, not transport errors", async () => {

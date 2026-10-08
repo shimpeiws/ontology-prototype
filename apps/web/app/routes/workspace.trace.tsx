@@ -215,13 +215,23 @@ export default function TracePage() {
                 diagnostics={lookup.response.diagnostics ?? []}
               />
             </>
-          ) : isAnchorTrace(lookup.response.trace) ? (
-            <AnchorTraceView
-              trace={lookup.response.trace}
-              onFollowSubject={followSubject}
-            />
           ) : (
-            <SubjectTraceView trace={lookup.response.trace} />
+            <>
+              {/* `ok` only reflects error-severity diagnostics — warnings
+                  (e.g. TRACE.JOURNAL_CORRUPT) accompany a good trace and
+                  must render as evidence too. */}
+              {lookup.response.diagnostics?.length ? (
+                <DiagnosticsList diagnostics={lookup.response.diagnostics} />
+              ) : null}
+              {isAnchorTrace(lookup.response.trace) ? (
+                <AnchorTraceView
+                  trace={lookup.response.trace}
+                  onFollowSubject={followSubject}
+                />
+              ) : (
+                <SubjectTraceView trace={lookup.response.trace} />
+              )}
+            </>
           )
         ) : null}
       </div>

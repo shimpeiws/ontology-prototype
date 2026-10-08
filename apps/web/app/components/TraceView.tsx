@@ -616,6 +616,17 @@ export function SubjectTraceView({ trace }: { trace: SubjectTrace }) {
 
       <StageSection title="Links" nature="observed" empty="">
         <LinkList links={trace.links} />
+        {trace.unresolved.length ? (
+          <p className="hint">
+            <StatusBadge
+              status="unresolved"
+              label={`${trace.unresolved.length} unresolved`}
+            />{" "}
+            — the chain references artifacts that no stored artifact or
+            journal event names; they stay visible above rather than being
+            dropped.
+          </p>
+        ) : null}
       </StageSection>
     </div>
   );
@@ -670,6 +681,16 @@ export function AnchorTraceView({
 
       <StageSection title="Links" nature="observed" empty="">
         <LinkList links={trace.links} />
+        {trace.unresolved.length ? (
+          <p className="hint">
+            <StatusBadge
+              status="unresolved"
+              label={`${trace.unresolved.length} unresolved`}
+            />{" "}
+            — the record references artifacts that no stored artifact or
+            journal event names.
+          </p>
+        ) : null}
       </StageSection>
 
       <StageSection title="Journal" nature="observed" empty="">

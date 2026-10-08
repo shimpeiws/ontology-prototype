@@ -214,7 +214,8 @@ export function EvaluationReportView({ run }: { run: EvaluationRunRecord }) {
           <dt>Target</dt>
           <dd>
             <code>
-              {report.target.comparator} {report.target.value} {report.unit}
+              {report.target.comparator} {report.target.value}
+              {report.aggregation === "count" ? "" : ` ${report.unit}`}
             </code>{" "}
             <StatusBadge status={report.target.status} />
             {report.target.reason ? (
@@ -225,7 +226,12 @@ export function EvaluationReportView({ run }: { run: EvaluationRunRecord }) {
           <dd>
             {report.change.status === "measured" ? (
               <>
-                <code>{fmtValue(report.change.value, report.unit)}</code>{" "}
+                <code>
+                  {fmtValue(
+                    report.change.value,
+                    report.aggregation === "count" ? undefined : report.unit,
+                  )}
+                </code>{" "}
                 {/* improvement/regression are duration verdicts; the count
                     aggregation's increase/decrease is interval movement,
                     not a verdict, and stays neutral. */}

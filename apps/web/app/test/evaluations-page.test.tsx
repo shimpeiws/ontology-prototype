@@ -17,6 +17,7 @@ import {
 } from "../workspace/store";
 import type { WorkspaceState } from "../workspace/store";
 import {
+  SYNTHETIC_EVALUATION_RUN_COUNT,
   SYNTHETIC_EVALUATION_RUN_RESPONSE,
   SYNTHETIC_EVALUATION_RUN_UNVERIFIED,
   SYNTHETIC_EVALUATION_RUNS,
@@ -87,11 +88,11 @@ describe("evaluation run list", () => {
 
     // AC: not_met / unverified must never look like success.
     const notMet = screen.getByText("not_met");
-    expect(notMet.className).toContain("status-bad");
-    expect(notMet.className).not.toContain("status-ok");
+    expect(notMet.classList.contains("status-bad")).toBe(true);
+    expect(notMet.classList.contains("status-ok")).toBe(false);
     const unverified = screen.getByText("unverified");
-    expect(unverified.className).toContain("status-unknown");
-    expect(unverified.className).not.toContain("status-ok");
+    expect(unverified.classList.contains("status-unknown")).toBe(true);
+    expect(unverified.classList.contains("status-ok")).toBe(false);
   });
 
   it("renders the empty state when no runs are frozen", async () => {
@@ -149,22 +150,26 @@ describe("evaluation report detail", () => {
     expect(report.getByText(/[Uu]npaired ends/)).toBeInTheDocument();
 
     // Target and overall verdicts — not_met is failure, not success.
-    expect(report.getByText("missed").className).toContain("status-bad");
+    expect(
+      report.getByText("missed").classList.contains("status-bad"),
+    ).toBe(true);
     const overall = report.getByText("not_met");
-    expect(overall.className).toContain("status-bad");
+    expect(overall.classList.contains("status-bad")).toBe(true);
 
     // Guardrails: passed is green, unavailable is visibly distinct.
     const passed = report.getByText("passed");
     const unavailable = report.getByText("unavailable");
-    expect(passed.className).toContain("status-ok");
-    expect(unavailable.className).toContain("status-warn");
-    expect(unavailable.className).not.toContain("status-ok");
+    expect(passed.classList.contains("status-ok")).toBe(true);
+    expect(unavailable.classList.contains("status-warn")).toBe(true);
+    expect(unavailable.classList.contains("status-ok")).toBe(false);
     expect(
       report.getByText(/no registered semantics/),
     ).toBeInTheDocument();
 
     // Change direction renders as the measured improvement.
-    expect(report.getByText("improvement").className).toContain("status-ok");
+    expect(
+      report.getByText("improvement").classList.contains("status-ok"),
+    ).toBe(true);
 
     // The no-causation note is displayed verbatim.
     expect(
@@ -202,18 +207,54 @@ describe("evaluation report detail", () => {
     const unverified = badges.filter((b) => b.textContent === "unverified");
     expect(unverified.length).toBeGreaterThan(0);
     for (const verdict of unverified) {
-      expect(verdict.className).toContain("status-unknown");
-      expect(verdict.className).not.toContain("status-ok");
+      expect(verdict.classList.contains("status-unknown")).toBe(true);
+      expect(verdict.classList.contains("status-ok")).toBe(false);
     }
     const unavailable = badges.filter((b) => b.textContent === "unavailable");
     expect(unavailable.length).toBeGreaterThan(0);
     for (const verdict of unavailable) {
-      expect(verdict.className).toContain("status-warn");
-      expect(verdict.className).not.toContain("status-ok");
+      expect(verdict.classList.contains("status-warn")).toBe(true);
+      expect(verdict.classList.contains("status-ok")).toBe(false);
     }
     expect(
       report.getByRole("heading", { name: /Verdict unverified/ }),
     ).toBeInTheDocument();
+  });
+
+  it("a count aggregation carries no unit and a neutral direction", async () => {
+    evaluationRuns.mockResolvedValue({
+      ...SYNTHETIC_EVALUATION_RUNS,
+      evaluation_runs: [SYNTHETIC_EVALUATION_RUN_COUNT],
+    });
+    evaluationRun.mockResolvedValue({
+      api_version: "v1",
+      workspace: "/abs/example/job-invoicing",
+      ok: true,
+      run: SYNTHETIC_EVALUATION_RUN_COUNT,
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("evl-20261017T000000000000Z-aaaa6666");
+    await user.click(
+      screen.getByRole("button", {
+        name: /evl-20261017T000000000000Z-aaaa6666/,
+      }),
+    );
+    await screen.findByText("Cohorts");
+    const report = within(
+      document.querySelector(".evaluation-report") as HTMLElement,
+    );
+
+    // "lt 3" is a paired-interval count — a "days" suffix would misframe it.
+    expect(report.getByText("lt 3")).toBeInTheDocument();
+    expect(report.queryByText(/lt 3 days/)).toBeNull();
+    // increase/decrease describe count movement — neutral, never a verdict.
+    // (classList token matching: "status-badge" itself contains "status-bad".)
+    const direction = report.getByText("increase");
+    expect(direction.classList.contains("status-neutral")).toBe(true);
+    expect(direction.classList.contains("status-ok")).toBe(false);
+    expect(direction.classList.contains("status-bad")).toBe(false);
   });
 
   it("renders an unknown-run lookup as diagnostics, not an error page", async () => {
