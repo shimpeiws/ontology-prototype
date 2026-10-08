@@ -470,6 +470,198 @@ domain:
     ).toEqual(["domain.yaml:domain.projections.JobOpen.select.where"]);
   });
 
+  const METRIC_DOMAIN = `schema_version: 1
+kind: domain
+domain:
+  name: t
+  entities:
+    Ticket:
+      properties:
+        status: { type: string }
+        parent: { type: ref, ref: Ticket }
+    Resolution:
+      properties:
+        ticket: { type: ref, ref: Ticket }
+        reopened: { type: boolean }
+`;
+
+  const METRIC_EVALUATION = `schema_version: 1
+kind: evaluation
+evaluation:
+  interval: { start_event: Opened, end_event: Resolved }
+  metrics:
+    reopen_rate:
+      entity: Resolution
+      ref: ticket
+      flag: reopened
+    reopened_share:
+      entity: Resolution
+      ref: ticket
+      where: &w { op: eq, field: reopened, value: true }
+    parent_share:
+      entity: Ticket
+      ref: parent
+      where: *w
+`;
+
+  it("metric declarations report entity, ref, flag, and where fields", () => {
+    // Declared metrics dereference domain names the scanner must report:
+    // the counted entity, and among its properties the ref, the flag,
+    // and every `field` operand in a `where` tree.
+    expect(
+      paths(
+        findReferences(
+          { "evaluation.yaml": METRIC_EVALUATION },
+          { kind: "entity", name: "Resolution" },
+        ),
+      ),
+    ).toEqual([
+      "evaluation.yaml:evaluation.metrics.reopen_rate.entity",
+      "evaluation.yaml:evaluation.metrics.reopened_share.entity",
+    ]);
+    expect(
+      paths(
+        findReferences(
+          { "evaluation.yaml": METRIC_EVALUATION },
+          { kind: "entity", name: "Ticket" },
+        ),
+      ),
+    ).toEqual(["evaluation.yaml:evaluation.metrics.parent_share.entity"]);
+    expect(
+      paths(
+        findReferences(
+          { "evaluation.yaml": METRIC_EVALUATION },
+          {
+            kind: "property",
+            ownerKind: "entities",
+            owner: "Resolution",
+            name: "reopened",
+          },
+        ),
+      ),
+    ).toEqual([
+      "evaluation.yaml:evaluation.metrics.reopen_rate.flag",
+      "evaluation.yaml:evaluation.metrics.reopened_share.where",
+    ]);
+    expect(
+      paths(
+        findReferences(
+          { "evaluation.yaml": METRIC_EVALUATION },
+          {
+            kind: "property",
+            ownerKind: "entities",
+            owner: "Resolution",
+            name: "ticket",
+          },
+        ),
+      ),
+    ).toEqual([
+      "evaluation.yaml:evaluation.metrics.reopen_rate.ref",
+      "evaluation.yaml:evaluation.metrics.reopened_share.ref",
+    ]);
+    // `where` fields belong to the metric's entity — the borrowed
+    // condition on parent_share names a Ticket property, not a
+    // Resolution one.
+    expect(
+      paths(
+        findReferences(
+          { "evaluation.yaml": METRIC_EVALUATION },
+          {
+            kind: "property",
+            ownerKind: "entities",
+            owner: "Ticket",
+            name: "reopened",
+          },
+        ),
+      ),
+    ).toEqual(["evaluation.yaml:evaluation.metrics.parent_share.where"]);
+  });
+
+  it("renames a counted entity inside metric declarations", () => {
+    const result = applyRename(
+      {
+        "domain.yaml": METRIC_DOMAIN,
+        "evaluation.yaml": METRIC_EVALUATION,
+      },
+      { kind: "entity", name: "Resolution" },
+      "Outcome",
+    );
+    const text = result.files["evaluation.yaml"]!;
+    expect(text.match(/entity: Outcome/g)).toHaveLength(2);
+    expect(text).toContain("entity: Ticket");
+  });
+
+  it("renames a metric's ref, flag, and where field on its entity", () => {
+    const result = applyRename(
+      {
+        "domain.yaml": METRIC_DOMAIN,
+        "evaluation.yaml": METRIC_EVALUATION,
+      },
+      {
+        kind: "property",
+        ownerKind: "entities",
+        owner: "Resolution",
+        name: "reopened",
+      },
+      "reopened_flag",
+    );
+    const text = result.files["evaluation.yaml"]!;
+    expect(text).toContain("flag: reopened_flag");
+    expect(text).toContain("&w { op: eq, field: reopened_flag");
+    // The borrowing metric counts a different entity: its detached copy
+    // still names `reopened`, which is a Ticket field for it.
+    expect(text).toContain("field: reopened,");
+    expect(text).not.toContain("*w");
+    expect(
+      paths(
+        findReferences(
+          { "evaluation.yaml": text },
+          {
+            kind: "property",
+            ownerKind: "entities",
+            owner: "Resolution",
+            name: "reopened_flag",
+          },
+        ),
+      ),
+    ).toEqual([
+      "evaluation.yaml:evaluation.metrics.reopen_rate.flag",
+      "evaluation.yaml:evaluation.metrics.reopened_share.where",
+    ]);
+    expect(
+      paths(
+        findReferences(
+          { "evaluation.yaml": text },
+          {
+            kind: "property",
+            ownerKind: "entities",
+            owner: "Ticket",
+            name: "reopened",
+          },
+        ),
+      ),
+    ).toEqual(["evaluation.yaml:evaluation.metrics.parent_share.where"]);
+  });
+
+  it("renames a metric's subject ref property", () => {
+    const result = applyRename(
+      {
+        "domain.yaml": METRIC_DOMAIN,
+        "evaluation.yaml": METRIC_EVALUATION,
+      },
+      {
+        kind: "property",
+        ownerKind: "entities",
+        owner: "Resolution",
+        name: "ticket",
+      },
+      "work_item",
+    );
+    const text = result.files["evaluation.yaml"]!;
+    expect(text.match(/ref: work_item/g)).toHaveLength(2);
+    expect(text).toContain("ref: parent");
+  });
+
   it("does not touch a same-named scalar elsewhere", () => {
     // mapping `field: status` value must not be renamed — only keys.
     const concept: Concept = {

@@ -25,7 +25,7 @@ One coherent flow, matching the v0.1 loop order (outcome-aware, source-informed)
 2. **Review workspace overview.** The overview shows bundle status (valid/invalid, active digest) and links into each definition editor.
 3. **Inspect/edit the domain.** Entities, typed properties, references, event subjects, and projections are shown as a compact visual model with an equivalent list; structured forms edit supported definitions.
 4. **Edit the mapping and preview.** The FDE binds source fields to entities/properties and writes event conditions in the restricted condition language, then runs an isolated preview against a bounded source sample to see canonical entities/events with row/field diagnostics.
-5. **Edit the evaluation contract.** Interval start/end events, aggregation, baseline, strict target, and guardrails, with reference validation against the domain.
+5. **Edit the evaluation contract.** Interval start/end events, aggregation, baseline, strict target, guardrails, and declared metrics, with reference validation against the domain.
 6. **Edit the agent task.** Projection input, goal, deliverables, and permitted action schemas — without coupling to any provider/model and without granting approval or write-back authority.
 7. **Validate the draft bundle.** Cross-definition diagnostics are returned for the whole draft and surfaced per field; editing any definition re-enters draft state.
 8. **Save explicitly.** The FDE reviews the pending save; the API validates the complete bundle, checks the base digest against on-disk files, and activates atomically — or reports validation, conflict, or persistence failure without touching the active bundle.
@@ -41,7 +41,7 @@ Steps 3–6 are navigable in any order after step 2; the linear path is the expe
 | Workspace overview | Bundle status, active-vs-draft summary, navigate to editors | #15 |
 | Domain editor | Inspect the model; add/edit/remove entities, properties, references, events | #16 |
 | Mapping editor | Edit source/entity/property/event bindings; run isolated preview | #17 |
-| Evaluation editor | Edit interval, aggregation, baseline, target, guardrails | #18 |
+| Evaluation editor | Edit interval, aggregation, baseline, target, guardrails, metrics | #18 |
 | Agent task editor | Edit projection input, goal, deliverables, permitted actions | #18 |
 | Validation surface | Bundle diagnostics list; jump to the owning field | #14, #19 |
 | Save review | Validate, digest-check, activate, or report conflict/failure | #19 |

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .conditions import condition_fields, validate_condition
 from .diagnostics import Diagnostics
 from .domain import suggest
 from .model import (
@@ -17,9 +18,10 @@ from .model import (
     EvaluationDefinition,
     GuardrailSpec,
     IntervalSpec,
+    MetricSpec,
     TargetSpec,
 )
-from .schema import err_at, get_map, get_num, get_str, unknown_keys
+from .schema import check_name, err_at, get_map, get_num, get_str, unknown_keys
 
 AGGREGATIONS = ("median", "mean", "min", "max", "count")
 UNITS = DURATION_UNITS
@@ -50,6 +52,7 @@ def validate_evaluation(
             "baseline",
             "target",
             "guardrails",
+            "metrics",
         },
         err,
         "evaluation",
@@ -93,6 +96,7 @@ def validate_evaluation(
     baseline = _validate_baseline(section.get("baseline"), err)
     target = _validate_target(section.get("target"), err)
     guardrails = _validate_guardrails(section.get("guardrails"), err)
+    metrics = _validate_metrics(section.get("metrics"), err, domain)
 
     own_errors = any(d.severity == "error" for d in diag.items[start:])
     if (
@@ -116,6 +120,7 @@ def validate_evaluation(
         baseline=baseline,
         target=target,
         guardrails=guardrails,
+        metrics=metrics,
     )
 
 
@@ -212,6 +217,159 @@ def _validate_target(node: Any, err) -> TargetSpec | None:
     if comparator is None or value is None:
         return None
     return TargetSpec(comparator=comparator, value=value)
+
+
+def _validate_metrics(
+    node: Any, err, domain: DomainDefinition | None
+) -> dict[str, MetricSpec]:
+    """Validate the ``evaluation.metrics`` map of declared guardrail metrics.
+
+    Each metric declares the entity it counts, the ref property linking
+    that entity to a cohort subject, and one predicate — a ``flag``
+    boolean property or a ``where`` condition. When the domain loaded,
+    the declarations are checked against it so a typo fails at check
+    time instead of surfacing as an unavailable guardrail at evaluate
+    time.
+    """
+    metrics: dict[str, MetricSpec] = {}
+    if node is None:
+        return metrics
+    if not isinstance(node, dict):
+        err(
+            "SCHEMA.INVALID_TYPE",
+            "evaluation.metrics",
+            "'metrics' must be a mapping of metric names to declarations",
+        )
+        return metrics
+    for name, item in node.items():
+        path = f"evaluation.metrics.{name}"
+        if check_name(name, err, path, "metric") is None:
+            continue
+        spec = _validate_metric(name, item, err, path, domain)
+        if spec is not None:
+            metrics[name] = spec
+    return metrics
+
+
+def _validate_metric(
+    name: str, node: Any, err, path: str, domain: DomainDefinition | None
+) -> MetricSpec | None:
+    if not isinstance(node, dict):
+        err("SCHEMA.INVALID_TYPE", path, "metric must be a mapping")
+        return None
+    unknown_keys(
+        node,
+        {"entity", "ref", "flag", "where", "noun", "description"},
+        err,
+        path,
+    )
+    entity = get_str(node, "entity", err, path)
+    ref = get_str(node, "ref", err, path)
+
+    flag = get_str(node, "flag", err, path, required=False)
+    where = None
+    if "where" in node:
+        where = validate_condition(node["where"], err, f"{path}.where")
+    if ("flag" in node) == ("where" in node):
+        err(
+            "EVAL.INVALID_PREDICATE",
+            path,
+            "metric requires exactly one predicate: 'flag' (a boolean "
+            "property) or 'where' (a condition)",
+        )
+
+    noun = get_str(node, "noun", err, path, required=False)
+    description = node.get("description")
+    if description is not None and not isinstance(description, str):
+        err(
+            "SCHEMA.INVALID_TYPE",
+            f"{path}.description",
+            "'description' must be a string",
+        )
+        description = None
+
+    entity_spec = None
+    if domain is not None and entity is not None:
+        entity_spec = domain.entities.get(entity)
+        if entity_spec is None:
+            err(
+                "EVAL.UNKNOWN_ENTITY",
+                f"{path}.entity",
+                f"unknown entity {entity!r}",
+                hint=suggest(entity, list(domain.entities)),
+            )
+    if entity_spec is not None and ref is not None:
+        ref_spec = entity_spec.properties.get(ref)
+        if ref_spec is None:
+            err(
+                "EVAL.UNKNOWN_FIELD",
+                f"{path}.ref",
+                f"{ref!r} is not a declared property of {entity!r}",
+                hint=suggest(ref, list(entity_spec.properties)),
+            )
+        elif ref_spec.type != "ref":
+            err(
+                "EVAL.INVALID_METRIC_REF",
+                f"{path}.ref",
+                f"{entity}.{ref} is a {ref_spec.type} property; 'ref' "
+                "must name a ref-typed property",
+            )
+    if entity_spec is not None and flag is not None:
+        flag_spec = entity_spec.properties.get(flag)
+        if flag_spec is None:
+            err(
+                "EVAL.UNKNOWN_FIELD",
+                f"{path}.flag",
+                f"{flag!r} is not a declared property of {entity!r}",
+                hint=suggest(flag, list(entity_spec.properties)),
+            )
+        elif flag_spec.type != "boolean":
+            err(
+                "EVAL.INVALID_METRIC_FLAG",
+                f"{path}.flag",
+                f"{entity}.{flag} is a {flag_spec.type} property; 'flag' "
+                "must name a boolean property",
+            )
+    if entity_spec is not None and where is not None:
+        for field_name in condition_fields(where.raw):
+            if field_name not in entity_spec.properties:
+                err(
+                    "EVAL.UNKNOWN_FIELD",
+                    f"{path}.where",
+                    f"condition field {field_name!r} is not a declared "
+                    f"property of {entity!r}",
+                    hint=suggest(field_name, list(entity_spec.properties)),
+                )
+
+    if (
+        entity is None
+        or ref is None
+        or ("flag" in node) == ("where" in node)
+        or (flag is None and where is None)
+    ):
+        return None
+    spec = MetricSpec(
+        name=name,
+        entity=entity,
+        ref=ref,
+        flag=flag,
+        where=where,
+        noun=noun,
+        description=description,
+    )
+    keys = spec.evidence_keys()
+    duplicates = sorted({key for key in keys if keys.count(key) > 1})
+    if duplicates:
+        err(
+            "EVAL.METRIC_NOUN_COLLISION",
+            path,
+            f"evidence key(s) {', '.join(repr(k) for k in duplicates)} "
+            "would be emitted more than once; set 'noun' or rename the "
+            "entity so the nouns differ from each other and from the "
+            "reserved keys 'rate', 'postdating_as_of', 'entity_ids'",
+        )
+        return None
+    return spec
 
 
 def _validate_guardrails(node: Any, err) -> list[GuardrailSpec]:

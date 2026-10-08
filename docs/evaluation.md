@@ -31,17 +31,17 @@ With `aggregation: count` the aggregate is the number of paired intervals rather
 
 The target compares the after aggregate with the contract comparator — `lt` is strict, so a median exactly on the target is a **miss**.
 
-Guardrails evaluate per cohort from explicit counts and denominators. The registered `invoice_error_rate` semantics reads `Invoice` entities linked to a cohort subject through the `job` ref (a typed Job reference — the semantics is not applicable to intervals on other subject types and reports unavailable), counting those whose boolean `error` flag is `true` over those carrying a boolean flag; invoices without the flag, invoices linked to no cohort subject, and invoices whose last state-changing observation postdates `as_of` are reported as evidence gaps, never folded into the rate. `not_increase` requires rates for both cohorts; a missing denominator makes the guardrail **unavailable** — never `passed`. A contract naming a metric with no registered semantics also reports `unavailable`.
+Guardrails evaluate per cohort from explicit counts and denominators over metrics declared in `evaluation.metrics` — no metric semantics live in code. A declaration names the entity it counts (`entity`), the ref-typed property linking each such entity to a cohort subject (`ref`), and exactly one predicate: `flag` — a boolean property, so entities carrying a boolean value form the denominator and `true` values the numerator, while an entity without a boolean value is an evidence gap — or `where` — a condition in the shared condition language, under which every linked entity is scored and condition-matching entities form the numerator. An optional `noun` names the numerator count in the report (default: `<flag>s`, or `matched` for a `where`). The ref is typed, so the metric applies only to intervals whose subject is the ref's declared target; for any other subject entity the declaration is not applicable and the guardrail reports `unavailable`. Entities linked to no cohort subject, and entities whose last state-changing observation postdates `as_of`, are reported as evidence gaps, never folded into the rate. `not_increase` requires rates for both cohorts; a missing denominator makes the guardrail **unavailable** — never `passed`. A guardrail naming a metric that is not declared also reports `unavailable`.
 
 `overall` is `success` only when the target is attained and every guardrail passed; a missed target or failed guardrail is `not_met`; anything else is `unverified`. The exit code reports operational success only — `ontology evaluate` exits nonzero when the evaluation could not be computed or frozen, not on the business verdict; a `not_met` report still exits 0 and is inspected via stdout or `--json`.
 
-Guardrail evidence is bounded by `properties_changed_at` — the last observation that actually changed the invoice's stored properties. An invoice whose properties last changed after `as_of` is excluded from the rate and counted in `postdating_as_of`, since current state cannot prove what its flag was at the instant; re-observing identical properties does not move the timestamp, so repeat ingestion cannot erase certifiable evidence.
+Guardrail evidence is bounded by `properties_changed_at` — the last observation that actually changed the entity's stored properties. An entity whose properties last changed after `as_of` is excluded from the rate and counted in `postdating_as_of`, since current state cannot prove what its predicate value was at the instant; re-observing identical properties does not move the timestamp, so repeat ingestion cannot erase certifiable evidence.
 
 ## Frozen runs
 
 Every successful run persists into `evaluation_runs` (append-only, like `events`):
 
-- the contract digest — schema version, the semantics id and version, the full evaluation contract, the interval events' domain declarations, the date-only timezone policy, and the guardrail evidence conventions;
+- the contract digest — schema version, the semantics id and version, the full evaluation contract (including the declared metric semantics), the interval events' domain declarations, and the date-only timezone policy;
 - the explicit `as_of` and `boundary`;
 - the per-subject inputs examined — visible and future fact keys, disposition, and exclusion reason;
 - the full report: cohort pairings with fact keys, counts, aggregates, change, target and guardrail verdicts.
@@ -64,7 +64,7 @@ The report records an observed difference between time-based cohorts. The bounda
 - `EVALUATION.END_WITHOUT_START` — warning: an end event has no start event at or before `as_of`.
 - `EVALUATION.FUTURE_EVENT` — warning: a start event occurred after `as_of`.
 - `EVALUATION.GUARDRAIL_UNAVAILABLE` — warning: a guardrail lacks the evidence to decide, or its semantics do not apply to the interval's subject type.
-- `EVALUATION.UNSUPPORTED_GUARDRAIL` — warning: a guardrail metric has no registered semantics.
+- `EVALUATION.UNSUPPORTED_GUARDRAIL` — warning: a guardrail names a metric not declared in `evaluation.metrics`.
 - `EVALUATION.STORE_ERROR` — canonical state could not be read, or the frozen run could not be persisted. A store write failure still prints the computed report, but without a `run <id>` label and with a `report not frozen` note — an unrecorded run id is never presented as inspectable.
 - `EVALUATION.UNKNOWN_EVENT` — the contract's interval event is not declared in the domain (unreachable through `load_workspace`, which validates it; only a directly constructed `Workspace` can produce it).
 - `EVALUATION.TRACE_ERROR` — warning: the trace event could not be written.
@@ -78,4 +78,4 @@ CLI argument errors use the same diagnostic channel (and honor `--json`):
 
 ## Non-goals
 
-A generic cohort/query language is out of scope for v0.1. Guardrail semantics register under metric names, like projection semantics under projection names.
+A generic cohort/query language is out of scope for v0.1. Guardrail metrics are declared data — an entity, a subject ref, and one `flag`/`where` predicate; wider joins and non-rate aggregates remain out of scope.

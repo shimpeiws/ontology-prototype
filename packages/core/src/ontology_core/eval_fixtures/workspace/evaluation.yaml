@@ -14,6 +14,11 @@ evaluation:
   target:
     comparator: lt
     value: 4
+  metrics:
+    invoice_error_rate:
+      entity: Invoice
+      ref: job
+      flag: error
   guardrails:
     - name: invoice-error-rate
       metric: invoice_error_rate

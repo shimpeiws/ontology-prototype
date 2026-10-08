@@ -116,6 +116,7 @@ export const SYNTHETIC_OPEN_RESPONSE: OpenResponse = {
       baseline: 9,
       target: { comparator: "lt", value: 4 },
       guardrails: [],
+      metrics: {},
     },
     agent: {
       name: "billing-delay-diagnosis",
@@ -298,6 +299,12 @@ evaluation:
     comparator: lt
     value: 4
     description: Strict target; a median of exactly 4 days is a miss.
+  metrics:
+    invoice_error_rate:
+      entity: Invoice
+      ref: job
+      flag: error
+      description: Declared numerator/denominator rate over invoices per cohort.
   guardrails:
     - name: invoice-error-rate
       metric: invoice_error_rate
