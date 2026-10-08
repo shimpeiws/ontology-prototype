@@ -16,7 +16,7 @@ or run triggers.
 ## Install and startup
 
 ```bash
-pip install -e "packages/core" -e "apps/api"
+uv sync --package ontology-api && source .venv/bin/activate
 ontology-api --root /path/to/workspaces
 # or: python -m ontology_api --root /path/to/workspaces
 # or: ONTOLOGY_API_ROOTS=/path/a:/path/b python -m uvicorn ontology_api.main:app

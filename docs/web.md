@@ -127,11 +127,11 @@ The Web app is presentation only:
 
 ## Development
 
-From a clean checkout (Python 3.11+, Node ≥ 20.19):
+From a clean checkout (Python 3.11+, uv, Node ≥ 20.19):
 
 ```bash
 # API
-pip install -e "packages/core" -e "apps/api"
+uv sync --package ontology-api && source .venv/bin/activate
 ontology-api --root examples          # serves /api/v1 on 127.0.0.1:8000
 
 # Web (separate terminal)

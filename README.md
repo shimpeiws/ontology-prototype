@@ -43,13 +43,14 @@ A lightweight FDE operational loop: model business workflows, diagnose with AI, 
 
 ## Install
 
-Requires Python 3.11+.
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/). The repository root is a uv workspace over `packages/core`, `apps/cli`, and `apps/api`; `uv.lock` pins every dependency.
 
 ```bash
-python3 -m venv .venv
+uv sync --all-packages --all-extras
 source .venv/bin/activate
-pip install -e "packages/core[test]" -e "apps/cli[test]" -e "apps/api[test]"
 ```
+
+The commands below assume the activated environment. Without activating it, prefix each command with `uv run` (for example `uv run ontology check examples/job-invoicing`).
 
 ## Test
 
