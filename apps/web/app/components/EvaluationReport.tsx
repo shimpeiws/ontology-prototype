@@ -17,8 +17,10 @@ import { StatusBadge } from "./StatusBadge";
 
 function fmtValue(value: number | null | undefined, unit?: string): string {
   if (value === null || value === undefined) return "unavailable";
-  const rounded = Number.isInteger(value) ? String(value) : value.toFixed(2);
-  return unit ? `${rounded} ${unit}` : rounded;
+  // The stored value renders exactly — rounding could push a borderline
+  // measurement across a strict target threshold and contradict the
+  // reported verdict.
+  return unit ? `${value} ${unit}` : String(value);
 }
 
 function CohortSubjects({ cohort }: { cohort: EvaluationCohort }) {
@@ -199,7 +201,12 @@ export function EvaluationReportView({ run }: { run: EvaluationRunRecord }) {
           <code>{report.cohort_boundary}</code>
         </dd>
         <dt>Declared baseline</dt>
-        <dd>{fmtValue(report.declared_baseline, report.unit)}</dd>
+        <dd>
+          {fmtValue(
+            report.declared_baseline,
+            report.aggregation === "count" ? undefined : report.unit,
+          )}
+        </dd>
         <dt>Contract digest</dt>
         <dd>
           <code>{report.contract_digest}</code>

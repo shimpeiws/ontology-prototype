@@ -153,10 +153,16 @@ export function TraceOverviewView({
   const noHistory =
     (overview.journal?.events ?? 0) === 0 &&
     (overview.evidence?.observations ?? 0) === 0 &&
+    (overview.evidence?.snapshots ?? 0) === 0 &&
+    (overview.canonical?.entities ?? 0) === 0 &&
+    (overview.canonical?.facts ?? 0) === 0 &&
     (overview.projection_runs?.length ?? 0) === 0 &&
     (overview.diagnosis_runs?.length ?? 0) === 0 &&
     (overview.evaluation_runs?.length ?? 0) === 0 &&
-    (overview.proposals?.total ?? 0) === 0;
+    (overview.proposals?.total ?? 0) === 0 &&
+    (overview.decisions ?? 0) === 0 &&
+    (overview.executions?.attempts ?? 0) === 0 &&
+    (overview.links?.total ?? 0) === 0;
 
   return (
     <div className="trace-overview">
@@ -562,6 +568,12 @@ export function SubjectTraceView({ trace }: { trace: SubjectTrace }) {
                 {attempt.attempt} <StatusBadge status={attempt.status} />
                 {attempt.error ? (
                   <p className="hint">error: {attempt.error}</p>
+                ) : null}
+                {attempt.receipt ? (
+                  <details className="record-json">
+                    <summary>receipt</summary>
+                    <pre>{JSON.stringify(attempt.receipt, null, 2)}</pre>
+                  </details>
                 ) : null}
               </li>
             ))}

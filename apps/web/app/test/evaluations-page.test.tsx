@@ -4,11 +4,18 @@
  * page renders inside a seeded WorkspaceProvider.
  */
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
+import type { EvaluationRunResponse } from "../lib/types";
 import ReportsPage from "../routes/workspace.reports";
 import { WorkspaceProvider } from "../workspace/context";
 import {
@@ -17,7 +24,9 @@ import {
 } from "../workspace/store";
 import type { WorkspaceState } from "../workspace/store";
 import {
+  SYNTHETIC_EVALUATION_REPORT,
   SYNTHETIC_EVALUATION_RUN_COUNT,
+  SYNTHETIC_EVALUATION_RUN_RECORD,
   SYNTHETIC_EVALUATION_RUN_RESPONSE,
   SYNTHETIC_EVALUATION_RUN_UNVERIFIED,
   SYNTHETIC_EVALUATION_RUNS,
@@ -249,12 +258,84 @@ describe("evaluation report detail", () => {
     // "lt 3" is a paired-interval count — a "days" suffix would misframe it.
     expect(report.getByText("lt 3")).toBeInTheDocument();
     expect(report.queryByText(/lt 3 days/)).toBeNull();
+    // The declared baseline counts intervals too — no duration unit.
+    expect(report.queryByText(/1 days/)).toBeNull();
     // increase/decrease describe count movement — neutral, never a verdict.
     // (classList token matching: "status-badge" itself contains "status-bad".)
     const direction = report.getByText("increase");
     expect(direction.classList.contains("status-neutral")).toBe(true);
     expect(direction.classList.contains("status-ok")).toBe(false);
     expect(direction.classList.contains("status-bad")).toBe(false);
+  });
+
+  it("renders a measured aggregate with enough precision for the verdict", async () => {
+    const borderline = {
+      ...SYNTHETIC_EVALUATION_RUN_RECORD,
+      report: {
+        ...SYNTHETIC_EVALUATION_REPORT,
+        cohorts: {
+          ...SYNTHETIC_EVALUATION_REPORT.cohorts,
+          after: {
+            ...SYNTHETIC_EVALUATION_REPORT.cohorts.after,
+            aggregate: 3.999,
+          },
+        },
+        target: { comparator: "lt", value: 4, status: "attained" },
+        overall: { status: "success" },
+      },
+    };
+    evaluationRuns.mockResolvedValue(SYNTHETIC_EVALUATION_RUNS);
+    evaluationRun.mockResolvedValue({
+      api_version: "v1",
+      workspace: "/abs/example/job-invoicing",
+      ok: true,
+      run: borderline,
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const report = await openReport(user);
+
+    // 3.999 attains "lt 4"; displaying "4.00" would contradict the verdict.
+    expect(report.getByText("3.999 days")).toBeInTheDocument();
+    expect(report.queryByText(/4\.00/)).toBeNull();
+  });
+
+  it("a superseded request for the same run never overwrites the retry", async () => {
+    evaluationRuns.mockResolvedValue(SYNTHETIC_EVALUATION_RUNS);
+    const deferred: {
+      resolve: (r: EvaluationRunResponse) => void;
+      reject: (e: unknown) => void;
+    }[] = [];
+    evaluationRun.mockImplementation(
+      () =>
+        new Promise<EvaluationRunResponse>((resolve, reject) => {
+          deferred.push({ resolve, reject });
+        }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    const runA = /evl-20261015T000000000000Z-eeee4444/;
+    const runB = /evl-20261016T000000000000Z-ffff5555/;
+    await screen.findByText(runA);
+    await user.click(screen.getByRole("button", { name: runA }));
+    await user.click(screen.getByRole("button", { name: runB }));
+    await user.click(screen.getByRole("button", { name: runA }));
+    expect(evaluationRun).toHaveBeenCalledTimes(3);
+
+    // The retry — the latest request for run A — resolves and renders.
+    deferred[2].resolve(SYNTHETIC_EVALUATION_RUN_RESPONSE);
+    await screen.findByText("Cohorts");
+
+    // The superseded first request for run A fails late; its outcome is
+    // discarded, not rendered over the retry's report.
+    await act(async () => {
+      deferred[0].reject(
+        new ApiError("WEB.API_UNREACHABLE", "API is down", null, true),
+      );
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(document.querySelector(".evaluation-report")).not.toBeNull();
   });
 
   it("renders an unknown-run lookup as diagnostics, not an error page", async () => {

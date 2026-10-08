@@ -98,6 +98,17 @@ describe("trace page overview", () => {
     await screen.findByText(/No recorded history/);
   });
 
+  it("canonical facts alone count as recorded history", async () => {
+    traceOverview.mockResolvedValue({
+      ...SYNTHETIC_TRACE_OVERVIEW_EMPTY,
+      canonical: { entities: 2, facts: 3, fact_links: 1 },
+    });
+    renderPage();
+
+    await screen.findByRole("heading", { name: /Canonical/ });
+    expect(screen.queryByText(/No recorded history/)).toBeNull();
+  });
+
   it("shows a retryable error state when the API is unreachable", async () => {
     traceOverview
       .mockRejectedValueOnce(
@@ -159,6 +170,9 @@ describe("trace page subject lookup", () => {
     expect(inTrace.getByText("dgx-missing")).toBeInTheDocument();
     // The failed journal event is flagged.
     expect(inTrace.getByText("diagnosis.failed")).toBeInTheDocument();
+    // The write-back receipt renders alongside the execution status.
+    expect(inTrace.getByText("receipt")).toBeInTheDocument();
+    expect(inTrace.getByText(/reminders\.csv/)).toBeInTheDocument();
   });
 
   it("renders warning diagnostics alongside a successful trace", async () => {

@@ -8,7 +8,7 @@
  * guardrails are visually distinct from `passed`.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "../lib/api";
 import type {
@@ -75,10 +75,14 @@ export default function ReportsPage() {
   const [list, setList] = useState<ListState>({ status: "loading" });
   const [listSeq, setListSeq] = useState(0);
   const [detail, setDetail] = useState<DetailState | null>(null);
+  // Single-flight: a superseded detail request (same or different run id)
+  // is discarded, never rendered over the newer selection.
+  const detailSeq = useRef(0);
 
   useEffect(() => {
     if (!path) return;
     const controller = new AbortController();
+    detailSeq.current += 1;
     setList({ status: "loading" });
     setDetail(null);
     api
@@ -93,22 +97,16 @@ export default function ReportsPage() {
 
   const openRun = async (runId: string) => {
     if (!path) return;
+    const seq = ++detailSeq.current;
     setDetail({ runId, status: "running" });
     try {
       const response = await api.evaluationRun(path, runId);
-      setDetail((current) =>
-        // Only land the response the current selection asked for.
-        current?.runId === runId
-          ? { runId, status: "done", response }
-          : current,
-      );
+      if (seq !== detailSeq.current) return;
+      setDetail({ runId, status: "done", response });
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setDetail((current) =>
-        current?.runId === runId
-          ? { runId, status: "failed", error: toError(err) }
-          : current,
-      );
+      if (seq !== detailSeq.current) return;
+      setDetail({ runId, status: "failed", error: toError(err) });
     }
   };
 
