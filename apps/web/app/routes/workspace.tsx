@@ -18,6 +18,8 @@ const NAV_ITEMS = [
   { to: "/workspace/mapping", label: "Mapping" },
   { to: "/workspace/evaluation", label: "Evaluation" },
   { to: "/workspace/agent", label: "Agent task" },
+  { to: "/workspace/trace", label: "Trace" },
+  { to: "/workspace/reports", label: "Reports" },
 ] as const;
 
 export default function WorkspaceLayout() {
@@ -219,7 +221,7 @@ export default function WorkspaceLayout() {
         </p>
       ) : null}
 
-      <nav className="workspace-nav" aria-label="Workspace definitions">
+      <nav className="workspace-nav" aria-label="Workspace sections">
         <ul>
           {NAV_ITEMS.map((item) => (
             <li key={item.to}>

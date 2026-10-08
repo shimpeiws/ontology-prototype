@@ -88,6 +88,27 @@ The Web app is presentation only:
   against: editing the draft, the sample, or the source selection marks
   it stale until re-run, so a preview can never present results for an
   older mapping as current.
+- The Trace and Reports pages (#62) are read-only inspection over the
+  operational endpoints (`workspaces/trace`, `trace/subject`, `trace/run`,
+  `workspaces/evaluations`, `evaluations/run`). The Trace page loads the
+  journal/overview summary, then follows one subject (`Entity/Id`) or one
+  artifact id through the recorded chain — observations, facts, projection
+  and diagnosis runs, proposals, decisions, execution attempts, later
+  correlated facts, and evaluations — in stage order with the core's
+  nature labels. Failed stages, unindexed proposals, corrupt journal
+  lines, and unresolved links render in place as evidence; lookup
+  inputs are sent verbatim so `TRACE.INVALID_SUBJECT`/`TRACE.UNKNOWN_ID`
+  stay server-owned domain diagnostics. The Reports page lists frozen
+  evaluation runs and renders each stored report verbatim: cohort
+  pairing (paired/pending/invalid/ambiguous/excluded), medians and
+  counts, the target verdict, guardrail verdicts with evidence, and the
+  report's own no-causation note. Verdict styling is centralized in one
+  tone map (`components/StatusBadge.tsx`): `not_met`/`missed` are
+  failure, `unverified` and `unavailable` are visually distinct from any
+  success tone, and unknown statuses render neutral — a report can never
+  look successful unless the core said so. Both pages read
+  `.ontology/` history through the API only; they never touch workspace
+  definitions, so frozen artifacts stay inspectable across draft edits.
 
 ## Development
 
@@ -111,7 +132,9 @@ Open `http://127.0.0.1:5173`, enter `job-invoicing` (resolved against the
 API's `--root`), and the overview shows the bundle status, active digest,
 per-file status, and core diagnostics. The Domain / Mapping / Evaluation /
 Agent task pages render the parsed definitions next to a raw-YAML draft
-editor; unsaved changes warn before in-app navigation and tab close.
+editor; unsaved changes warn before in-app navigation and tab close. The
+Trace / Reports pages inspect recorded history and frozen evaluation
+reports.
 
 ## Checks
 

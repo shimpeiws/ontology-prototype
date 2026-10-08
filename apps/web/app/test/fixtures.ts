@@ -13,8 +13,16 @@ import type {
   Diagnostic,
   DraftPreviewResponse,
   DraftValidateResponse,
+  EvaluationReport,
+  EvaluationRunRecord,
+  EvaluationRunsResponse,
+  EvaluationRunResponse,
   OpenResponse,
   SaveResponse,
+  SubjectTrace,
+  TraceAnchor,
+  TraceOverviewResponse,
+  TraceViewResponse,
 } from "../lib/types";
 
 export const SYNTHETIC_FILES: Record<string, string> = {
@@ -579,6 +587,664 @@ export const SYNTHETIC_PREVIEW_RESPONSE: DraftPreviewResponse = {
     ],
     diagnostics: [],
   },
+};
+
+/* ---- Operational inspection fixtures (#62) — shaped after the #61
+ * contract in docs/api.md (the core's trace/evaluation payloads plus
+ * `api_version`). */
+
+export const SYNTHETIC_TRACE_OVERVIEW: TraceOverviewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  journal: { events: 14, unreadable_lines: 1, failed_events: 1 },
+  evidence: {
+    ingest_runs: ["ing-20261005T120000000000Z-aaaa0000"],
+    observations: 3,
+    snapshots: 1,
+  },
+  canonical: { entities: 3, facts: 4, fact_links: 1 },
+  projection_runs: [
+    {
+      run_id: "prj-20261005T120500000000Z-bbbb1111",
+      projection: "CompletedButNotInvoiced",
+      as_of: "2026-10-05T00:00:00Z",
+      candidates: 2,
+    },
+  ],
+  diagnosis_runs: [
+    {
+      run_id: "dgx-20261005T120600000000Z-cccc2222",
+      projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+      provider: "stub",
+      model: "stub-offline",
+      status: "ok",
+    },
+    {
+      run_id: "dgx-20261005T120700000000Z-dddd3333",
+      projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+      provider: "openrouter",
+      model: "openai/gpt-4o-mini",
+      status: "failed",
+    },
+  ],
+  proposals: {
+    total: 2,
+    by_status: { approved: 1, unindexed: 1 },
+    unindexed: 1,
+  },
+  decisions: 1,
+  executions: { attempts: 2, by_status: { succeeded: 1, failed: 1 } },
+  evaluation_runs: [
+    {
+      run_id: "evl-20261015T000000000000Z-eeee4444",
+      evaluation: "completion-to-invoice-latency",
+      as_of: "2026-10-15T00:00:00Z",
+      overall: "not_met",
+    },
+  ],
+  links: { total: 21, unresolved: 1 },
+  diagnostics: [
+    {
+      severity: "warning",
+      code: "TRACE.JOURNAL_CORRUPT",
+      message: "trace.jsonl line 9 is not valid JSON; skipped",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    },
+    {
+      severity: "warning",
+      code: "TRACE.UNRESOLVED_LINK",
+      message:
+        "fact-later-0001 references dgx-missing via correlated_intervention, but the target is in no stored artifact or journal event",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    },
+  ],
+};
+
+export const SYNTHETIC_TRACE_OVERVIEW_EMPTY: TraceOverviewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  journal: { events: 0, unreadable_lines: 0, failed_events: 0 },
+  evidence: { ingest_runs: [], observations: 0, snapshots: 0 },
+  canonical: { entities: 0, facts: 0, fact_links: 0 },
+  projection_runs: [],
+  diagnosis_runs: [],
+  proposals: { total: 0, by_status: {}, unindexed: 0 },
+  decisions: 0,
+  executions: { attempts: 0, by_status: {} },
+  evaluation_runs: [],
+  links: { total: 0, unresolved: 0 },
+  diagnostics: [],
+};
+
+export const SYNTHETIC_SUBJECT_TRACE: SubjectTrace = {
+  subject: { entity: "Job", id: "101" },
+  entity: {
+    entity_type: "Job",
+    entity_id: "101",
+    properties: { status: "completed", assignee: "taro" },
+    first_observation_id: "obs-0001",
+    last_observation_id: "obs-0001",
+    last_ingest_id: "ing-20261005T120000000000Z-aaaa0000",
+    updated_at: "2026-10-05T12:00:00Z",
+    properties_changed_at: "2026-10-05T12:00:00Z",
+  },
+  observations: [
+    {
+      observation_id: "obs-0001",
+      ingest_id: "ing-20261005T120000000000Z-aaaa0000",
+      source: "jobs.csv",
+      row: 2,
+      status: "accepted",
+      observed_at: "2026-10-05T12:00:00Z",
+      content_digest: "sha256:sample",
+      mapping_digest: "sha256:mapping",
+      record: { id: "101", status: "completed", assignee: "taro" },
+      entities: [
+        { entity: "Job", id: "101", properties: { status: "completed" } },
+      ],
+      events: [
+        {
+          event: "JobCompleted",
+          subject: { entity: "Job", id: "101" },
+          occurred_at: "2026-10-01T00:00:00Z",
+          observed_at: "2026-10-05T12:00:00Z",
+        },
+      ],
+      diagnostics: [],
+    },
+  ],
+  facts: [
+    {
+      fact_key: "fact-s1",
+      event: "JobCompleted",
+      subject: { entity: "Job", id: "101" },
+      occurred_at: "2026-10-01T00:00:00Z",
+      observed_at: "2026-10-05T12:00:00Z",
+      first_observation_id: "obs-0001",
+      ingest_id: "ing-20261005T120000000000Z-aaaa0000",
+      observation_ids: ["obs-0001"],
+      ingest_ids: ["ing-20261005T120000000000Z-aaaa0000"],
+      links: [],
+    },
+    {
+      fact_key: "fact-later-0001",
+      event: "InvoiceIssued",
+      subject: { entity: "Job", id: "101" },
+      occurred_at: "2026-10-09T00:00:00Z",
+      observed_at: "2026-10-12T12:00:00Z",
+      first_observation_id: "obs-0009",
+      ingest_id: "ing-20261012T120000000000Z-bbbb0000",
+      observation_ids: ["obs-0009"],
+      ingest_ids: ["ing-20261012T120000000000Z-bbbb0000"],
+      links: [
+        {
+          fact_key: "fact-later-0001",
+          relation: "correlated_intervention",
+          target: "dgx-20261005T120600000000Z-cccc2222-p0",
+          observation_id: "obs-0009",
+          ingest_id: "ing-20261012T120000000000Z-bbbb0000",
+        },
+      ],
+    },
+  ],
+  ingests: [
+    "ing-20261005T120000000000Z-aaaa0000",
+    "ing-20261012T120000000000Z-bbbb0000",
+  ],
+  snapshots: ["sha256:sample"],
+  projections: [
+    {
+      run_id: "prj-20261005T120500000000Z-bbbb1111",
+      projection: "CompletedButNotInvoiced",
+      as_of: "2026-10-05T00:00:00Z",
+      created_at: "2026-10-05T12:05:00Z",
+      definition_digest: "sha256:domain",
+      role: "candidate",
+      evidence: { fact_key: "fact-s1" },
+    },
+  ],
+  diagnoses: [
+    {
+      run_id: "dgx-20261005T120600000000Z-cccc2222",
+      projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+      provider: "stub",
+      model: "stub-offline",
+      status: "ok",
+      provider_called: true,
+      prompt_version: "v1",
+      input_digest: "sha256:input",
+      deliverables: { explanation: "…" },
+      rejected: [],
+      proposals: ["dgx-20261005T120600000000Z-cccc2222-p0"],
+      created_at: "2026-10-05T12:06:00Z",
+    },
+    {
+      run_id: "dgx-20261005T120700000000Z-dddd3333",
+      projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+      provider: "openrouter",
+      model: "openai/gpt-4o-mini",
+      status: "failed",
+      provider_called: true,
+      prompt_version: "v1",
+      input_digest: "sha256:input",
+      deliverables: {},
+      rejected: [],
+      proposals: [],
+      created_at: "2026-10-05T12:07:00Z",
+    },
+  ],
+  proposals: [
+    {
+      proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+      diagnosis_run_id: "dgx-20261005T120600000000Z-cccc2222",
+      proposal_index: 0,
+      action: "SendReminder",
+      params: { target: "taro", reason: "invoice delayed" },
+      reason: "Job 101 completed 4 days ago without an invoice.",
+      subject_entity: "Job",
+      subject_id: "101",
+      related_entities: [{ entity: "Person", id: "taro" }],
+      evidence: { fact_key: "fact-s1" },
+      payload_digest: "sha256:payload",
+      created_at: "2026-10-05T12:06:00Z",
+      decisions: [
+        {
+          decision_id: "dec-20261005T130000000000Z-ffff5555",
+          proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+          decision: "approved",
+          reviewer: "fde-sato",
+          reason: null,
+          payload_digest: "sha256:payload",
+          decided_at: "2026-10-05T13:00:00Z",
+        },
+      ],
+      executions: [
+        {
+          execution_id: "exe-20261005T131000000000Z-aaaa6666",
+          idempotency_key: "idem-20261005T131000000000Z-bbbb7777",
+          proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+          action: "SendReminder",
+          adapter: "csv",
+          attempt: 1,
+          status: "succeeded",
+          receipt: { path: ".ontology/reminders.csv", row: 2 },
+          error: null,
+          created_at: "2026-10-05T13:10:00Z",
+        },
+      ],
+      correlated_facts: ["fact-later-0001"],
+      status: "approved",
+      indexed: true,
+    },
+    {
+      proposal_id: "dgx-20261005T120600000000Z-cccc2222-pos1",
+      diagnosis_run_id: "dgx-20261005T120600000000Z-cccc2222",
+      proposal_index: 1,
+      action: "SendReminder",
+      params: { target: "hanako" },
+      reason: "Job 103 is also waiting.",
+      subject_entity: null,
+      subject_id: null,
+      evidence: {},
+      decisions: [],
+      executions: [],
+      correlated_facts: [],
+      status: "unindexed",
+      indexed: false,
+    },
+  ],
+  decisions: [
+    {
+      decision_id: "dec-20261005T130000000000Z-ffff5555",
+      proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+      decision: "approved",
+      reviewer: "fde-sato",
+      reason: null,
+      payload_digest: "sha256:payload",
+      decided_at: "2026-10-05T13:00:00Z",
+    },
+  ],
+  executions: [
+    {
+      execution_id: "exe-20261005T131000000000Z-aaaa6666",
+      idempotency_key: "idem-20261005T131000000000Z-bbbb7777",
+      proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+      action: "SendReminder",
+      adapter: "csv",
+      attempt: 1,
+      status: "succeeded",
+      receipt: { path: ".ontology/reminders.csv", row: 2 },
+      error: null,
+      created_at: "2026-10-05T13:10:00Z",
+    },
+  ],
+  correlated_facts: ["fact-later-0001"],
+  evaluations: [
+    {
+      run_id: "evl-20261015T000000000000Z-eeee4444",
+      evaluation: "completion-to-invoice-latency",
+      as_of: "2026-10-15T00:00:00Z",
+      boundary: "2026-10-05T00:00:00Z",
+      contract_digest: "sha256:contract",
+      overall: "not_met",
+      subject: { disposition: "paired", cohort: "baseline" },
+    },
+  ],
+  journal: [
+    {
+      ts: "2026-10-05T12:00:00Z",
+      stage: "ingest",
+      kind: "ingest.completed",
+      data: { ingest_id: "ing-20261005T120000000000Z-aaaa0000" },
+    },
+    {
+      ts: "2026-10-05T12:07:00Z",
+      stage: "diagnosis",
+      kind: "diagnosis.failed",
+      data: { run_id: "dgx-20261005T120700000000Z-dddd3333" },
+    },
+  ],
+  links: [
+    {
+      from: "obs-0001",
+      to: "ing-20261005T120000000000Z-aaaa0000",
+      via: "ingest_run",
+      resolved: true,
+    },
+    {
+      from: "obs-0001",
+      to: "fact-s1",
+      via: "asserted",
+      resolved: true,
+    },
+    {
+      from: "fact-later-0001",
+      to: "dgx-missing",
+      via: "correlated_intervention",
+      resolved: false,
+    },
+  ],
+  unresolved: [
+    {
+      from: "fact-later-0001",
+      to: "dgx-missing",
+      via: "correlated_intervention",
+      resolved: false,
+    },
+  ],
+};
+
+export const SYNTHETIC_ANCHOR_TRACE: TraceAnchor = {
+  id: "dgx-20261005T120700000000Z-dddd3333",
+  kind: "diagnosis_run",
+  nature: "ai",
+  record: {
+    run_id: "dgx-20261005T120700000000Z-dddd3333",
+    provider: "openrouter",
+    model: "openai/gpt-4o-mini",
+    status: "failed",
+    diagnostics: [
+      { code: "DIAGNOSIS.PROVIDER_ERROR", message: "provider call failed" },
+    ],
+  },
+  links: [
+    {
+      from: "dgx-20261005T120700000000Z-dddd3333",
+      to: "prj-20261005T120500000000Z-bbbb1111",
+      via: "input_run",
+      resolved: true,
+    },
+  ],
+  unresolved: [],
+  journal: [
+    {
+      ts: "2026-10-05T12:07:00Z",
+      stage: "diagnosis",
+      kind: "diagnosis.failed",
+      data: { run_id: "dgx-20261005T120700000000Z-dddd3333" },
+    },
+  ],
+  subjects: ["Job/101", "Job/103"],
+};
+
+export const SYNTHETIC_TRACE_SUBJECT_RESPONSE: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  trace: SYNTHETIC_SUBJECT_TRACE,
+  diagnostics: [],
+};
+
+export const SYNTHETIC_TRACE_RUN_RESPONSE: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  trace: SYNTHETIC_ANCHOR_TRACE,
+  diagnostics: [],
+};
+
+export const SYNTHETIC_TRACE_INVALID_SUBJECT: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: false,
+  diagnostics: [
+    {
+      severity: "error",
+      code: "TRACE.INVALID_SUBJECT",
+      message: "invalid --subject 'bogus': expected 'Entity/Id'",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    },
+  ],
+};
+
+/** A frozen report whose after cohort missed the strict target. */
+export const SYNTHETIC_EVALUATION_REPORT: EvaluationReport = {
+  evaluation: "completion-to-invoice-latency",
+  contract_digest: "sha256:contract",
+  as_of: "2026-10-15T00:00:00Z",
+  cohort_boundary: "2026-10-05T00:00:00Z",
+  interval: {
+    start_event: "JobCompleted",
+    end_event: "InvoiceIssued",
+    subject: "Job",
+  },
+  metric: "duration",
+  aggregation: "median",
+  unit: "days",
+  declared_baseline: 9,
+  cohorts: {
+    baseline: {
+      paired: [
+        {
+          subject_id: "101",
+          start_fact_key: "fact-s1",
+          end_fact_key: "fact-e1",
+          started_at: "2026-10-01T00:00:00Z",
+          ended_at: "2026-10-09T00:00:00Z",
+          duration_seconds: 691200,
+          duration: 8,
+        },
+      ],
+      pending: [],
+      invalid: [
+        {
+          subject_id: "099",
+          reason:
+            "every end event precedes the start event; pairing would produce a negative interval",
+          start_fact_key: "fact-s9",
+          end_fact_keys: ["fact-e9"],
+        },
+      ],
+      ambiguous: [],
+      counts: { paired: 1, pending: 0, invalid: 1, ambiguous: 0 },
+      sample: 1,
+      aggregate: 8,
+    },
+    after: {
+      paired: [
+        {
+          subject_id: "102",
+          start_fact_key: "fact-s2",
+          end_fact_key: "fact-e2",
+          started_at: "2026-10-06T00:00:00Z",
+          ended_at: "2026-10-12T00:00:00Z",
+          duration_seconds: 518400,
+          duration: 6,
+          closes_after_boundary: true,
+        },
+        {
+          subject_id: "103",
+          start_fact_key: "fact-s3",
+          end_fact_key: "fact-e3",
+          started_at: "2026-10-07T00:00:00Z",
+          ended_at: "2026-10-11T00:00:00Z",
+          duration_seconds: 345600,
+          duration: 4,
+          extra_end_fact_keys: ["fact-e3b"],
+        },
+      ],
+      pending: [
+        {
+          subject_id: "104",
+          start_fact_key: "fact-s4",
+          started_at: "2026-10-10T00:00:00Z",
+          elapsed_seconds: 432000,
+          elapsed: 5,
+        },
+      ],
+      invalid: [],
+      ambiguous: [
+        {
+          subject_id: "105",
+          reason: "end events on both sides of the start event",
+          start_fact_keys: ["fact-s5"],
+          end_fact_keys: ["fact-e5a", "fact-e5b"],
+        },
+      ],
+      counts: { paired: 2, pending: 1, invalid: 0, ambiguous: 1 },
+      sample: 2,
+      aggregate: 5,
+    },
+  },
+  unpaired_ends: [{ subject_id: "106", end_fact_keys: ["fact-e6"] }],
+  change: { status: "measured", value: 3, direction: "improvement" },
+  target: { comparator: "lt", value: 4, status: "missed" },
+  guardrails: [
+    {
+      name: "invoice-error-rate",
+      metric: "invoice_error_rate",
+      comparator: "not_increase",
+      status: "passed",
+      evidence: {
+        baseline: { rate: 0.1, errors: 1, invoices: 10 },
+        after: { rate: 0.05, errors: 1, invoices: 20 },
+      },
+    },
+    {
+      name: "volume-check",
+      metric: "job_volume",
+      comparator: "lt",
+      status: "unavailable",
+      reason: "no registered semantics for metric 'job_volume'",
+    },
+  ],
+  overall: { status: "not_met" },
+  inputs: [
+    {
+      subject_id: "101",
+      start_fact_keys: ["fact-s1"],
+      end_fact_keys: ["fact-e1"],
+      disposition: "paired",
+      cohort: "baseline",
+    },
+    {
+      subject_id: "107",
+      start_fact_keys: [],
+      end_fact_keys: [],
+      future_start_fact_keys: ["fact-s7"],
+      disposition: "excluded",
+      excluded: "future-dated start event",
+    },
+  ],
+  note: "Cohorts are assigned by when each interval's start event occurred relative to the cohort boundary. This report records an observed difference between cohorts; it does not establish that any intervention caused it.",
+};
+
+/** A report with no measured intervals — honest unavailability. */
+export const SYNTHETIC_EVALUATION_REPORT_UNVERIFIED: EvaluationReport = {
+  ...SYNTHETIC_EVALUATION_REPORT,
+  cohorts: {
+    baseline: {
+      ...SYNTHETIC_EVALUATION_REPORT.cohorts.baseline,
+      paired: [],
+      invalid: [],
+      counts: { paired: 0, pending: 0, invalid: 0, ambiguous: 0 },
+      sample: 0,
+      aggregate: null,
+    },
+    after: {
+      paired: [],
+      pending: [],
+      invalid: [],
+      ambiguous: [],
+      counts: { paired: 0, pending: 0, invalid: 0, ambiguous: 0 },
+      sample: 0,
+      aggregate: null,
+    },
+  },
+  unpaired_ends: [],
+  inputs: [],
+  change: {
+    status: "unavailable",
+    reason: "no measured intervals in the baseline and after cohort",
+  },
+  target: {
+    comparator: "lt",
+    value: 4,
+    status: "unverified",
+    reason: "the after cohort has no measured intervals",
+  },
+  guardrails: [
+    {
+      name: "invoice-error-rate",
+      metric: "invoice_error_rate",
+      comparator: "not_increase",
+      status: "unavailable",
+      reason: "no invoice-error evidence for the after cohort",
+    },
+  ],
+  overall: { status: "unverified" },
+};
+
+export const SYNTHETIC_EVALUATION_RUN_RECORD: EvaluationRunRecord = {
+  run_id: "evl-20261015T000000000000Z-eeee4444",
+  evaluation: "completion-to-invoice-latency",
+  as_of: "2026-10-15T00:00:00Z",
+  boundary: "2026-10-05T00:00:00Z",
+  created_at: "2026-10-15T00:00:01Z",
+  contract_digest: "sha256:contract",
+  report: SYNTHETIC_EVALUATION_REPORT,
+};
+
+export const SYNTHETIC_EVALUATION_RUN_UNVERIFIED: EvaluationRunRecord = {
+  run_id: "evl-20261016T000000000000Z-ffff5555",
+  evaluation: "completion-to-invoice-latency",
+  as_of: "2026-10-16T00:00:00Z",
+  boundary: "2026-10-06T00:00:00Z",
+  created_at: "2026-10-16T00:00:01Z",
+  contract_digest: "sha256:contract",
+  report: SYNTHETIC_EVALUATION_REPORT_UNVERIFIED,
+};
+
+export const SYNTHETIC_EVALUATION_RUNS: EvaluationRunsResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  evaluation_runs: [
+    SYNTHETIC_EVALUATION_RUN_RECORD,
+    SYNTHETIC_EVALUATION_RUN_UNVERIFIED,
+  ],
+};
+
+export const SYNTHETIC_EVALUATION_RUNS_EMPTY: EvaluationRunsResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  evaluation_runs: [],
+};
+
+export const SYNTHETIC_EVALUATION_RUN_RESPONSE: EvaluationRunResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  run: SYNTHETIC_EVALUATION_RUN_RECORD,
+};
+
+export const SYNTHETIC_EVALUATION_UNKNOWN_RUN: EvaluationRunResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: false,
+  diagnostics: [
+    {
+      severity: "error",
+      code: "EVALUATION.UNKNOWN_RUN",
+      message: "no frozen evaluation report 'evl-bogus'",
+      file: null,
+      path: null,
+      line: null,
+      hint: "reports are recorded only when an evaluation completes without errors",
+    },
+  ],
 };
 
 /** Build a fetch stub that returns a JSON response. */
