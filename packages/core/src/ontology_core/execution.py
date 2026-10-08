@@ -57,7 +57,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from .canonical import CanonicalStore, SqliteCanonicalStore
+from .canonical import (
+    CanonicalStore,
+    SqliteCanonicalStore,
+    store_error_code,
+)
 from .decisions import backfill_proposals, check_approval
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
@@ -440,7 +444,7 @@ def execute(
         proposal = store.proposal(proposal_id)
     except Exception as exc:
         diag.error(
-            "EXECUTION.STORE_ERROR",
+            store_error_code(exc, "EXECUTION.STORE_ERROR"),
             f"cannot read canonical store: {exc}",
         )
         result.status = "refused"
@@ -469,7 +473,7 @@ def execute(
         prior = store.executions_for_key(result.idempotency_key)
     except Exception as exc:
         diag.error(
-            "EXECUTION.STORE_ERROR",
+            store_error_code(exc, "EXECUTION.STORE_ERROR"),
             f"cannot read execution history: {exc}",
         )
         result.status = "refused"
@@ -631,7 +635,7 @@ def _record_row(
         # Evidence of this attempt could not be persisted — that is
         # itself an error the operator must see.
         diag.error(
-            "EXECUTION.STORE_ERROR",
+            store_error_code(exc, "EXECUTION.STORE_ERROR"),
             f"execution attempt {status!r} could not be recorded: {exc}",
         )
         return False

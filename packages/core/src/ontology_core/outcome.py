@@ -79,7 +79,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .canonical import CanonicalStore, SqliteCanonicalStore
+from .canonical import (
+    CanonicalStore,
+    SqliteCanonicalStore,
+    store_error_code,
+)
 from .conditions import condition_fields, evaluate_condition
 from .diagnostics import Diagnostic, Diagnostics
 from .evidence import RUNTIME_DIR
@@ -191,7 +195,7 @@ def run_evaluation(
         # locked or corrupt database (or a custom store's own exception)
         # becomes a diagnostic, never a traceback through the CLI.
         diag.error(
-            "EVALUATION.STORE_ERROR",
+            store_error_code(exc, "EVALUATION.STORE_ERROR"),
             f"cannot read canonical state: {exc}",
         )
 
@@ -212,7 +216,7 @@ def run_evaluation(
             result.recorded = True
         except Exception as exc:
             diag.error(
-                "EVALUATION.STORE_ERROR",
+                store_error_code(exc, "EVALUATION.STORE_ERROR"),
                 f"cannot record evaluation run: {exc}",
             )
 

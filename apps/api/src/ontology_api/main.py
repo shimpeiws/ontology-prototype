@@ -22,6 +22,8 @@ from .schemas import (
     API_PREFIX,
     API_VERSION,
     ContractResponse,
+    DecideRequest,
+    DecisionResponse,
     DiagnosticOut,
     DraftPreviewRequest,
     DraftPreviewResponse,
@@ -404,6 +406,41 @@ def create_app(
         return {
             "api_version": API_VERSION,
             **service.proposal(payload.path, payload.proposal_id),
+        }
+
+    # ------------------------------------------------- decision write
+    #
+    # The one write the operational surface allows (ADR 0003): a human
+    # approve/reject through the core's `decide`. Domain outcomes stay
+    # `ok`/`diagnostics` payloads; lock contention is transport-level —
+    # 503 STORAGE.WRITE_BUSY. Execution, run triggers, and write-back
+    # remain CLI-only and are never reachable here.
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/proposals/decide",
+        response_model=DecisionResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def decide_proposal(
+        payload: DecideRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.decide(
+                payload.path,
+                payload.proposal_id,
+                payload.decision,
+                reviewer=payload.reviewer,
+                reason=payload.reason,
+            ),
         }
 
     return app

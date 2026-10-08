@@ -37,6 +37,7 @@ from ontology_core import (
     run_diagnosis,
     run_evaluation,
     run_projection,
+    store_error_code,
     trace_anchor,
     trace_overview,
     trace_subject,
@@ -1114,7 +1115,7 @@ def _cmd_project(
             _emit_error(
                 workspace,
                 as_json,
-                "PROJECTION.STORE_ERROR",
+                store_error_code(exc, "PROJECTION.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
             return EXIT_INVALID
@@ -1252,7 +1253,7 @@ def _cmd_diagnose(
             _emit_error(
                 workspace,
                 as_json,
-                "DIAGNOSIS.STORE_ERROR",
+                store_error_code(exc, "DIAGNOSIS.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
             return EXIT_INVALID
@@ -1422,7 +1423,7 @@ def _cmd_proposals(
         _emit_error(
             workspace,
             as_json,
-            "DECISION.STORE_ERROR",
+            store_error_code(exc, "DECISION.STORE_ERROR"),
             f"cannot read canonical store: {exc}",
         )
         return EXIT_INVALID
@@ -1692,7 +1693,7 @@ def _cmd_evaluate(
             _emit_error(
                 workspace,
                 as_json,
-                "EVALUATION.STORE_ERROR",
+                store_error_code(exc, "EVALUATION.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
             return EXIT_INVALID

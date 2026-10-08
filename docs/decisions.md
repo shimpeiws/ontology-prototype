@@ -1,10 +1,16 @@
 # Proposals and human decisions
 
 Validated action proposals are persisted when a diagnosis run is recorded.
-A human reviews the exact proposal through the CLI and records an explicit
-approve/reject decision bound to the payload. Approval never executes
-anything — write-back is a separate stage gated by the approval check,
-implemented by `ontology execute` (see [execution.md](execution.md)).
+A human reviews the exact proposal — through the CLI, or through the Web
+console's Proposals page which posts to the API's `decide` endpoint
+([api.md](api.md#human-decisions)) — and records an explicit
+approve/reject decision bound to the payload. Both surfaces run the same
+core `decide` on the same `canon.db`: a decision recorded over HTTP is
+honored by `ontology execute` exactly like a CLI decision. Approval never
+executes anything — write-back is a separate stage gated by the approval
+check, implemented by `ontology execute` (see
+[execution.md](execution.md)). The API exposes no execution or run
+trigger (ADR 0003).
 
 ## Lifecycle
 
@@ -35,6 +41,15 @@ ontology decide <workspace> <proposal-id> --approve --reviewer fde-sato \
     --reason "correct job and assignee"
 ontology decide <workspace> <proposal-id> --reject --reviewer fde-sato
 ```
+
+The Web console's Proposals page is the same review rendered over HTTP:
+each card shows the exact `action`/`params`, the `payload_digest` the
+decision will bind, the canonical target and related entities, the
+grounding evidence, and the recorded AI rationale — labeled as model
+hypothesis, never as fact — plus the full decision history and any
+recorded execution attempts (status only; there is no execute button).
+Approve/Reject posts `decision`, the page-level reviewer identity, and an
+optional reason to `POST /api/v1/workspaces/proposals/decide`.
 
 Proposal ids derive from the diagnosis run (`<run-id>-p<index>`), where
 `<index>` is the proposal's position in the model's raw `action_proposals`
@@ -124,11 +139,28 @@ Backfilled rows reconstruct history conservatively:
 
 ## What the agent cannot do
 
-Decisions only enter through `decide`, which requires a non-empty
-reviewer identity. Model output has no path to this API: extra keys a
-model adds to a proposal (e.g. `"approved": true`, `"reviewer": "x"`) are
-ignored by validation and never reach the decisions table. An FDE's
-decision is the only thing that moves a proposal out of `proposed`.
+Decisions only enter through `decide` — the CLI command or the API's
+`proposals/decide` endpoint, which runs the same core function — and both
+require a non-empty reviewer identity. Model output has no path to this
+API: extra keys a model adds to a proposal (e.g. `"approved": true`,
+`"reviewer": "x"`) are ignored by validation and never reach the
+decisions table. An FDE's decision is the only thing that moves a
+proposal out of `proposed`.
+
+## Concurrent writers
+
+The CLI and the API share the same `canon.db`. The store runs in WAL
+journal mode with an explicit bounded `busy_timeout` (five seconds by
+default), so readers never block behind a writer and never see a partial
+transaction; writers fold their committed frames back with a passive
+checkpoint on close. A writer that cannot obtain the write lock within
+the bound fails with the stable `STORAGE.WRITE_BUSY` code — on the CLI a
+non-zero exit naming that code, on the API a `503` — instead of an
+untyped `database is locked`. Contention is transient: the same call
+succeeds once the holder commits (see
+[ADR 0003](adr/0003-api-operational-boundary.md)). Read-only opens may
+leave `canon.db-shm`/`-wal` sidecars in `.ontology/` after close; they
+are engine bookkeeping, not durable state.
 
 ## Trace
 

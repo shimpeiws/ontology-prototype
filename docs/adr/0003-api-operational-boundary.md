@@ -115,11 +115,9 @@ invocations. Coordination is decided as follows:
   Correctness state lives only in `canon.db`.
 
 Enabling WAL and an explicit `busy_timeout` on `SqliteCanonicalStore`,
-plus the `STORAGE.WRITE_BUSY` mapping in the CLI and API, lands with the
-first operational endpoint issues — this record names the contract they
-must implement. Until then, the store's implicit five-second default wait
-and untyped `database is locked` error are the degraded but safe version
-of the same contract.
+plus the `STORAGE.WRITE_BUSY` mapping in the CLI and API, was deferred to
+the first write-capable endpoint — it landed with the decision endpoint
+and Proposals console (issue #63).
 
 ### Document amendments
 

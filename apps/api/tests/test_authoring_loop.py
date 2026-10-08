@@ -174,7 +174,13 @@ def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) 
 
 
 def test_contract_exposes_no_action_authority(roots) -> None:
-    """The API grants no approval or write-back capability."""
+    """The API grants no execution or run-trigger capability.
+
+    ``decide`` is the operational surface's single write (ADR 0003): a
+    human approve/reject recorded through the core's ``decide``. It is
+    governance, not action authority — it never runs a run trigger or
+    write-back.
+    """
     body = make_client(roots).get("/api/v1/contract").json()
     operations = set(body["operations"])
     assert operations == {
@@ -191,6 +197,10 @@ def test_contract_exposes_no_action_authority(roots) -> None:
         "evaluation_run",
         "proposals",
         "proposal",
+        # Issue #63: the human decision write — bound to a persisted
+        # proposal's payload digest, never a run trigger or executor.
+        "decide",
     }
-    forbidden = {"decide", "execute", "diagnose", "approve"}
+    forbidden = {"execute", "diagnose", "approve", "run", "ingest",
+                 "project", "evaluate"}
     assert not (operations & forbidden)

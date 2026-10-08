@@ -6,6 +6,7 @@ only PyYAML at runtime.
 """
 
 from .canonical import (
+    BUSY_TIMEOUT_MS,
     FACT_LINK_RELATIONS,
     REL_CORRELATED_INTERVENTION,
     REL_POSSIBLY_CORRECTS,
@@ -15,6 +16,8 @@ from .canonical import (
     FactLink,
     SqliteCanonicalStore,
     event_fact_key,
+    is_write_busy,
+    store_error_code,
 )
 from .decisions import (
     ApprovalCheck,
@@ -153,6 +156,7 @@ __all__ = [
     "AgentDefinition",
     "ApplyResult",
     "ApprovalCheck",
+    "BUSY_TIMEOUT_MS",
     "CanonicalEvent",
     "CanonicalStore",
     "Check",
@@ -247,6 +251,7 @@ __all__ = [
     "get_evaluation_run",
     "get_projection_run",
     "ingest_snapshot",
+    "is_write_busy",
     "load_workspace",
     "load_workspace_texts",
     "payload_digest",
@@ -262,6 +267,7 @@ __all__ = [
     "save_workspace",
     "score_run",
     "select_source",
+    "store_error_code",
     "trace_anchor",
     "trace_overview",
     "trace_subject",

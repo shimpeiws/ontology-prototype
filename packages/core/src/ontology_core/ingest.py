@@ -45,6 +45,7 @@ from .canonical import (
     ApplyResult,
     CanonicalStore,
     SqliteCanonicalStore,
+    store_error_code,
 )
 from .conditions import evaluate_condition
 from .decisions import backfill_proposals
@@ -424,7 +425,7 @@ def _apply_canonical(
         # becomes a diagnostic, never a mid-run crash.
         message = exc.strerror if isinstance(exc, OSError) else str(exc)
         diag.error(
-            "CANON.STORE_ERROR",
+            store_error_code(exc, "CANON.STORE_ERROR"),
             f"cannot persist canonical state: {message or exc}",
             file=label,
         )
@@ -705,7 +706,7 @@ def _stored_entity_ids(
     except Exception as exc:
         message = exc.strerror if isinstance(exc, OSError) else str(exc)
         diag.error(
-            "CANON.STORE_ERROR",
+            store_error_code(exc, "CANON.STORE_ERROR"),
             f"cannot read canonical state: {message or exc}",
             file=label,
         )

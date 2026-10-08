@@ -124,6 +124,23 @@ class ProposalRequest(WorkspacePathRequest):
     proposal_id: str = Field(min_length=1, max_length=1024)
 
 
+class DecideRequest(WorkspacePathRequest):
+    """Record a human decision on a persisted proposal — the CLI's
+    ``decide --approve/--reject --reviewer``.
+
+    ``decision`` goes to the core verbatim: an invalid value is a domain
+    diagnostic (``DECISION.INVALID_DECISION``), not a schema rejection.
+    ``reviewer`` is required and self-asserted (ADR 0003) — a
+    whitespace-only value slips past ``min_length`` and fails in the
+    core as ``DECISION.NO_REVIEWER``, same as the CLI.
+    """
+
+    proposal_id: str = Field(min_length=1, max_length=1024)
+    decision: str = Field(min_length=1, max_length=1024)
+    reviewer: str = Field(min_length=1, max_length=1024)
+    reason: str | None = Field(default=None, max_length=4096)
+
+
 class WorkspaceRef(BaseModel):
     """``digest`` is null when the on-disk bundle could not be fully
     represented in ``files`` (e.g. a symlink escaping the roots), so the
@@ -277,6 +294,27 @@ class ProposalResponse(BaseModel):
     workspace: str
     ok: bool
     proposal: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class DecisionResponse(BaseModel):
+    """The ``decide --json`` payload plus ``api_version``.
+
+    ``ok: false`` with ``diagnostics`` is a domain failure — an invalid
+    decision value, an unknown proposal, or a missing reviewer. The
+    ``{error}`` shape stays transport-only; lock contention arrives as
+    503 ``STORAGE.WRITE_BUSY`` so a retry is meaningful (ADR 0003).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    decision_id: str | None = None
+    proposal_id: str | None = None
+    decision: str | None = None
+    recorded: bool | None = None
     diagnostics: list[dict[str, Any]] | None = None
 
 

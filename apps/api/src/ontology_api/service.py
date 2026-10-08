@@ -23,11 +23,13 @@ from ontology_core import (
     SqliteCanonicalStore,
     Workspace,
     bundle_digest,
+    decide,
     get_evaluation_run,
     load_workspace,
     load_workspace_texts,
     proposal_view,
     save_workspace,
+    store_error_code,
     traceview,
 )
 from ontology_core.agentdef import DELIVERABLES
@@ -164,6 +166,16 @@ class WorkspaceService(Protocol):
     def proposals(self, path: str) -> dict[str, Any]: ...
 
     def proposal(self, path: str, proposal_id: str) -> dict[str, Any]: ...
+
+    def decide(
+        self,
+        path: str,
+        proposal_id: str,
+        decision: str,
+        *,
+        reviewer: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]: ...
 
 
 class CoreWorkspaceService:
@@ -332,7 +344,7 @@ class CoreWorkspaceService:
         except Exception as exc:
             return _failure(
                 resolved,
-                "EVALUATION.STORE_ERROR",
+                store_error_code(exc, "EVALUATION.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
         return {
@@ -360,7 +372,7 @@ class CoreWorkspaceService:
         except Exception as exc:
             return _failure(
                 resolved,
-                "EVALUATION.STORE_ERROR",
+                store_error_code(exc, "EVALUATION.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
         if record is None:
@@ -395,7 +407,7 @@ class CoreWorkspaceService:
         except Exception as exc:
             return _failure(
                 resolved,
-                "DECISION.STORE_ERROR",
+                store_error_code(exc, "DECISION.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
         return {
@@ -426,7 +438,7 @@ class CoreWorkspaceService:
         except Exception as exc:
             return _failure(
                 resolved,
-                "DECISION.STORE_ERROR",
+                store_error_code(exc, "DECISION.STORE_ERROR"),
                 f"cannot read canonical store: {exc}",
             )
         view = next(
@@ -441,6 +453,73 @@ class CoreWorkspaceService:
                 "persisted proposals",
             )
         return {"workspace": str(resolved), "ok": True, "proposal": view}
+
+    # ------------------------------------------------- decision write
+    #
+    # The operational surface's single write (ADR 0003): a human
+    # approve/reject on a persisted proposal, recorded through the
+    # shared core's `decide` on a writable store — the same code path
+    # the CLI takes, so a decision made here is honored by
+    # `ontology execute` exactly like a CLI decision.
+
+    def decide(
+        self,
+        path: str,
+        proposal_id: str,
+        decision: str,
+        *,
+        reviewer: str,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """The ``ontology decide --json`` payload.
+
+        ``_check_runtime`` runs before any write: a symlinked
+        ``.ontology/`` escaping the roots is refused rather than written
+        into. A writer that loses lock contention is mapped to 503
+        ``STORAGE.WRITE_BUSY`` — a transport error, not a domain
+        diagnostic, so the caller knows a retry is meaningful.
+        """
+        resolved = self._workspace_dir(path)
+        self._check_runtime(resolved / RUNTIME_DIR)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return {
+                "workspace": str(resolved),
+                "ok": False,
+                "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+            }
+        assert loaded.workspace is not None
+        store = SqliteCanonicalStore(resolved / RUNTIME_DIR)
+        try:
+            result = decide(
+                loaded.workspace,
+                proposal_id,
+                decision,
+                reviewer=reviewer,
+                reason=reason,
+                store=store,
+            )
+        finally:
+            store.close()
+        busy = next(
+            (
+                d
+                for d in result.diagnostics
+                if d.severity == "error" and d.code == "STORAGE.WRITE_BUSY"
+            ),
+            None,
+        )
+        if busy is not None:
+            raise ApiError(503, "STORAGE.WRITE_BUSY", busy.message)
+        return {
+            "workspace": str(resolved),
+            "ok": result.ok,
+            "decision_id": result.decision_id,
+            "proposal_id": result.proposal_id,
+            "decision": result.decision,
+            "recorded": result.recorded,
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
 
     def _readonly_store(self, resolved: Path) -> SqliteCanonicalStore:
         """A workspace's store without creating it. Every ``.ontology``
@@ -702,6 +781,7 @@ def contract_metadata() -> dict[str, Any]:
             "evaluation_run": f"POST /api/{API_VERSION}/workspaces/evaluations/run",
             "proposals": f"POST /api/{API_VERSION}/workspaces/proposals",
             "proposal": f"POST /api/{API_VERSION}/workspaces/proposals/show",
+            "decide": f"POST /api/{API_VERSION}/workspaces/proposals/decide",
         },
         "contract": {
             "property_types": list(PROPERTY_TYPES),

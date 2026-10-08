@@ -88,6 +88,21 @@ The Web app is presentation only:
   against: editing the draft, the sample, or the source selection marks
   it stale until re-run, so a preview can never present results for an
   older mapping as current.
+- The Proposals page (#63) is the operational console's review surface:
+  every persisted proposal renders its exact `action`/`params`, the
+  `payload_digest` a decision binds, the canonical target and related
+  entities, the grounding evidence, and the recorded AI rationale —
+  labeled as model hypothesis, never as fact — plus the append-only
+  decision history and recorded execution attempts (status only; there
+  is no execute affordance — ADR 0003 keeps run triggers on the CLI).
+  A page-level reviewer identity (self-asserted, recorded verbatim on
+  every decision) gates the Approve/Reject pair on each card; the
+  decision posts to `POST /api/v1/workspaces/proposals/decide` and the
+  list refreshes so the new status and appended history show. Domain
+  failures (`DECISION.*`) render in the card's diagnostics channel;
+  `503 STORAGE.WRITE_BUSY` renders as a retryable transport error. A
+  decision here is recorded through the same core `decide` on the same
+  `canon.db` the CLI uses, so `ontology execute` honors it identically.
 - The Trace and Reports pages (#62) are read-only inspection over the
   operational endpoints (`workspaces/trace`, `trace/subject`, `trace/run`,
   `workspaces/evaluations`, `evaluations/run`). The Trace page loads the

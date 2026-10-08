@@ -269,7 +269,7 @@ Read-only views over a workspace's `.ontology/` runtime, added under
 CLI's `--json` output for the same query verbatim, plus `api_version`;
 domain outcomes (`ok: false` with core `diagnostics`) are `200`
 responses, while `{error}` stays reserved for transport failures. All
-canonical reads go through a `readonly=True` store — these endpoints
+canonical reads go through a `readonly=True` store — the read endpoints
 never create `.ontology/` or `canon.db` and never mutate runtime state,
 so a workspace with no recorded history reports an empty view rather
 than an error. The same applies to a `canon.db` written by an older
@@ -279,9 +279,11 @@ store error. Every `.ontology/` entry must also resolve inside the
 configured roots — a symlink escaping them is refused with
 `API.RUNTIME_OUTSIDE_ROOTS` rather than read.
 
-All seven take `{"path": "<workspace under a configured root>"}` plus
-the extra field listed; `path` follows the same root-containment rules
-as every other endpoint.
+The seven read endpoints take `{"path": "<workspace under a configured
+root>"}` plus the extra field listed; `path` follows the same
+root-containment rules as every other endpoint. The eighth row in the
+table is the surface's single write — the human decision — documented
+under [Human decisions](#human-decisions) below.
 
 | Endpoint | CLI equivalent | Success payload |
 | --- | --- | --- |
@@ -292,6 +294,7 @@ as every other endpoint.
 | `POST /api/v1/workspaces/evaluations/run` | `evaluate --run <id> --json` | `run` — the frozen evaluation report |
 | `POST /api/v1/workspaces/proposals` | `proposals --json` | `proposals` — every persisted proposal with `status`, `decisions`, and `executions` |
 | `POST /api/v1/workspaces/proposals/show` | `proposals --show <id> --json` | `proposal` — one proposal with `status`, `decisions`, and `executions` |
+| `POST /api/v1/workspaces/proposals/decide` | `decide <id> --approve/--reject --json` | the decision outcome — see below |
 
 Extra request fields:
 
@@ -328,6 +331,58 @@ index as-is (`proposals` omits them, `proposals/show` returns
 `DECISION.UNKNOWN_PROPOSAL`) while `trace` still surfaces them under
 `proposals.unindexed`; run `ontology proposals` once to index them.
 
+## Human decisions
+
+`POST /api/v1/workspaces/proposals/decide` is the operational surface's
+single write (ADR 0003): a human approve/reject on a persisted proposal,
+recorded through the shared core's `decide` on the same writable
+`canon.db` the CLI uses — so a decision made over HTTP is honored by
+`ontology execute` exactly like a CLI decision. There is no execute,
+diagnose, or run-trigger endpoint; execution stays CLI-only.
+
+```json
+{
+  "path": "job-invoicing",
+  "proposal_id": "dgx-…-p0",
+  "decision": "approved",
+  "reviewer": "fde-sato",
+  "reason": "optional — recorded with the decision"
+}
+```
+
+`decision` is `"approved"` or `"rejected"`; `reviewer` is required,
+self-asserted, and recorded verbatim on the decision row. The response
+is the `ontology decide --json` payload plus `api_version`:
+
+```json
+{
+  "api_version": "v1",
+  "workspace": "/abs/path",
+  "ok": true,
+  "decision_id": "dec-…",
+  "proposal_id": "dgx-…-p0",
+  "decision": "approved",
+  "recorded": true,
+  "diagnostics": []
+}
+```
+
+`ok: false` with `diagnostics` is a domain failure — the same codes the
+CLI reports (`DECISION.INVALID_DECISION`, `DECISION.NO_REVIEWER`,
+`DECISION.UNKNOWN_PROPOSAL`) — and a `200` response, so a rejected
+attempt is a result the UI can render, not an exception. Decisions are
+append-only and bind the proposal's persisted `payload_digest`: a later
+decision supersedes by insertion order, the full history stays
+inspectable, and every attempt — including a failed one — emits a
+`decision.recorded`/`decision.failed` trace event.
+
+Lock contention is the one failure that is *not* a domain outcome: a
+writer that loses the bounded `busy_timeout` wait reports
+`STORAGE.WRITE_BUSY`, which the API maps to `503` —
+`{"error": {"code": "STORAGE.WRITE_BUSY", "message": "…"}}` — because
+the condition is transient and a retry is meaningful. The same
+contention on the CLI exits non-zero naming `STORAGE.WRITE_BUSY`.
+
 ## Errors
 
 API failures are structured errors, never diagnostics: the `diagnostics`
@@ -350,6 +405,7 @@ never masquerade as a validation result.
 | 422 | `API.MALFORMED_REQUEST` | Body failed request schema validation |
 | 500 | `API.INTERNAL_ERROR` | Unexpected server failure (details stay server-side) |
 | 503 | `API.ROOTS_UNCONFIGURED` | No workspace roots configured |
+| 503 | `STORAGE.WRITE_BUSY` | A write lost the bounded `busy_timeout` wait on `canon.db` — transient, retry is meaningful |
 
 Every HTTP failure — including unknown routes and unhandled exceptions —
 uses the same `{ "error": { "code", "message" } }` shape.
