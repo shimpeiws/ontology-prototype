@@ -14,8 +14,12 @@ import type {
   ContractResponse,
   DraftPreviewResponse,
   DraftValidateResponse,
+  EvaluationRunResponse,
+  EvaluationRunsResponse,
   OpenResponse,
   SaveResponse,
+  TraceOverviewResponse,
+  TraceViewResponse,
 } from "./types";
 
 const API_BASE =
@@ -192,6 +196,32 @@ export const api = {
     post<DraftPreviewResponse>(
       "/workspaces/drafts/preview",
       { path, files, sample },
+      signal,
+    ),
+
+  /* Operational inspection (ADR 0003): read-only views over the
+   * workspace's recorded runtime. All five are POSTs carrying
+   * `{path}` plus the lookup key; none mutate state. */
+  traceOverview: (path: string, signal?: AbortSignal) =>
+    post<TraceOverviewResponse>("/workspaces/trace", { path }, signal),
+  traceSubject: (path: string, subject: string, signal?: AbortSignal) =>
+    post<TraceViewResponse>(
+      "/workspaces/trace/subject",
+      { path, subject },
+      signal,
+    ),
+  traceRun: (path: string, runId: string, signal?: AbortSignal) =>
+    post<TraceViewResponse>(
+      "/workspaces/trace/run",
+      { path, run_id: runId },
+      signal,
+    ),
+  evaluationRuns: (path: string, signal?: AbortSignal) =>
+    post<EvaluationRunsResponse>("/workspaces/evaluations", { path }, signal),
+  evaluationRun: (path: string, runId: string, signal?: AbortSignal) =>
+    post<EvaluationRunResponse>(
+      "/workspaces/evaluations/run",
+      { path, run_id: runId },
       signal,
     ),
 };

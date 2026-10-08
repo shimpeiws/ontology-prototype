@@ -645,3 +645,197 @@ code {
 .preview-observation ul {
   margin: 0.25rem 0;
 }
+
+/* Operational inspection views (#62): status tones and nature labels.
+ * The tone mapping lives in components/StatusBadge.tsx — these classes
+ * must keep `not_met`/`unverified` visually distinct from success and
+ * `unavailable` distinct from `passed`. */
+.status-badge.status-ok {
+  color: #1a7f37;
+  border-color: #1a7f37;
+}
+
+.status-badge.status-bad {
+  color: #b3261e;
+  border-color: #b3261e;
+  background: light-dark(rgba(179, 38, 30, 0.08), rgba(179, 38, 30, 0.2));
+}
+
+.status-badge.status-warn {
+  color: #9a6700;
+  border-color: #9a6700;
+}
+
+.status-badge.status-unknown {
+  /* "cannot decide" — dashed border separates it from real verdicts. */
+  color: #57606a;
+  border-style: dashed;
+}
+
+.status-badge.status-neutral {
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* Nature labels (docs/trace.md): one hue per voice of the loop. */
+.nature-badge {
+  font-weight: 400;
+}
+
+.nature-badge.nature-observed {
+  color: #57606a;
+}
+
+.nature-badge.nature-derived {
+  color: #0969da;
+}
+
+.nature-badge.nature-ai {
+  color: #8250df;
+}
+
+.nature-badge.nature-human {
+  color: #1a7f37;
+}
+
+.nature-badge.nature-writeback {
+  color: #9a6700;
+}
+
+.nature-badge.nature-evaluated {
+  color: #cf7224;
+}
+
+.nature-badge.nature-unknown {
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* Trace page */
+.trace-lookup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 2rem;
+  margin-bottom: 1rem;
+}
+
+.trace-stage {
+  border: 1px solid light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18));
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.trace-stage > h3 {
+  margin-top: 0.25rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.trace-list,
+.run-list {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+.trace-list ul {
+  margin: 0.15rem 0;
+}
+
+.journal-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.journal-event-failed {
+  border-left: 3px solid #b3261e;
+  padding-left: 0.5rem;
+}
+
+.journal-data {
+  font-size: 0.8em;
+  margin: 0.15rem 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  opacity: 0.85;
+}
+
+.link-unresolved code {
+  text-decoration: underline dotted;
+}
+
+.id-chip {
+  margin-right: 0.4rem;
+}
+
+.status-count {
+  white-space: nowrap;
+}
+
+.record-details .record-json {
+  margin: 0.25rem 0;
+}
+
+.record-json pre {
+  font-size: 0.8em;
+  overflow-x: auto;
+  max-height: 20rem;
+}
+
+/* Evaluation reports */
+.cohorts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.cohort {
+  flex: 1 1 22rem;
+  border: 1px solid light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18));
+  border-radius: 6px;
+  padding: 0.5rem 1rem 0.75rem;
+}
+
+.report-table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+  font-size: 0.9em;
+}
+
+.report-table caption {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.85em;
+  opacity: 0.75;
+  padding-bottom: 0.15rem;
+}
+
+.report-table th,
+.report-table td {
+  border: 1px solid
+    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.report-guardrails {
+  padding-left: 1.25rem;
+}
+
+.report-note {
+  margin-top: 1rem;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid
+    light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.3));
+  font-size: 0.9em;
+  opacity: 0.85;
+}
+
+.report-selected {
+  font-weight: 600;
+}
