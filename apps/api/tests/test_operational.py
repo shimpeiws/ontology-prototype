@@ -1515,6 +1515,19 @@ class TestTicketSlaOperational:
         assert guardrail["evidence"]["after"]["reopens"] == 0
         assert report["overall"]["status"] == "success"
 
+        # The runs list carries the same record shape as the detail.
+        runs = post(
+            make_client(roots),
+            "evaluations",
+            path=str(ticket_walked.workspace),
+        )
+        assert runs == {
+            "api_version": "v1",
+            "workspace": str(ticket_walked.workspace),
+            "ok": True,
+            "evaluation_runs": [body["run"]],
+        }
+
     def test_trace_and_proposal_parity(
         self, ticket_walked, roots, capsys
     ) -> None:
@@ -1549,6 +1562,27 @@ class TestTicketSlaOperational:
         assert trace["executions"]
         assert trace["evaluations"]
         assert trace["unresolved"] == []
+
+        for anchor in (
+            ticket_walked.proposal_id,
+            ticket_walked.evaluation_run_id,
+        ):
+            expected = cli_json(
+                capsys, "trace", path, "--run", anchor, "--json"
+            )
+            run_view = post(
+                client, "trace/run", path=path, run_id=anchor
+            )
+            assert run_view == {"api_version": "v1", **expected}, anchor
+            assert run_view["trace"]["id"] == anchor
+
+        expected = cli_json(capsys, "proposals", path, "--json")
+        listing = post(client, "proposals", path=path)
+        assert listing == {"api_version": "v1", **expected}
+        proposal = listing["proposals"][0]
+        assert proposal["proposal_id"] == ticket_walked.proposal_id
+        assert proposal["status"] == "approved"
+        assert proposal["latest_decision"]["reviewer"] == "fde-hana"
 
         expected = cli_json(
             capsys,
