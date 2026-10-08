@@ -1,15 +1,17 @@
-"""Deterministic checks for the second workflow workspace (ticket-sla).
+"""Deterministic end-to-end checks for the second workflow (ticket-sla).
 
-Pins the documented state of examples/ticket-sla (#54, #55, #56): the
-four definitions validate, the committed snapshots ingest cleanly, the
-declaratively-selected projection and the stub diagnosis run, and
-evaluation reports the recorded reference outcome — including the
-declared reopen-rate guardrail, which needs no registered Python
-semantics.
+Mirrors test_loop_cli.py for v0.3 (#59): the committed
+examples/ticket-sla workspace runs the complete loop — check, ingest,
+declared-selection projection, stub-backed diagnosis, human decision,
+write-back, re-observation, evaluation, and trace — through the same
+core with definitions alone, asserting the documented reference outcome
+(docs/ticket-sla-walkthrough.md) including the declared reopen-rate
+guardrail, which needs no registered Python semantics.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 from pathlib import Path
@@ -55,7 +57,13 @@ def run_json(capsys, args: list[str]) -> dict:
     return json.loads(out)
 
 
-def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
+def proposal_id(workspace: Path, capsys) -> str:
+    payload = run_json(capsys, ["proposals", str(workspace), "--json"])
+    assert len(payload["proposals"]) == 1
+    return payload["proposals"][0]["proposal_id"]
+
+
+def test_ticket_sla_complete_loop(tmp_path, capsys) -> None:
     workspace = copy_example(tmp_path)
     snapshots = copy_snapshots(tmp_path)
 
@@ -122,6 +130,47 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     )
     assert diagnosis["ok"] is True
     assert diagnosis["candidate_count"] == 1
+    pid = proposal_id(workspace, capsys)
+
+    # Execution is refused before a human decision.
+    assert main(["execute", str(workspace), pid]) != 0
+    assert "refused" in capsys.readouterr().out
+
+    # Explicit human approval, then write-back with a receipt. The stub
+    # proposal fills SendReminder's target from the candidate's declared
+    # assignee ref (Agent "akira") and related_entity from the subject.
+    assert (
+        main(
+            [
+                "decide",
+                str(workspace),
+                pid,
+                "--approve",
+                "--reviewer",
+                "fde-sato",
+                "--reason",
+                "demo approval",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert main(["execute", str(workspace), pid]) == 0
+    assert "succeeded" in capsys.readouterr().out
+
+    reminders = workspace / ".ontology" / "reminders.csv"
+    with reminders.open("r", newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["proposal_id"] == pid
+    assert rows[0]["target"] == "akira"
+    assert rows[0]["related_entity"] == "T-C00"
+
+    # Repeating the write-back replays the receipt without duplicating.
+    assert main(["execute", str(workspace), pid]) == 0
+    assert "already executed" in capsys.readouterr().out
+    with reminders.open("r", newline="", encoding="utf-8") as f:
+        assert len(list(csv.DictReader(f))) == 1
 
     followup = run_json(
         capsys,
@@ -226,6 +275,27 @@ def test_ticket_sla_check_ingest_evaluate(tmp_path, capsys) -> None:
     assert report["overall"]["status"] == "success"
     pending = {p["subject_id"] for p in report["cohorts"]["after"]["pending"]}
     assert pending == {"T-C05"}
+
+    # The trace links every stage for one subject and exports cleanly.
+    subject = run_json(
+        capsys, ["trace", str(workspace), "--subject", "Ticket/T-C00", "--json"]
+    )["trace"]
+    assert subject["observations"]
+    assert subject["facts"]
+    assert subject["proposals"][0]["proposal_id"] == pid
+    assert subject["decisions"]
+    assert subject["executions"]
+    assert subject["evaluations"]
+    assert subject["unresolved"] == []
+
+    export = tmp_path / "trace-export.json"
+    assert main(["trace", str(workspace), "--export", str(export)]) == 0
+    capsys.readouterr()
+    bundle = json.loads(export.read_text(encoding="utf-8"))
+    assert bundle["format"] == "ontology-trace"
+    assert bundle["unresolved"] == []
+    assert len(bundle["proposals"]) >= 1
+    assert len(bundle["evaluation_runs"]) >= 1
 
 
 def test_ticket_sla_resolutions_source(tmp_path, capsys) -> None:

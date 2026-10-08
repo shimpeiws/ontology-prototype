@@ -96,7 +96,7 @@ def test_suite_passes_on_committed_fixtures(tmp_path: Path) -> None:
     assert report.eval_version == EVAL_VERSION
     # The pinned literal, not the re-exported symbol — a prompt-version
     # bump is a deliberate contract change and must fail this test.
-    assert report.prompt_version == "diagnosis.v1"
+    assert report.prompt_version == "diagnosis.v2"
     assert report.within_budget
     assert report.provider_requests == len(SCENARIOS)
     assert report.passed, [

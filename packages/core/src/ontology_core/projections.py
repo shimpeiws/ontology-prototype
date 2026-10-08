@@ -57,7 +57,7 @@ class ProjectionCandidate:
     # as_of — see ``evidence["entity_updated_at"]`` for its stamp.
     properties: dict[str, Any]
     evidence: dict[str, Any]
-    # Declared type of each property ("ref:Person", "string", ...) so
+    # Declared type of each property ("ref:<Entity>", "string", ...) so
     # consumers can match refs without re-reading the domain definition.
     property_types: dict[str, str] = field(default_factory=dict)
 
@@ -262,8 +262,8 @@ def _select_candidates(
     for subject_id in store.subject_ids_with_event(anchor, spec.subject):
         facts = store.events_for_subject(spec.subject, subject_id)
         starts = [f for f in facts if f.event == anchor]
-        # Only absent events that had occurred by as_of exclude — an
-        # invoice issued later does not change what was true at as_of.
+        # Only absent events that had occurred by as_of exclude — one
+        # occurring later does not change what was true at as_of.
         ends = [
             f
             for f in facts

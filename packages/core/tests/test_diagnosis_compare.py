@@ -91,7 +91,7 @@ def test_run_comparison_shared_input_and_artifact(tmp_path: Path) -> None:
     assert payload["input_identical"] is True
     assert payload["input_digest"] == report.input_digest
     assert payload["eval_version"] == report.eval_version
-    assert payload["prompt_version"] == "diagnosis.v1"
+    assert payload["prompt_version"] == "diagnosis.v2"
     assert {s["model"] for s in payload["subjects"]} == {
         "eval/model-a",
         "eval/model-b",

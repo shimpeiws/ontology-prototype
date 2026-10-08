@@ -23,8 +23,10 @@ jobs:
           pip install -e "packages/core[test]" -e "apps/cli[test]" -e "apps/api[test]"
       - name: Run tests
         run: python -m pytest -q
-      - name: Check reference workspace through the CLI
-        run: ontology check examples/job-invoicing
+      - name: Check reference workspaces through the CLI
+        run: |
+          ontology check examples/job-invoicing
+          ontology check examples/ticket-sla
       - name: API opens the reference workspace under a configured root
         run: |
           python - <<'PY'

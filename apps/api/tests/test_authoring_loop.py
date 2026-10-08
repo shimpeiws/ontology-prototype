@@ -16,6 +16,7 @@ from ontology_api import ApiConfig, create_app
 from ontology_cli.main import main as cli_main
 
 DEMO_DATA = apisupport.REPO_ROOT / "examples" / "job-invoicing" / "data"
+TICKET_SLA_EXAMPLE = apisupport.REPO_ROOT / "examples" / "ticket-sla"
 
 SAMPLE = (
     "id,status,assignee,completed_at,invoiced_at\n"
@@ -171,6 +172,119 @@ def test_saved_bundle_runs_operational_loop(tmp_path, capsys, roots, workspace) 
     assert report["cohorts"]["baseline"]["aggregate"] == 9.0
     assert report["cohorts"]["after"]["aggregate"] == 3.0
     assert report["target"]["status"] == "attained"
+
+
+def apply_ticket_sla_ui_edits(files: dict[str, str]) -> dict[str, str]:
+    """The same surgical-edit fidelity as `apply_ui_edits`, applied to the
+    second workflow's definitions (#59)."""
+
+    def replace(name: str, old: str, new: str) -> None:
+        assert old in files[name], f"{old!r} not found in {name}"
+        files[name] = files[name].replace(old, new, 1)
+
+    replace(
+        "domain.yaml",
+        "          description: Agent responsible for the ticket.\n",
+        "          description: Agent responsible for the ticket.\n"
+        "        priority:\n          type: string\n",
+    )
+    replace(
+        "mapping.yaml",
+        "description: Maps tickets.csv and resolutions.csv rows to canonical entities and business events.",
+        "description: Maps tickets.csv and resolutions.csv rows to canonical entities and business events (edited in UI).",
+    )
+    replace(
+        "evaluation.yaml",
+        "description: Strict target; a median of exactly 4 hours is a miss.",
+        "description: Strict target; a median of exactly 4 hours is a miss. (edited in UI)",
+    )
+    replace(
+        "agent.yaml",
+        "goal: Identify likely causes of first-response delay and suggest an intervention.",
+        "goal: Identify likely causes of first-response delay and suggest an intervention. (edited in UI)",
+    )
+    return files
+
+
+def test_ticket_sla_ui_saved_bundle_loads_in_cli(tmp_path, capsys, roots) -> None:
+    """Issue #59: the second workflow's definitions, authored through the
+    UI's save path, load in the CLI with diagnostics identical to the
+    committed example workspace."""
+    workspace = apisupport.copy_example(
+        roots, name="ticket-sla-ws", example="ticket-sla"
+    )
+    client = make_client(roots)
+
+    opened = client.post(
+        "/api/v1/workspaces/open", json={"path": str(workspace)}
+    ).json()
+    assert opened["valid"] is True
+    base_digest = opened["workspace"]["digest"]
+
+    draft = apply_ticket_sla_ui_edits(apisupport.workspace_texts(workspace))
+    validated = client.post(
+        "/api/v1/workspaces/drafts/validate",
+        json={"path": str(workspace), "files": draft},
+    ).json()
+    assert validated["valid"] is True, validated["diagnostics"]
+
+    saved = client.post(
+        "/api/v1/workspaces/save",
+        json={
+            "path": str(workspace),
+            "base_digest": base_digest,
+            "files": draft,
+        },
+    ).json()
+    assert saved["outcome"] == "saved", saved["diagnostics"]
+    for name, text in draft.items():
+        assert (workspace / name).read_text() == text
+
+    # The CLI reports the same diagnostics for the UI-saved bundle as for
+    # the committed workspace.
+    pristine = json.loads(
+        cli(capsys, "check", str(TICKET_SLA_EXAMPLE), "--json")
+    )
+    checked = json.loads(cli(capsys, "check", str(workspace), "--json"))
+    assert checked["valid"] is True
+    assert checked["diagnostics"] == pristine["diagnostics"]
+
+    # The parity claim is not vacuously [] == []: a draft carrying a real
+    # warning produces diagnostics identical between the API's draft
+    # validation and the CLI's check of the saved bundle. Dropping
+    # 'action_proposals' from the deliverables leaves declared actions
+    # unreachable — a warning, not an error, so the save still succeeds.
+    warn_draft = dict(draft)
+    warn_draft["agent.yaml"] = draft["agent.yaml"].replace(
+        "      - action_proposals\n", ""
+    )
+    assert warn_draft["agent.yaml"] != draft["agent.yaml"]
+    warn_validated = client.post(
+        "/api/v1/workspaces/drafts/validate",
+        json={"path": str(workspace), "files": warn_draft},
+    ).json()
+    assert warn_validated["valid"] is True
+    assert any(
+        d["code"] == "AGENT.ACTIONS_UNREACHABLE"
+        for d in warn_validated["diagnostics"]
+    )
+
+    reopened = client.post(
+        "/api/v1/workspaces/open", json={"path": str(workspace)}
+    ).json()
+    saved_warn = client.post(
+        "/api/v1/workspaces/save",
+        json={
+            "path": str(workspace),
+            "base_digest": reopened["workspace"]["digest"],
+            "files": warn_draft,
+        },
+    ).json()
+    assert saved_warn["outcome"] == "saved", saved_warn["diagnostics"]
+
+    warn_checked = json.loads(cli(capsys, "check", str(workspace), "--json"))
+    assert warn_checked["valid"] is True
+    assert warn_checked["diagnostics"] == warn_validated["diagnostics"]
 
 
 def test_contract_exposes_no_action_authority(roots) -> None:

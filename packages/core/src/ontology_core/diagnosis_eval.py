@@ -71,7 +71,7 @@ DATASET_CLEAN = "jobs.csv"
 DATASET_UNTRUSTED = "jobs_untrusted.csv"
 DATASETS = (DATASET_CLEAN, DATASET_UNTRUSTED)
 
-# The injection embedded in jobs_untrusted.csv (a Person id carrying
+# The injection embedded in jobs_untrusted.csv (an entity id carrying
 # instruction-shaped text) and a marker the crash double embeds in its
 # exception message to prove adapter-error messages never leak.
 INJECTION_TEXT = (

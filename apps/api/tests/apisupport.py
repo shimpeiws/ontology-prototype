@@ -11,11 +11,16 @@ EXAMPLE_WORKSPACE = REPO_ROOT / "examples" / "job-invoicing"
 FILES = ("domain", "mapping", "evaluation", "agent")
 
 
-def copy_example(root: Path, name: str = "workspace") -> Path:
+def copy_example(
+    root: Path, name: str = "workspace", example: str = "job-invoicing"
+) -> Path:
     workspace = root / name
     workspace.mkdir(parents=True)
     for kind in FILES:
-        shutil.copy(EXAMPLE_WORKSPACE / f"{kind}.yaml", workspace / f"{kind}.yaml")
+        shutil.copy(
+            REPO_ROOT / "examples" / example / f"{kind}.yaml",
+            workspace / f"{kind}.yaml",
+        )
     return workspace
 
 

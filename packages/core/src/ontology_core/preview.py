@@ -18,7 +18,7 @@ The differences from ingest are the point of the type:
   observation ids are derived deterministically from the input, mapping, and
   domain digests plus the selected source name — a preview result states
   exactly which input, which definitions, and which source produced it.
-  Resolution consults the domain (required properties, event-time policy),
+  Binding resolution consults the domain (required properties, event-time policy),
   so the domain is part of preview identity.
 
 Never raises on bad input: encoding errors, parse failures, and malformed
@@ -121,7 +121,7 @@ def preview_snapshot(
     result.source = selected.name
     result.format = selected.format
     result.mapping_digest = _mapping_digest(workspace)
-    # Diagnostics name the sample like a snapshot file: "jobs.csv".
+    # Diagnostics name the sample like a snapshot file: "<source>.csv".
     label = f"{selected.name}.{selected.format}"
 
     if observed_at is None:

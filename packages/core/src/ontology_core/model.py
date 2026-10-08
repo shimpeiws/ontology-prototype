@@ -238,10 +238,10 @@ class MetricSpec:
     def evidence_nouns(self) -> tuple[str, str]:
         """The report nouns for the metric's denominator and numerator.
 
-        The denominator names the counted entities — ``invoices`` for
-        ``Invoice``. The numerator names the predicate-true count: the
-        declared ``noun``, else ``"<flag>s"`` for a flag predicate or
-        ``"matched"`` for a ``where`` predicate.
+        The denominator names the counted entities — the entity name
+        lowercased with an ``s`` appended. The numerator names the
+        predicate-true count: the declared ``noun``, else ``"<flag>s"``
+        for a flag predicate or ``"matched"`` for a ``where`` predicate.
         """
         denominator = f"{self.entity.lower()}s"
         numerator = self.noun or (

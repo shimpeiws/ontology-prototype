@@ -92,7 +92,7 @@ def test_diagnose_json_and_inspect(tmp_path, capsys) -> None:
     record = json.loads(capsys.readouterr().out)["run"]
     assert code == 0
     assert record["provider"] == "stub"
-    assert record["prompt_version"] == "diagnosis.v1"
+    assert record["prompt_version"] == "diagnosis.v2"
     assert record["proposals"][0]["params"]["related_entity"] == "101"
 
 
