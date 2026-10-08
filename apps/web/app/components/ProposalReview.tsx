@@ -207,7 +207,13 @@ export function ProposalReviewCard({
         {proposal.executions.length ? (
           <ul className="trace-list">
             {proposal.executions.map((attempt) => (
-              <li key={attempt.execution_id}>
+              // Each adapter-reaching attempt writes an `attempting`
+              // intent row plus an outcome row — both share
+              // `execution_id`, so the key needs attempt and status to
+              // stay unique across the pair.
+              <li
+                key={`${attempt.execution_id}-${attempt.attempt}-${attempt.status}`}
+              >
                 <code>{attempt.execution_id}</code> —{" "}
                 <code>{attempt.action}</code> via {attempt.adapter}{" "}
                 attempt {attempt.attempt}{" "}

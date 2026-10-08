@@ -625,15 +625,24 @@ class SqliteCanonicalStore:
             conn.commit()
 
     def close(self) -> None:
-        if self._conn is not None:
+        conn = self._conn
+        if conn is None:
+            return
+        try:
             if not self.readonly:
+                if conn.in_transaction:
+                    # close() drops uncommitted work either way; roll
+                    # back now so the pending write lock cannot fail the
+                    # checkpoint and strand the connection below.
+                    conn.rollback()
                 # Fold committed WAL frames back into the database on the
                 # way out (ADR 0003). PASSIVE never waits on readers — it
                 # reports contention instead of raising — so the wal is
                 # truncated whenever this writer is the only thing left,
                 # and left alone otherwise.
-                self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-            self._conn.close()
+                conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        finally:
+            conn.close()
             self._conn = None
             self._entity_cols = None
 

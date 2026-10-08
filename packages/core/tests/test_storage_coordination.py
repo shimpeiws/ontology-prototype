@@ -286,3 +286,26 @@ def test_writable_close_checkpoints_the_wal(tmp_path: Path) -> None:
         store.close()
     wal = runtime / f"{CANON_DB}-wal"
     assert not wal.exists() or wal.stat().st_size == 0
+
+
+def test_close_with_open_transaction_still_closes(tmp_path: Path) -> None:
+    """An unfinished write transaction must not strand the store: the
+    checkpoint would fail on the held write lock, so close() rolls the
+    pending work back first and still closes the connection."""
+    workspace = make_ws(tmp_path)
+    runtime = Path(workspace.path) / RUNTIME_DIR
+    store = SqliteCanonicalStore(runtime)
+    store._connect().execute(
+        "INSERT INTO entities (entity_type, entity_id, properties,"
+        " first_observation_id, last_observation_id, last_ingest_id,"
+        " updated_at) VALUES ('k', 'e1', '{}', 'o1', 'o1', '', 't')"
+    )
+    store.close()
+    assert store._conn is None
+
+    # The uncommitted insert was rolled back, never persisted.
+    check = SqliteCanonicalStore(runtime, readonly=True)
+    try:
+        assert check.entity_state("k", "e1") is None
+    finally:
+        check.close()

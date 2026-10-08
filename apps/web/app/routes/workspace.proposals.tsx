@@ -10,7 +10,7 @@
  * renders recorded attempts as status, it cannot start one.
  */
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { api, ApiError } from "../lib/api";
 import type { ProposalsResponse } from "../lib/types";
@@ -39,20 +39,37 @@ export default function ProposalsPage() {
 
   const [list, setList] = useState<ListState>({ status: "loading" });
   const [listSeq, setListSeq] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const [reviewer, setReviewer] = useState("");
+  // The workspace path the current list was fetched under. A same-path
+  // refetch (manual refresh, a recorded decision) keeps the rendered
+  // queue on screen; only a workspace switch returns to the spinner.
+  const listPath = useRef<string | null>(null);
 
   useEffect(() => {
     if (!path) return;
     const controller = new AbortController();
-    setList({ status: "loading" });
+    const refetch = listPath.current === path;
+    listPath.current = path;
+    if (refetch) {
+      setRefreshing(true);
+    } else {
+      setList({ status: "loading" });
+    }
     api
       .proposals(path, controller.signal)
       .then((response) => setList({ status: "done", response }))
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
         setList({ status: "failed", error: toError(err) });
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setRefreshing(false);
       });
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      setRefreshing(false);
+    };
   }, [path, listSeq]);
 
   const refresh = () => setListSeq((n) => n + 1);
@@ -82,6 +99,20 @@ export default function ProposalsPage() {
         <p className="hint">
           Self-asserted in this local single-user setup (ADR 0003) —
           recorded verbatim on every decision you make here.
+        </p>
+      </div>
+
+      <div className="add-row">
+        <button
+          type="button"
+          disabled={!path || refreshing}
+          onClick={refresh}
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
+        <p className="hint">
+          This page does not watch the store — refresh to pick up
+          proposals a CLI diagnosis run persisted since the page loaded.
         </p>
       </div>
 

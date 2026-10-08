@@ -11,7 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
-import type { DecisionResponse } from "../lib/types";
+import type { DecisionResponse, ProposalsResponse } from "../lib/types";
 import ProposalsPage from "../routes/workspace.proposals";
 import { WorkspaceProvider } from "../workspace/context";
 import {
@@ -282,6 +282,54 @@ describe("proposals page", () => {
     proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_EMPTY);
     renderPage();
     await screen.findByText(/No persisted proposals/);
+  });
+
+  it("refetches the queue on Refresh and renders newly persisted proposals", async () => {
+    // A proposal persisted by `ontology diagnose` after page load only
+    // shows up once the reviewer asks for fresh state.
+    proposals
+      .mockResolvedValueOnce(SYNTHETIC_PROPOSALS_EMPTY)
+      .mockResolvedValueOnce(SYNTHETIC_PROPOSALS_RESPONSE);
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText(/No persisted proposals/);
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => expect(proposals).toHaveBeenCalledTimes(2));
+    await screen.findByText("dgx-20261005T120600000000Z-cccc2222-p0");
+  });
+
+  it("keeps the rendered queue on screen while a refresh is in flight", async () => {
+    let resolveSecond!: (r: ProposalsResponse) => void;
+    proposals
+      .mockResolvedValueOnce(SYNTHETIC_PROPOSALS_RESPONSE)
+      .mockReturnValueOnce(
+        new Promise<ProposalsResponse>((r) => {
+          resolveSecond = r;
+        }),
+      );
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText("dgx-20261005T120600000000Z-cccc2222-p0");
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    // A same-page refetch never flashes the spinner over the queue the
+    // reviewer is looking at; the button reports the in-flight refresh.
+    expect(
+      screen.getByText("dgx-20261005T120600000000Z-cccc2222-p0"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Refreshing…" }),
+    ).toBeDisabled();
+
+    resolveSecond(SYNTHETIC_PROPOSALS_AFTER_APPROVE);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Refresh" }),
+      ).toBeEnabled(),
+    );
   });
 
   it("locks both buttons while a decision is in flight", async () => {
