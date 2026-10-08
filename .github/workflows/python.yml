@@ -1,74 +1,38 @@
-name: CI
+name: Python
 
+# Billed minutes are rounded up per job, so everything Python runs in one job.
+# PRs test the floor version only; the weekly schedule covers the full matrix.
 on:
-  push:
-    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "apps/web/**"
+      - ".github/workflows/web.yml"
+      - "docs/**"
+  schedule:
+    - cron: "0 18 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ${{ fromJSON(github.event_name == 'pull_request' && '["3.11"]' || '["3.11", "3.12", "3.13"]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install packages
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e "packages/core[test]" -e "apps/cli[test]" -e "apps/api[test]"
-      - name: Run tests
-        run: python -m pytest -q
-      - name: Check reference workspaces through the CLI
-        run: |
-          ontology check examples/job-invoicing
-          ontology check examples/ticket-sla
-      - name: API opens the reference workspace under a configured root
-        run: |
-          python - <<'PY'
-          from fastapi.testclient import TestClient
-          from ontology_api import ApiConfig, create_app
-          app = create_app(ApiConfig(workspace_roots=("examples",)))
-          client = TestClient(app)
-          response = client.post(
-              "/api/v1/workspaces/open", json={"path": "job-invoicing"}
-          )
-          assert response.status_code == 200, response.text
-          assert response.json()["valid"] is True, response.json()
-          PY
-
-  web:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Test
-        run: npm test
-      - name: Build
-        run: npm run build
-
-  core-isolation:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: "**/pyproject.toml"
       - name: Install core only
         run: |
           python -m pip install --upgrade pip
@@ -92,4 +56,26 @@ jobs:
           result = load_workspace("examples/job-invoicing")
           assert result.ok, [d.format() for d in result.diagnostics]
           print("workspace valid:", result.workspace.domain.name)
+          PY
+      - name: Install packages
+        run: |
+          pip install -e "packages/core[test]" -e "apps/cli[test]" -e "apps/api[test]"
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Check reference workspaces through the CLI
+        run: |
+          ontology check examples/job-invoicing
+          ontology check examples/ticket-sla
+      - name: API opens the reference workspace under a configured root
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from ontology_api import ApiConfig, create_app
+          app = create_app(ApiConfig(workspace_roots=("examples",)))
+          client = TestClient(app)
+          response = client.post(
+              "/api/v1/workspaces/open", json={"path": "job-invoicing"}
+          )
+          assert response.status_code == 200, response.text
+          assert response.json()["valid"] is True, response.json()
           PY
