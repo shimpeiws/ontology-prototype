@@ -22,6 +22,9 @@ from ontology_api import ApiConfig, create_app
 from ontology_cli.main import EXIT_OK, main as cli_main
 
 DEMO_DATA = apisupport.REPO_ROOT / "examples" / "job-invoicing" / "data"
+TICKET_SLA_DATA = (
+    apisupport.REPO_ROOT / "examples" / "ticket-sla" / "data"
+)
 
 
 def make_client(*roots: Path) -> TestClient:
@@ -1272,3 +1275,327 @@ class TestDecide:
             ).fetchone()[0] == 0
         finally:
             conn.close()
+
+    def test_reject_then_approve_recovers_through_new_decision(
+        self, proposed, roots, capsys
+    ) -> None:
+        """#64 acceptance: a Web-recorded rejection keeps CLI execution
+        refused; an explicit later approval — a new append-only
+        decision, not an edit of the rejection — unlocks it, and both
+        rows stay inspectable."""
+        client = make_client(roots)
+        self._decide(
+            client,
+            proposed.workspace,
+            proposal_id=proposed.proposal_id,
+            decision="rejected",
+            reviewer="fde-hana",
+        )
+        refused = cli_payload(
+            capsys,
+            "execute",
+            str(proposed.workspace),
+            proposed.proposal_id,
+            "--json",
+        )
+        assert any(
+            d["code"] == "DECISION.NOT_APPROVED"
+            for d in refused["diagnostics"]
+        )
+
+        self._decide(
+            client,
+            proposed.workspace,
+            proposal_id=proposed.proposal_id,
+            decision="approved",
+            reviewer="fde-sato",
+        )
+        cli(capsys, "execute", str(proposed.workspace),
+            proposed.proposal_id)
+
+        proposal = post(
+            client,
+            "proposals/show",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )["proposal"]
+        assert [d["decision"] for d in proposal["decisions"]] == [
+            "rejected",
+            "approved",
+        ]
+        assert proposal["status"] == "approved"
+
+    def test_cross_surface_latest_recorded_wins(
+        self, proposed, roots, capsys
+    ) -> None:
+        """ADR 0003: surfaces append to one decisions log — a CLI
+        rejection recorded after an API approval is the decision of
+        record, so execution is refused and both rows remain."""
+        client = make_client(roots)
+        self._decide(
+            client,
+            proposed.workspace,
+            proposal_id=proposed.proposal_id,
+        )
+        cli(
+            capsys,
+            "decide",
+            str(proposed.workspace),
+            proposed.proposal_id,
+            "--reject",
+            "--reviewer",
+            "fde-cli",
+        )
+
+        proposal = post(
+            client,
+            "proposals/show",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )["proposal"]
+        assert [d["decision"] for d in proposal["decisions"]] == [
+            "approved",
+            "rejected",
+        ]
+        assert proposal["status"] == "rejected"
+        assert proposal["latest_decision"]["reviewer"] == "fde-cli"
+
+        refused = cli_payload(
+            capsys,
+            "execute",
+            str(proposed.workspace),
+            proposed.proposal_id,
+            "--json",
+        )
+        assert any(
+            d["code"] == "DECISION.NOT_APPROVED"
+            for d in refused["diagnostics"]
+        )
+
+
+TICKET_SLA_AS_OF = "2026-10-24T00:00:00Z"
+TICKET_SLA_BOUNDARY = "2026-10-20T00:00:00Z"
+TICKET_SLA_EVAL_AS_OF = "2026-10-30T00:00:00Z"
+
+
+@pytest.fixture
+def ticket_walked(tmp_path, capsys, roots) -> SimpleNamespace:
+    """The ticket-sla walkthrough state (#64): the second workflow
+    driven through the same stages as ``walked`` — ingest over both
+    declared sources (tickets, resolutions), declared-selection
+    projection, stub diagnosis — with the decision recorded through the
+    API and the write-back through the CLI, the split the Web console
+    produces in use."""
+    workspace = apisupport.copy_example(
+        roots, name="ticket-sla", example="ticket-sla"
+    )
+    for name in ("tickets-baseline", "tickets-current"):
+        cli(
+            capsys,
+            "ingest",
+            str(workspace),
+            str(TICKET_SLA_DATA / f"{name}.csv"),
+            "--source",
+            "tickets",
+        )
+    cli(
+        capsys,
+        "ingest",
+        str(workspace),
+        str(TICKET_SLA_DATA / "resolutions-baseline.csv"),
+        "--source",
+        "resolutions",
+    )
+    cli(
+        capsys,
+        "project",
+        str(workspace),
+        "--as-of",
+        TICKET_SLA_AS_OF,
+        "--json",
+    )
+    diagnosis = cli_json(
+        capsys,
+        "diagnose",
+        str(workspace),
+        "--as-of",
+        TICKET_SLA_AS_OF,
+        "--provider",
+        "stub",
+        "--json",
+    )
+    pid = cli_json(capsys, "proposals", str(workspace), "--json")[
+        "proposals"
+    ][0]["proposal_id"]
+
+    # The console half of the loop: the decision lands over HTTP on the
+    # same canon.db the CLI executor reads.
+    response = make_client(roots).post(
+        "/api/v1/workspaces/proposals/decide",
+        json={
+            "path": str(workspace),
+            "proposal_id": pid,
+            "decision": "approved",
+            "reviewer": "fde-hana",
+            "reason": "overdue first response",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["ok"] is True
+    cli(capsys, "execute", str(workspace), pid)
+
+    cli(
+        capsys,
+        "ingest",
+        str(workspace),
+        str(TICKET_SLA_DATA / "tickets-followup.csv"),
+        "--source",
+        "tickets",
+    )
+    cli(
+        capsys,
+        "ingest",
+        str(workspace),
+        str(TICKET_SLA_DATA / "resolutions-followup.csv"),
+        "--source",
+        "resolutions",
+    )
+    evaluation = cli_json(
+        capsys,
+        "evaluate",
+        str(workspace),
+        "--boundary",
+        TICKET_SLA_BOUNDARY,
+        "--as-of",
+        TICKET_SLA_EVAL_AS_OF,
+        "--json",
+    )
+    return SimpleNamespace(
+        workspace=workspace,
+        proposal_id=pid,
+        diagnosis_run_id=diagnosis["run_id"],
+        evaluation_run_id=evaluation["run_id"],
+    )
+
+
+class TestTicketSlaOperational:
+    """Issue #64: the operational surface covers the second workflow —
+    the API serves the same trace/proposal/evaluation payloads as the
+    CLI for the ticket-sla fixture, and the verdict is the one the
+    fixture evidence computes (registered reopen-rate semantics landed
+    with #56, so the report is a real success, not unverified)."""
+
+    def test_evaluation_matches_cli_and_fixture_evidence(
+        self, ticket_walked, roots, capsys
+    ) -> None:
+        expected = cli_json(
+            capsys,
+            "evaluate",
+            str(ticket_walked.workspace),
+            "--run",
+            ticket_walked.evaluation_run_id,
+            "--json",
+        )
+        body = post(
+            make_client(roots),
+            "evaluations/run",
+            path=str(ticket_walked.workspace),
+            run_id=ticket_walked.evaluation_run_id,
+        )
+        assert body == {"api_version": "v1", **expected}
+
+        report = body["run"]["report"]
+        assert report["cohorts"]["baseline"]["aggregate"] == 26.0
+        assert report["cohorts"]["after"]["aggregate"] == 3.0
+        assert report["target"]["status"] == "attained"
+        guardrail = report["guardrails"][0]
+        assert guardrail["metric"] == "reopen_rate"
+        assert guardrail["status"] == "passed"
+        assert guardrail["evidence"]["baseline"]["reopens"] == 1
+        assert guardrail["evidence"]["after"]["reopens"] == 0
+        assert report["overall"]["status"] == "success"
+
+        # The runs list carries the same record shape as the detail.
+        runs = post(
+            make_client(roots),
+            "evaluations",
+            path=str(ticket_walked.workspace),
+        )
+        assert runs == {
+            "api_version": "v1",
+            "workspace": str(ticket_walked.workspace),
+            "ok": True,
+            "evaluation_runs": [body["run"]],
+        }
+
+    def test_trace_and_proposal_parity(
+        self, ticket_walked, roots, capsys
+    ) -> None:
+        client = make_client(roots)
+        path = str(ticket_walked.workspace)
+
+        expected = cli_json(capsys, "trace", path, "--json")
+        body = post(client, "trace", path=path)
+        assert body == {"api_version": "v1", **expected}
+        assert body["links"]["unresolved"] == 0
+        assert body["proposals"]["by_status"] == {"approved": 1}
+
+        expected = cli_json(
+            capsys,
+            "trace",
+            path,
+            "--subject",
+            "Ticket/T-C00",
+            "--json",
+        )
+        subject = post(
+            client, "trace/subject", path=path, subject="Ticket/T-C00"
+        )
+        assert subject == {"api_version": "v1", **expected}
+        trace = subject["trace"]
+        assert (
+            trace["proposals"][0]["proposal_id"]
+            == ticket_walked.proposal_id
+        )
+        # The API-recorded decision is visible to every surface.
+        assert trace["decisions"][0]["reviewer"] == "fde-hana"
+        assert trace["executions"]
+        assert trace["evaluations"]
+        assert trace["unresolved"] == []
+
+        for anchor in (
+            ticket_walked.proposal_id,
+            ticket_walked.evaluation_run_id,
+        ):
+            expected = cli_json(
+                capsys, "trace", path, "--run", anchor, "--json"
+            )
+            run_view = post(
+                client, "trace/run", path=path, run_id=anchor
+            )
+            assert run_view == {"api_version": "v1", **expected}, anchor
+            assert run_view["trace"]["id"] == anchor
+
+        expected = cli_json(capsys, "proposals", path, "--json")
+        listing = post(client, "proposals", path=path)
+        assert listing == {"api_version": "v1", **expected}
+        proposal = listing["proposals"][0]
+        assert proposal["proposal_id"] == ticket_walked.proposal_id
+        assert proposal["status"] == "approved"
+        assert proposal["latest_decision"]["reviewer"] == "fde-hana"
+
+        expected = cli_json(
+            capsys,
+            "proposals",
+            path,
+            "--show",
+            ticket_walked.proposal_id,
+            "--json",
+        )
+        detail = post(
+            client,
+            "proposals/show",
+            path=path,
+            proposal_id=ticket_walked.proposal_id,
+        )
+        assert detail == {"api_version": "v1", **expected}
