@@ -80,7 +80,7 @@ artifact's fields are documented in
 
 ## Output contract
 
-The prompt (`PROMPT_VERSION = "diagnosis.v1"`) carries the agent's goal, the
+The prompt (`PROMPT_VERSION = "diagnosis.v2"`) carries the agent's goal, the
 required deliverables, the permitted action schemas with a concrete example,
 and the candidates as JSON data. The model must answer with one JSON object:
 

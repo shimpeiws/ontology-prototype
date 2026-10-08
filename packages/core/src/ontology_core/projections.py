@@ -258,8 +258,8 @@ def _select_candidates(
     for subject_id in store.subject_ids_with_event(anchor, spec.subject):
         facts = store.events_for_subject(spec.subject, subject_id)
         starts = [f for f in facts if f.event == anchor]
-        # Only absent events that had occurred by as_of exclude — an
-        # invoice issued later does not change what was true at as_of.
+        # Only absent events that had occurred by as_of exclude — one
+        # occurring later does not change what was true at as_of.
         ends = [
             f
             for f in facts

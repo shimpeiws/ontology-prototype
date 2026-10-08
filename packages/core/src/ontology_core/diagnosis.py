@@ -45,7 +45,9 @@ from .trace import JsonlTraceSink, TraceSink
 
 # Version of the diagnosis prompt/task contract. Bump when the prompt
 # shape or the output contract changes so recorded runs stay comparable.
-PROMPT_VERSION = "diagnosis.v1"
+# v2: the rules now say "the subject it concerns" — workflow-neutral
+# wording for generality across domains (#59).
+PROMPT_VERSION = "diagnosis.v2"
 
 # A single provider call carries the whole candidate set, so cap it:
 # beyond this, a run would exceed model output limits and fail opaque.
@@ -433,7 +435,7 @@ def build_prompt(workspace: Workspace, candidates: list[dict[str, Any]]) -> str:
             "- Only propose actions listed under permitted_actions, with "
             "params matching each action's declared schema; a 'ref' param "
             "takes the referenced entity's id as a plain string value.",
-            "- Every action proposal must name the job it concerns via the "
+            "- Every action proposal must name the subject it concerns via the "
             "ref parameter declared for it (allowed subject ids: "
             + (", ".join(subject_ids) or "<none>")
             + ").",

@@ -72,9 +72,14 @@ def test_core_runtime_dependencies() -> None:
 
 def _declared_identifiers(workspace_dir: Path) -> set[str]:
     """Every name a workflow declares: the domain itself plus its
-    entities, events, projections, metrics, guardrails, and permitted
-    action names — the identifiers generality (#59) requires the core
-    to know nothing about."""
+    entities, events, projections, mapping sources, metrics, guardrails,
+    and permitted action names — the identifiers generality (#59)
+    requires the core to know nothing about.
+
+    Property names are deliberately excluded: they are per-row field
+    names (``status``, ``name``, ...) too generic to distinguish a
+    workflow coupling from ordinary vocabulary. Matching is
+    case-sensitive on the declared spelling."""
     identifiers: set[str] = set()
 
     def doc(name: str) -> dict:
@@ -86,6 +91,9 @@ def _declared_identifiers(workspace_dir: Path) -> set[str]:
     identifiers.add(domain["name"])
     for key in ("entities", "events", "projections"):
         identifiers.update(domain.get(key) or {})
+
+    mapping = doc("mapping.yaml")["mapping"]
+    identifiers.update(s["name"] for s in mapping.get("sources") or ())
 
     evaluation = doc("evaluation.yaml")["evaluation"]
     identifiers.update(evaluation.get("metrics") or {})
@@ -106,8 +114,9 @@ ALLOWED_IDENTIFIERS: dict[str, set[str]] = {
     "execution.py": {"SendReminder"},
     # diagnosis_eval.py is the #31 harness over the frozen job-invoicing
     # fixture workspace committed under eval_fixtures/; its scenario text
-    # (injection probe) names that fixture's action and domain.
-    "diagnosis_eval.py": {"SendReminder", "job-invoicing"},
+    # (injection probe) and dataset constants name that fixture's action,
+    # domain, and source files.
+    "diagnosis_eval.py": {"SendReminder", "job-invoicing", "jobs"},
 }
 
 # eval_fixtures/ is the frozen harness input itself (a committed

@@ -36,7 +36,7 @@ compared on.
 | --- | --- | --- |
 | harness/criteria version | `EVAL_VERSION = "diagnosis-eval.v1"` | `diagnosis_eval.py` |
 | workspace file schema | `schema_version: 1` on all four fixture files | `eval_fixtures/workspace/` |
-| prompt/task contract | `PROMPT_VERSION = "diagnosis.v1"` | `diagnosis.py` |
+| prompt/task contract | `PROMPT_VERSION = "diagnosis.v2"` | `diagnosis.py` |
 | output schema | the contract block rendered by `build_prompt` — required keys are the task's deliverables (`explanation`, `hypotheses`, `follow_up_questions`, `action_proposals`); see [diagnosis.md](diagnosis.md) | `eval_fixtures/workspace/agent.yaml` |
 | frozen clock | `EVAL_OBSERVED_AT = 2026-10-04T12:00:00Z`, `EVAL_AS_OF = 2026-10-05T00:00:00Z` | `diagnosis_eval.py` |
 

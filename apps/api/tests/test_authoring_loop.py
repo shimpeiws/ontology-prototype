@@ -249,6 +249,43 @@ def test_ticket_sla_ui_saved_bundle_loads_in_cli(tmp_path, capsys, roots) -> Non
     assert checked["valid"] is True
     assert checked["diagnostics"] == pristine["diagnostics"]
 
+    # The parity claim is not vacuously [] == []: a draft carrying a real
+    # warning produces diagnostics identical between the API's draft
+    # validation and the CLI's check of the saved bundle. Dropping
+    # 'action_proposals' from the deliverables leaves declared actions
+    # unreachable — a warning, not an error, so the save still succeeds.
+    warn_draft = dict(draft)
+    warn_draft["agent.yaml"] = draft["agent.yaml"].replace(
+        "      - action_proposals\n", ""
+    )
+    assert warn_draft["agent.yaml"] != draft["agent.yaml"]
+    warn_validated = client.post(
+        "/api/v1/workspaces/drafts/validate",
+        json={"path": str(workspace), "files": warn_draft},
+    ).json()
+    assert warn_validated["valid"] is True
+    assert any(
+        d["code"] == "AGENT.ACTIONS_UNREACHABLE"
+        for d in warn_validated["diagnostics"]
+    )
+
+    reopened = client.post(
+        "/api/v1/workspaces/open", json={"path": str(workspace)}
+    ).json()
+    saved_warn = client.post(
+        "/api/v1/workspaces/save",
+        json={
+            "path": str(workspace),
+            "base_digest": reopened["workspace"]["digest"],
+            "files": warn_draft,
+        },
+    ).json()
+    assert saved_warn["outcome"] == "saved", saved_warn["diagnostics"]
+
+    warn_checked = json.loads(cli(capsys, "check", str(workspace), "--json"))
+    assert warn_checked["valid"] is True
+    assert warn_checked["diagnostics"] == warn_validated["diagnostics"]
+
 
 def test_contract_exposes_no_action_authority(roots) -> None:
     """The API grants no approval or write-back capability."""

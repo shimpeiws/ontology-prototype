@@ -121,7 +121,7 @@ def preview_snapshot(
     result.source = selected.name
     result.format = selected.format
     result.mapping_digest = _mapping_digest(workspace)
-    # Diagnostics name the sample like a snapshot file: "jobs.csv".
+    # Diagnostics name the sample like a snapshot file: "<source>.csv".
     label = f"{selected.name}.{selected.format}"
 
     if observed_at is None:
