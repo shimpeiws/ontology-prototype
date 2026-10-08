@@ -152,12 +152,15 @@ proposal out of `proposed`.
 The CLI and the API share the same `canon.db`. The store runs in WAL
 journal mode with an explicit bounded `busy_timeout` (five seconds by
 default), so readers never block behind a writer and never see a partial
-transaction. A writer that cannot obtain the write lock within the bound
-fails with the stable `STORAGE.WRITE_BUSY` code — on the CLI a non-zero
-exit naming that code, on the API a `503` — instead of an untyped
-`database is locked`. Contention is transient: the same call succeeds
-once the holder commits (see
-[ADR 0003](adr/0003-api-operational-boundary.md)).
+transaction; writers fold their committed frames back with a passive
+checkpoint on close. A writer that cannot obtain the write lock within
+the bound fails with the stable `STORAGE.WRITE_BUSY` code — on the CLI a
+non-zero exit naming that code, on the API a `503` — instead of an
+untyped `database is locked`. Contention is transient: the same call
+succeeds once the holder commits (see
+[ADR 0003](adr/0003-api-operational-boundary.md)). Read-only opens may
+leave `canon.db-shm`/`-wal` sidecars in `.ontology/` after close; they
+are engine bookkeeping, not durable state.
 
 ## Trace
 

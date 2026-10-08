@@ -138,7 +138,7 @@ class DecideRequest(WorkspacePathRequest):
     proposal_id: str = Field(min_length=1, max_length=1024)
     decision: str = Field(min_length=1, max_length=1024)
     reviewer: str = Field(min_length=1, max_length=1024)
-    reason: str | None = None
+    reason: str | None = Field(default=None, max_length=4096)
 
 
 class WorkspaceRef(BaseModel):

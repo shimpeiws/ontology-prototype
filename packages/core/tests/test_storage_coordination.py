@@ -235,3 +235,54 @@ def test_transactions_stay_atomic_under_wal(tmp_path: Path) -> None:
         assert reader.decisions_for(view["proposal_id"]) == []
     finally:
         reader.close()
+
+
+def test_readonly_close_leaves_only_engine_sidecars(tmp_path: Path) -> None:
+    """A read-only open of a WAL database can leave ``canon.db-shm`` and
+    ``canon.db-wal`` behind after close — engine bookkeeping, not durable
+    state. The real contract is bounded: residue is limited to those two
+    sidecars and the committed content is unchanged."""
+    workspace, view = make_proposal(tmp_path)
+    runtime = Path(workspace.path) / RUNTIME_DIR
+    db = runtime / CANON_DB
+
+    def committed() -> str:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            return "\n".join(conn.iterdump())
+        finally:
+            conn.close()
+
+    before = committed()
+    reader = SqliteCanonicalStore(runtime, readonly=True)
+    try:
+        assert reader.proposal(view["proposal_id"]) is not None
+    finally:
+        reader.close()
+
+    sidecars = {
+        p.name
+        for p in runtime.iterdir()
+        if p.is_file() and p.name.startswith(f"{CANON_DB}-")
+    }
+    assert sidecars <= {f"{CANON_DB}-shm", f"{CANON_DB}-wal"}
+    assert committed() == before
+
+
+def test_writable_close_checkpoints_the_wal(tmp_path: Path) -> None:
+    """The writer's PASSIVE checkpoint on close folds its committed
+    frames back into canon.db so the wal does not grow across opens."""
+    workspace = make_ws(tmp_path)
+    runtime = Path(workspace.path) / RUNTIME_DIR
+    store = SqliteCanonicalStore(runtime)
+    try:
+        store._connect().execute(
+            "INSERT INTO entities (entity_type, entity_id, properties,"
+            " first_observation_id, last_observation_id, last_ingest_id,"
+            " updated_at) VALUES ('k', 'e1', '{}', 'o1', 'o1', '', 't')"
+        )
+        store._connect().commit()
+    finally:
+        store.close()
+    wal = runtime / f"{CANON_DB}-wal"
+    assert not wal.exists() or wal.stat().st_size == 0

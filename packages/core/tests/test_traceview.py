@@ -697,9 +697,9 @@ def test_assembly_does_not_mutate_runtime(tmp_path: Path) -> None:
             rel = str(path.relative_to(runtime))
             if path.name.startswith(f"{CANON_DB}-"):
                 # canon.db-shm/-wal are WAL engine bookkeeping — rebuilt
-                # on open and removed on last close, never durable
-                # state; committed content is what the canon.db dump
-                # already covers.
+                # on open, and a read-only close can leave them behind;
+                # they carry no durable state, so committed content is
+                # what the canon.db dump already covers.
                 continue
             entries[rel] = (
                 _canonical_dump(path) if path.name == CANON_DB else (

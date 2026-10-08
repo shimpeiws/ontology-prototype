@@ -132,10 +132,11 @@ def fingerprint(root: Path) -> dict[str, object]:
     """Runtime content for mutation checks.
 
     Under WAL (ADR 0003) the ``canon.db-shm``/``canon.db-wal`` sidecars
-    are engine bookkeeping — rebuilt on open and removed on last close,
-    never durable state — so they carry no fingerprint weight, and
-    canon.db compares by committed content rather than bytes (a
-    checkpoint moves bytes without changing content).
+    are engine bookkeeping — rebuilt on open, and a read-only close can
+    leave them behind, but they carry no durable state — so they carry
+    no fingerprint weight, and canon.db compares by committed content
+    rather than bytes (a checkpoint moves bytes without changing
+    content).
     """
     entries: dict[str, object] = {}
     for p in sorted(root.rglob("*")):
@@ -1218,3 +1219,56 @@ class TestDecide:
             assert (
                 response.json()["error"]["code"] == "API.MALFORMED_REQUEST"
             )
+
+    def test_missing_workspace(self, roots) -> None:
+        response = make_client(roots).post(
+            self.ROUTE,
+            json={
+                "path": str(roots / "nope"),
+                "proposal_id": "p",
+                "decision": "approved",
+                "reviewer": "r",
+            },
+        )
+        assert response.status_code == 404
+        assert (
+            response.json()["error"]["code"] == "API.WORKSPACE_NOT_FOUND"
+        )
+
+    def test_runtime_symlink_escape(
+        self, proposed, roots, tmp_path
+    ) -> None:
+        """The write endpoint refuses a planted symlink too — a decision
+        must never be written through an ``.ontology`` that escapes the
+        configured roots."""
+        runtime = proposed.workspace / ".ontology"
+        external = tmp_path / "outside-roots" / ".ontology"
+        external.parent.mkdir()
+        runtime.rename(external)
+        try:
+            runtime.symlink_to(external)
+        except OSError:
+            pytest.skip("symlinks not supported on this platform")
+
+        response = make_client(roots).post(
+            self.ROUTE,
+            json={
+                "path": str(proposed.workspace),
+                "proposal_id": proposed.proposal_id,
+                "decision": "approved",
+                "reviewer": "fde-sato",
+            },
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == (
+            "API.RUNTIME_OUTSIDE_ROOTS"
+        )
+
+        # Nothing was written through the link.
+        conn = sqlite3.connect(external / "canon.db")
+        try:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM decisions"
+            ).fetchone()[0] == 0
+        finally:
+            conn.close()

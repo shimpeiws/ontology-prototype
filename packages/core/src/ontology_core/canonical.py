@@ -626,6 +626,13 @@ class SqliteCanonicalStore:
 
     def close(self) -> None:
         if self._conn is not None:
+            if not self.readonly:
+                # Fold committed WAL frames back into the database on the
+                # way out (ADR 0003). PASSIVE never waits on readers — it
+                # reports contention instead of raising — so the wal is
+                # truncated whenever this writer is the only thing left,
+                # and left alone otherwise.
+                self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
             self._conn.close()
             self._conn = None
             self._entity_cols = None
