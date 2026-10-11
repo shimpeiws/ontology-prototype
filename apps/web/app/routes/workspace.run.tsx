@@ -227,7 +227,7 @@ export default function RunPage() {
   const [projectionName, setProjectionName] = useState("");
   const [diagSource, setDiagSource] = useState<"run" | "as_of">("run");
   const [diagAsOf, setDiagAsOf] = useState("");
-  const [provider, setProvider] = useState("openrouter");
+  const [provider, setProvider] = useState("stub");
   const [model, setModel] = useState("");
   const [boundary, setBoundary] = useState("");
   const [evalAsOf, setEvalAsOf] = useState("");
@@ -684,6 +684,10 @@ export default function RunPage() {
             >
               {pendingStage === "diagnose" ? "Diagnosing…" : "Run diagnosis"}
             </button>
+            <p className="hint">
+              Each run — including a retry after a busy store — records a
+              new diagnosis run and calls the provider again.
+            </p>
           </div>
           <ResultBlock
             result={diagnoseResult}

@@ -593,11 +593,7 @@ class CoreWorkspaceService:
         self._check_runtime(resolved / RUNTIME_DIR)
         loaded = load_workspace(resolved)
         if not loaded.ok:
-            return {
-                "workspace": str(resolved),
-                "valid": False,
-                "diagnostics": [d.to_dict() for d in loaded.diagnostics],
-            }
+            return _invalid_workspace(resolved, loaded)
         assert loaded.workspace is not None
         content = snapshot_text.encode("utf-8", errors="surrogatepass")
         label = _snapshot_label(name)
@@ -864,11 +860,7 @@ class CoreWorkspaceService:
         self._check_runtime(resolved / RUNTIME_DIR)
         loaded = load_workspace(resolved)
         if not loaded.ok:
-            return {
-                "workspace": str(resolved),
-                "ok": False,
-                "diagnostics": [d.to_dict() for d in loaded.diagnostics],
-            }
+            return _invalid_workspace(resolved, loaded)
         assert loaded.workspace is not None
         adapter = CsvReminderAdapter(
             Path(loaded.workspace.path) / RUNTIME_DIR / "reminders.csv"

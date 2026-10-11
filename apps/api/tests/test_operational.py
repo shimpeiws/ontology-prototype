@@ -2206,7 +2206,7 @@ class TestRunTriggers:
         self, roots, proposed, monkeypatch
     ) -> None:
         """Every write trigger maps a lost busy wait to 503
-        STORAGE.WRITE_BUSY — here through the execute route."""
+        STORAGE.WRITE_BUSY — checked on all five routes."""
         import ontology_api.service as service_module
         from ontology_core import SqliteCanonicalStore
 
@@ -2223,21 +2223,35 @@ class TestRunTriggers:
         self._approve(
             client, proposed.workspace, proposed.proposal_id
         )
+        snapshot_text = (DEMO_DATA / "jobs-baseline.csv").read_text()
+        bodies = {
+            "ingest": {
+                "snapshot": {"text": snapshot_text, "source": "jobs"}
+            },
+            "project": {"as_of": "2026-10-21T00:00:00Z"},
+            "diagnose": {
+                "as_of": "2026-10-21T00:00:00Z",
+                "provider": "stub",
+            },
+            "evaluate": {
+                "boundary": "2026-10-15T00:00:00Z",
+                "as_of": "2026-10-26T00:00:00Z",
+            },
+            "execute": {"proposal_id": proposed.proposal_id},
+        }
         db = proposed.workspace / ".ontology" / "canon.db"
         holder = sqlite3.connect(db)
         holder.execute("BEGIN IMMEDIATE")
         try:
-            response = client.post(
-                "/api/v1/workspaces/execute",
-                json={
-                    "path": str(proposed.workspace),
-                    "proposal_id": proposed.proposal_id,
-                },
-            )
-            assert response.status_code == 503
-            assert response.json()["error"]["code"] == (
-                "STORAGE.WRITE_BUSY"
-            )
+            for route, extra in bodies.items():
+                response = client.post(
+                    f"/api/v1/workspaces/{route}",
+                    json={"path": str(proposed.workspace), **extra},
+                )
+                assert response.status_code == 503, route
+                assert response.json()["error"]["code"] == (
+                    "STORAGE.WRITE_BUSY"
+                ), route
         finally:
             holder.rollback()
             holder.close()
@@ -2307,3 +2321,63 @@ class TestRunTriggers:
             "API.RUNTIME_OUTSIDE_ROOTS"
         )
         assert not (external / "reminders.csv").exists()
+
+    def test_triggers_invalid_workspace_is_domain_payload(
+        self, roots, workspace
+    ) -> None:
+        """A broken bundle is a domain outcome on every trigger —
+        200 with ``ok: false`` and the loader's ``WORKSPACE.*``
+        diagnostics, never a 500 from response-model validation."""
+        (workspace / "domain.yaml").write_text("not: [valid\n")
+        client = make_client(roots)
+        bodies = {
+            "ingest": {
+                "snapshot": {"text": "x\n", "source": "jobs"}
+            },
+            "project": {"as_of": "2026-10-21T00:00:00Z"},
+            "diagnose": {
+                "as_of": "2026-10-21T00:00:00Z",
+                "provider": "stub",
+            },
+            "evaluate": {
+                "boundary": "2026-10-15T00:00:00Z",
+                "as_of": "2026-10-26T00:00:00Z",
+            },
+            "execute": {"proposal_id": "dgx-x-p0"},
+        }
+        for route, extra in bodies.items():
+            response = client.post(
+                f"/api/v1/workspaces/{route}",
+                json={"path": str(workspace), **extra},
+            )
+            assert response.status_code == 200, route
+            body = response.json()
+            assert body["ok"] is False, route
+            assert body["valid"] is False, route
+            assert any(
+                d["code"].startswith("WORKSPACE.")
+                for d in body["diagnostics"]
+            ), route
+
+    def test_ingest_rejects_oversized_snapshot(
+        self, roots, workspace, monkeypatch
+    ) -> None:
+        """The core's ``MAX_SNAPSHOT_BYTES`` cap reaches the transport
+        as a domain diagnostic — the cap is observed, not bypassed."""
+        monkeypatch.setattr(
+            "ontology_core.ingest.MAX_SNAPSHOT_BYTES", 4
+        )
+        body = post(
+            make_client(roots),
+            "ingest",
+            path=str(workspace),
+            snapshot={
+                "text": "id,status\nX01,completed\n",
+                "source": "jobs",
+            },
+        )
+        assert body["ok"] is False
+        assert any(
+            d["code"] == "INGEST.SOURCE_TOO_LARGE"
+            for d in body["diagnostics"]
+        )

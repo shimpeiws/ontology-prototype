@@ -279,7 +279,7 @@ describe("run page", () => {
           evidence: {},
         },
       ],
-      inputs: {},
+      inputs: [{}],
       diagnostics: [],
     });
     const user = userEvent.setup();
@@ -326,10 +326,9 @@ describe("run page", () => {
     renderPage();
     await screen.findByLabelText("stage 3 diagnose");
 
-    await user.selectOptions(
-      screen.getByLabelText("Provider"),
-      "stub",
-    );
+    // ADR 0004: the console defaults to the credential-free stub; a
+    // billed provider is always an explicit choice.
+    expect(screen.getByLabelText("Provider")).toHaveValue("stub");
     await user.click(
       screen.getByRole("button", { name: "Run diagnosis" }),
     );

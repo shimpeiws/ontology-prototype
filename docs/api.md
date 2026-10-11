@@ -395,7 +395,11 @@ payload is the `--json` output verbatim plus `api_version`, the run goes
 through the same core call on the same `canon.db`, and a run started
 over HTTP is the same trace artifact a `trace --run` lookup returns.
 Domain outcomes — `ok: false` with the core's `diagnostics` — are `200`
-responses; `STORAGE.WRITE_BUSY` stays the `503` transport error.
+responses; `STORAGE.WRITE_BUSY` stays the `503` transport error. What a
+retry means is stage-specific: `execute` is idempotent (a re-run replays
+the stored receipt) and `ingest` of identical bytes re-observes without
+duplicating, while `project`, `evaluate`, and `diagnose` each record a
+new run — and a `diagnose` retry is a new provider call too.
 
 Every trigger resolves `path` under the configured roots and refuses an
 `.ontology/` tree that escapes them before any write — the same guards
@@ -422,9 +426,10 @@ Request bodies all carry `"path"` plus:
 { "path": "job-invoicing", "as_of": "2026-10-21T00:00:00Z",
   "projection": null }
 
-// diagnose — exactly one candidate source; `provider` required
-// (`openrouter` | `stub`, the CLI's provider set), `model` optional and
-// resolved through the same env/default chain as the CLI
+// diagnose — exactly one candidate source; `provider` optional and
+// defaults to the CLI's `openrouter` (the Web console preselects `stub`,
+// per ADR 0004); `model` optional, resolved through the same
+// env/default chain as the CLI
 { "path": "job-invoicing", "run_id": "prj-…", "as_of": null,
   "provider": "stub", "model": null }
 

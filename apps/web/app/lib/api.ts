@@ -291,7 +291,9 @@ export const api = {
         path,
         run_id: source.runId ?? null,
         as_of: source.asOf ?? null,
-        provider: options?.provider ?? "openrouter",
+        // The console's deliberate default is the credential-free stub
+        // (ADR 0004); a billed provider is always an explicit choice.
+        provider: options?.provider ?? "stub",
         model: options?.model ?? null,
       },
       signal,

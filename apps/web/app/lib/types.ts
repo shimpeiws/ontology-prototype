@@ -520,7 +520,7 @@ export interface ProjectRunResponse extends OperationalResponse {
   definition_digest?: string | null;
   recorded?: boolean;
   candidates?: ProjectionCandidate[];
-  inputs?: Record<string, unknown>;
+  inputs?: Record<string, unknown>[];
 }
 
 /** `diagnose --run|--as-of --provider --json`. */
@@ -562,7 +562,7 @@ export interface ExecuteResponse extends OperationalResponse {
   /** "succeeded" | "failed" | "uncertain" | null when refused early. */
   status?: string | null;
   attempt?: number | null;
-  attempts?: Record<string, unknown>[];
+  attempts?: number | null;
   replayed?: boolean | null;
   receipt?: Record<string, unknown> | null;
   error?: string | null;

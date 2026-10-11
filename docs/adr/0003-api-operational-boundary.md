@@ -1,6 +1,9 @@
 # ADR 0003: API boundary for operational state
 
-- Status: Proposed
+- Status: Accepted (partially superseded by
+  [ADR 0004](0004-write-console-triggers.md) for run triggers and
+  execution — this record still governs storage coordination, the
+  decision write, and self-asserted identity)
 - Date: 2026-10-07
 - Decision owner: repository maintainer
 

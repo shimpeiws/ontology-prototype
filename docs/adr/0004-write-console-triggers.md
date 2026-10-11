@@ -1,6 +1,6 @@
 # ADR 0004: Write-side console triggers for the operational loop
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-10-12
 - Decision owner: repository maintainer
 
@@ -77,8 +77,12 @@ path.
   `DIAGNOSIS.PROVIDER_ERROR` diagnostic payload, never an unhandled
   error.
 - **Lock contention stays transport-level**: a writer that loses the
-  bounded `busy_timeout` wait reports `503 STORAGE.WRITE_BUSY` — a
-  retry is meaningful (same mapping as `decide`).
+  bounded `busy_timeout` wait reports `503 STORAGE.WRITE_BUSY` — the
+  condition is transient (same mapping as `decide`). What a retry does
+  is stage-specific: `execute` and `ingest` are idempotent, while
+  `project`/`evaluate`/`diagnose` each record a new run — and a
+  `diagnose` retry is a new provider call. The console surfaces the
+  retry as a deliberate re-run, not a silent repeat.
 - **Path and runtime guards are unchanged**: every trigger resolves the
   workspace under the configured roots and refuses an `.ontology` tree
   that escapes them (`API.PATH_OUTSIDE_ROOTS`,
@@ -110,7 +114,9 @@ All bodies include `"path"` (workspace under a configured root) plus:
 { "path": "…",
   "as_of": "2026-10-21T00:00:00Z",   // XOR
   "run_id": "prj-…",                 // a frozen projection run
-  "provider": "stub",                // required
+  "provider": "stub",                // optional; server defaults to the CLI's
+                                     // openrouter — the console sends stub
+                                     // unless deliberately changed
   "model": null }                    // optional; env/default chain like the CLI
 
 // POST /api/v1/workspaces/evaluate
