@@ -64,11 +64,11 @@ from .service import (
     contract_metadata,
 )
 
-# The API serves a local single-user authoring UI: dev servers run on
-# loopback with arbitrary ports, so cross-origin requests are allowed
-# from localhost/127.0.0.1 origins only — never credentials, and the
-# Vite dev proxy remains the primary path.
-LOCAL_ORIGIN_REGEX = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+# Browser access is origin-allowlisted (``ApiConfig.allowed_origins``):
+# the Vite dev proxy keeps the console same-origin, so cross-origin
+# approval is needed only for direct calls from the console's own
+# dev/preview origins. A page on any other origin — loopback ports
+# included — fails preflight and cannot drive the write-side triggers.
 
 logger = logging.getLogger("ontology_api")
 
@@ -94,7 +94,7 @@ def create_app(
     app.state.service = service
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=LOCAL_ORIGIN_REGEX,
+        allow_origins=list(config.allowed_origins),
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )

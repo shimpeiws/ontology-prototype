@@ -196,3 +196,10 @@ revisitable if interactive latency becomes a real complaint.
   bounded busy wait arbitrates writers, `STORAGE.WRITE_BUSY` is the only
   coordination error a caller sees, and append-only history absorbs
   cross-surface races.
+- Browser access narrows from "any loopback origin" to an explicit
+  allowlist (`ONTOLOGY_API_ORIGINS`, defaulting to the console's own
+  dev/preview origins), so a page on an unrelated localhost port can no
+  longer drive a write trigger through a browser. This is a browser
+  control, not authentication: the API stays unauthenticated on purpose
+  — the trust boundary is the local user account, and non-browser
+  clients on the same machine can call every endpoint regardless.

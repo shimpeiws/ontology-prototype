@@ -102,13 +102,15 @@ The Web app is presentation only:
   `503 STORAGE.WRITE_BUSY` renders as a retryable transport error. A
   decision here is recorded through the same core `decide` on the same
   `canon.db` the CLI uses, so `ontology execute` honors it identically.
-  An approved, undelivered proposal additionally offers an execute
-  control (ADR 0004): the action arms on a first click and only the
-  armed second click posts to `POST /api/v1/workspaces/execute`. The
-  result renders inline — execution id, attempt, `receipt`, and a
-  `replayed` "already executed" state for an idempotent re-run — while a
-  refusal (`DECISION.NOT_APPROVED`, `EXECUTION.UNKNOWN_PROPOSAL`) shows
-  the core's diagnostics in place. The core's `check_approval` gate, not
+  An approved proposal additionally offers an execute control (ADR
+  0004): the action arms on a first click and only the armed second
+  click posts to `POST /api/v1/workspaces/execute`. A re-run on a
+  delivered proposal stays available because the core answers it
+  idempotently — it replays the stored receipt rather than writing
+  again. The result renders inline — execution id, attempt, `receipt`,
+  and a `replayed` "already executed" state — while a refusal
+  (`DECISION.NOT_APPROVED`, `EXECUTION.UNKNOWN_PROPOSAL`) shows the
+  core's diagnostics in place. The core's `check_approval` gate, not
   the button, is the authority: a proposal that loses its approval
   between render and submit is refused the same as on the CLI.
 - The Trace and Reports pages (#62) are read-only inspection over the

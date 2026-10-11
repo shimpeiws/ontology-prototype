@@ -60,13 +60,15 @@ export function ExecuteControl({
       if (response.ok) {
         setOutcome({ kind: "done", response });
         setArmed(false);
-        onExecuted?.();
       } else {
         setOutcome({
           kind: "domain",
           diagnostics: response.diagnostics ?? [],
         });
       }
+      // A reached-server response can record an attempt even when it
+      // was refused — refresh the execution history either way.
+      onExecuted?.();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         return;

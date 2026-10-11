@@ -68,6 +68,12 @@ interface LoopPosition {
   to?: string;
 }
 
+/** Timestamp prefix of a run id (`ing-20261011T204146…Z-…`) — run ids
+ * embed their recording instant, so a newer upstream artifact makes an
+ * older downstream run stale. */
+const runStamp = (id: string | null | undefined) =>
+  id?.match(/-(\d{8}T\d+Z)/)?.[1] ?? "";
+
 function loopPosition(
   trace: TraceOverviewResponse | null,
   proposals: ProposalView[],
@@ -81,8 +87,8 @@ function loopPosition(
       to: "/workspace",
     };
   }
-  const ingestRuns = trace.evidence?.ingest_runs?.length ?? 0;
-  if (ingestRuns === 0) {
+  const lastIngest = trace.evidence?.ingest_runs?.at(-1);
+  if (!lastIngest) {
     return {
       stage: "ingest",
       label: "Ingest a source snapshot",
@@ -97,7 +103,16 @@ function loopPosition(
       detail: "Observations are recorded; no frozen projection run exists yet.",
     };
   }
-  const diagnosisRan = (trace.diagnosis_runs?.length ?? 0) > 0;
+  if (runStamp(lastIngest) > runStamp(lastProjection.run_id)) {
+    return {
+      stage: "project",
+      label: "Re-run the projection",
+      detail:
+        "Evidence was ingested after the last frozen run — project the new state before diagnosing.",
+    };
+  }
+  const lastDiagnosis = trace.diagnosis_runs?.at(-1);
+  const diagnosisRan = lastDiagnosis !== undefined;
   if (lastProjection.candidates === 0 && !proposals.length) {
     return {
       stage: "project",
@@ -152,6 +167,21 @@ function loopPosition(
       stage: "evaluate",
       label: "Run an outcome evaluation",
       detail: "Write-back succeeded — measure the cohorts against the declared boundary.",
+    };
+  }
+  const newestUpstream = [
+    lastIngest,
+    lastProjection.run_id,
+    lastDiagnosis?.run_id,
+  ]
+    .map(runStamp)
+    .reduce((a, b) => (a > b ? a : b), "");
+  if (newestUpstream > runStamp(lastEvaluation.run_id)) {
+    return {
+      stage: "evaluate",
+      label: "Re-run the evaluation",
+      detail:
+        "Evidence or runs landed after the last frozen report — freeze a fresh evaluation to close the loop.",
     };
   }
   return {
@@ -261,6 +291,19 @@ export default function RunPage() {
 
   const refresh = () => setSeq((n) => n + 1);
 
+  // Discard a trigger result and reset stage UI when the workspace is
+  // switched mid-flight — a response for workspace A must never render
+  // on workspace B.
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  useEffect(() => {
+    setIngestResult(null);
+    setProjectResult(null);
+    setDiagnoseResult(null);
+    setEvaluateResult(null);
+    setPendingStage(null);
+  }, [path]);
+
   const trace =
     overview.status === "done" ? overview.trace : null;
   const proposals =
@@ -285,18 +328,26 @@ export default function RunPage() {
     stage: string,
     call: () => Promise<R>,
     apply: (r: StageResult<R>) => void,
+    /** Non-ok results that still persisted store state (a partial
+     * ingest's accepted rows, a recorded run) must refresh the
+     * overview too — the banner and last-run lines read the store. */
+    persisted?: (r: R) => boolean,
   ) => {
+    const activePath = path;
     setPendingStage(stage);
     try {
       const response = await call();
+      if (pathRef.current !== activePath) return;
       if (response.ok) {
         apply({ kind: "done", response });
         refresh();
       } else {
         apply({ kind: "domain", diagnostics: response.diagnostics ?? [] });
+        if (persisted?.(response)) refresh();
       }
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
+      if (pathRef.current !== activePath) return;
       apply({ kind: "transport", error: toError(err) });
     } finally {
       setPendingStage(null);
@@ -314,7 +365,10 @@ export default function RunPage() {
           sources.length > 1
             ? snapshotSource || undefined
             : sources[0]?.name,
-      }), setIngestResult);
+      }),
+      setIngestResult,
+      (r) => (r.accepted ?? 0) > 0,
+    );
 
   const submitProject = () =>
     runStage("project", () =>
@@ -322,7 +376,10 @@ export default function RunPage() {
         path,
         asOf,
         projectionName || undefined,
-      ), setProjectResult);
+      ),
+      setProjectResult,
+      (r) => r.recorded === true,
+    );
 
   const submitDiagnose = () =>
     runStage("diagnose", () =>
@@ -332,11 +389,17 @@ export default function RunPage() {
           ? { runId: lastProjectionRun?.run_id }
           : { asOf: diagAsOf },
         { provider, model: model.trim() || undefined },
-      ), setDiagnoseResult);
+      ),
+      setDiagnoseResult,
+      (r) => r.recorded === true,
+    );
 
   const submitEvaluate = () =>
     runStage("evaluate", () =>
-      api.evaluate(path, boundary, evalAsOf), setEvaluateResult);
+      api.evaluate(path, boundary, evalAsOf),
+      setEvaluateResult,
+      (r) => r.recorded === true,
+    );
 
   const stageMarker = (stage: LoopPosition["stage"]) =>
     position.stage === stage ? (

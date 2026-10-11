@@ -51,11 +51,21 @@ their contents are never returned to the client.
 ### CORS
 
 The API serves a browser UI, so `OPTIONS` preflights are answered for
-loopback origins only — `http(s)://localhost:<port>` and
-`http(s)://127.0.0.1:<port>` — with no credentials. Any other origin is
-rejected. The Vite dev proxy remains the primary development path (see
-ADR 0001); CORS exists so direct cross-origin calls from a local dev
-server also work.
+an explicit origin allowlist — by default the console's own dev and
+preview origins (`http://localhost:5173`, `http://127.0.0.1:5173`,
+`http://localhost:4173`, `http://127.0.0.1:4173`), with no credentials.
+`ONTOLOGY_API_ORIGINS` (comma-separated) overrides the list at startup.
+A page on any other origin — a different loopback port included —
+fails preflight, so an untrusted local web page cannot drive the
+write-side triggers through a browser. The Vite dev proxy remains the
+primary development path (see ADR 0001); CORS exists so direct
+cross-origin calls from the console's own dev server also work.
+
+CORS is a browser control, not authentication: the API is a
+single-user local tool bound to loopback and deliberately
+unauthenticated — any process running under the local user account
+(curl, scripts, other local tools) can call every endpoint regardless
+of origin. The trust boundary is the machine.
 
 ## Endpoints
 

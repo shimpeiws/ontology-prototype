@@ -11,13 +11,14 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { act } from "react";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../lib/api";
-import type { EvaluationReport } from "../lib/types";
+import type { EvaluationReport, IngestResponse } from "../lib/types";
 import RunPage from "../routes/workspace.run";
-import { WorkspaceProvider } from "../workspace/context";
+import { useWorkspace, WorkspaceProvider } from "../workspace/context";
 import {
   initialWorkspaceState,
   workspaceReducer,
@@ -26,6 +27,7 @@ import type { WorkspaceState } from "../workspace/store";
 import {
   SYNTHETIC_CONTRACT_RESPONSE,
   SYNTHETIC_OPEN_RESPONSE,
+  SYNTHETIC_PROPOSAL_EXECUTED,
   SYNTHETIC_PROPOSAL_OPEN,
   SYNTHETIC_PROPOSALS_AFTER_APPROVE,
   SYNTHETIC_PROPOSALS_EMPTY,
@@ -223,7 +225,7 @@ describe("run page", () => {
     );
   });
 
-  it("renders ingest row rejections as diagnostics in place", async () => {
+  it("refreshes the loop state after a partial ingest", async () => {
     ready(SYNTHETIC_TRACE_OVERVIEW_EMPTY, SYNTHETIC_PROPOSALS_EMPTY);
     ingest.mockResolvedValue({
       api_version: "v1",
@@ -253,8 +255,142 @@ describe("run page", () => {
     );
     const stage = screen.getByLabelText("stage 1 ingest");
     await within(stage).findByText("INGEST.MISSING_ID");
-    // A domain outcome does not advance the loop state.
+    // The accepted row persisted — the banner and last-run lines must
+    // re-read the store even though `ok` is false.
+    await waitFor(() =>
+      expect(traceOverview.mock.calls.length).toBeGreaterThan(1),
+    );
+  });
+
+  it("does not refresh when an ingest persisted nothing", async () => {
+    ready(SYNTHETIC_TRACE_OVERVIEW_EMPTY, SYNTHETIC_PROPOSALS_EMPTY);
+    ingest.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      snapshot: "rows.csv",
+      ok: false,
+      accepted: 0,
+      rejected: 1,
+      diagnostics: [
+        {
+          severity: "error",
+          code: "INGEST.MISSING_ID",
+          message: "entity 'Job' resolved no id",
+          file: "rows.csv",
+          path: "record[2].id",
+          line: null,
+          hint: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("stage 1 ingest");
+    await user.type(screen.getByLabelText("Snapshot text"), "x");
+    await user.click(
+      screen.getByRole("button", { name: "Ingest snapshot" }),
+    );
+    const stage = screen.getByLabelText("stage 1 ingest");
+    await within(stage).findByText("INGEST.MISSING_ID");
     expect(traceOverview).toHaveBeenCalledTimes(1);
+  });
+
+  it("points back at evaluation when a run landed after the report", async () => {
+    ready(
+      {
+        ...SYNTHETIC_TRACE_OVERVIEW,
+        diagnosis_runs: [
+          ...(SYNTHETIC_TRACE_OVERVIEW.diagnosis_runs ?? []),
+          {
+            run_id: "dgx-20261016T000000000000Z-new00000",
+            projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+            provider: "stub",
+            model: "stub-offline",
+            status: "ok",
+          },
+        ],
+      },
+      {
+        ...SYNTHETIC_PROPOSALS_RESPONSE,
+        proposals: [SYNTHETIC_PROPOSAL_EXECUTED],
+      },
+    );
+    renderPage();
+    const banner = await screen.findByLabelText("next available action");
+    expect(banner).toHaveTextContent("Re-run the evaluation");
+    expect(banner).not.toHaveTextContent("loop is complete");
+  });
+
+  it("points back at projection when evidence landed after the run", async () => {
+    ready(
+      {
+        ...SYNTHETIC_TRACE_OVERVIEW,
+        evidence: {
+          ingest_runs: ["ing-20261006T000000000000Z-new00000"],
+          observations: 4,
+          snapshots: 2,
+        },
+      },
+      SYNTHETIC_PROPOSALS_EMPTY,
+    );
+    renderPage();
+    const banner = await screen.findByLabelText("next available action");
+    expect(banner).toHaveTextContent("Re-run the projection");
+  });
+
+  it("discards a trigger result that resolves after a workspace switch", async () => {
+    ready();
+    let resolveIngest: (v: IngestResponse) => void = () => {};
+    ingest.mockImplementation(
+      () =>
+        new Promise<IngestResponse>((res) => {
+          resolveIngest = res;
+        }),
+    );
+    function Switcher() {
+      const { open } = useWorkspace();
+      return (
+        <button
+          type="button"
+          onClick={() => open("ticket-sla", SYNTHETIC_OPEN_RESPONSE)}
+        >
+          switch workspace
+        </button>
+      );
+    }
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <WorkspaceProvider initial={cleanState()}>
+          <Switcher />
+          <RunPage />
+        </WorkspaceProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByLabelText("stage 1 ingest");
+    await user.type(screen.getByLabelText("Snapshot text"), "x");
+    await user.click(
+      screen.getByRole("button", { name: "Ingest snapshot" }),
+    );
+    await waitFor(() => expect(ingest).toHaveBeenCalled());
+    await user.click(
+      screen.getByRole("button", { name: "switch workspace" }),
+    );
+    await act(async () => {
+      resolveIngest({
+        api_version: "v1",
+        workspace: "job-invoicing",
+        snapshot: "jobs.csv",
+        ok: true,
+        ingest_id: "ing-stale",
+        accepted: 1,
+        rejected: 0,
+        diagnostics: [],
+      });
+    });
+    await screen.findByLabelText("stage 1 ingest");
+    // The workspace-A response must never render on workspace B.
+    expect(screen.queryByText(/ing-stale/)).not.toBeInTheDocument();
   });
 
   it("runs a projection and lists the candidates", async () => {
