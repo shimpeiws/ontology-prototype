@@ -93,8 +93,7 @@ The Web app is presentation only:
   `payload_digest` a decision binds, the canonical target and related
   entities, the grounding evidence, and the recorded AI rationale —
   labeled as model hypothesis, never as fact — plus the append-only
-  decision history and recorded execution attempts (status only; there
-  is no execute affordance — ADR 0003 keeps run triggers on the CLI).
+  decision history and recorded execution attempts.
   A page-level reviewer identity (self-asserted, recorded verbatim on
   every decision) gates the Approve/Reject pair on each card; the
   decision posts to `POST /api/v1/workspaces/proposals/decide` and the
@@ -103,6 +102,15 @@ The Web app is presentation only:
   `503 STORAGE.WRITE_BUSY` renders as a retryable transport error. A
   decision here is recorded through the same core `decide` on the same
   `canon.db` the CLI uses, so `ontology execute` honors it identically.
+  An approved, undelivered proposal additionally offers an execute
+  control (ADR 0004): the action arms on a first click and only the
+  armed second click posts to `POST /api/v1/workspaces/execute`. The
+  result renders inline — execution id, attempt, `receipt`, and a
+  `replayed` "already executed" state for an idempotent re-run — while a
+  refusal (`DECISION.NOT_APPROVED`, `EXECUTION.UNKNOWN_PROPOSAL`) shows
+  the core's diagnostics in place. The core's `check_approval` gate, not
+  the button, is the authority: a proposal that loses its approval
+  between render and submit is refused the same as on the CLI.
 - The Trace and Reports pages (#62) are read-only inspection over the
   operational endpoints (`workspaces/trace`, `trace/subject`, `trace/run`,
   `workspaces/evaluations`, `evaluations/run`). The Trace page loads the
@@ -124,6 +132,23 @@ The Web app is presentation only:
   look successful unless the core said so. Both pages read
   `.ontology/` history through the API only; they never touch workspace
   definitions, so frozen artifacts stay inspectable across draft edits.
+- The Run page (`/workspace/run`, ADR 0004) sequences the whole loop on
+  one screen — ingest → project → diagnose → review/execute → evaluate —
+  each stage a card that posts to its run-trigger endpoint
+  (`workspaces/ingest`, `project`, `diagnose`, `evaluate`; stage four
+  links to Proposals or embeds the same armed execute control). A
+  "next action" banner derives where the loop stands from the recorded
+  store state — no ingest yet, candidates awaiting diagnosis, proposals
+  awaiting decision, an approved proposal ready to execute, or a report
+  ready to freeze — and deep-links to Trace, Proposals, and Reports.
+  Each stage renders its trigger response in place: ingest shows
+  accepted/rejected counts and row diagnostics, project lists the
+  candidates, diagnose names the provider/model/status and new
+  proposals, evaluate links the frozen report, and every stage shows
+  core `diagnostics` verbatim with `503 STORAGE.WRITE_BUSY` as a
+  retryable error. The Diagnose stage lists the providers the contract
+  advertises (`contract.diagnosis.providers`) and defaults to `stub`,
+  so a billed model call is always a deliberate choice.
 
 ## Development
 
@@ -148,8 +173,9 @@ API's `--root`), and the overview shows the bundle status, active digest,
 per-file status, and core diagnostics. The Domain / Mapping / Evaluation /
 Agent task pages render the parsed definitions next to a raw-YAML draft
 editor; unsaved changes warn before in-app navigation and tab close. The
-Trace / Reports pages inspect recorded history and frozen evaluation
-reports.
+Run page drives the loop stages through the API triggers; the Trace /
+Reports / Proposals pages inspect and govern recorded history, frozen
+evaluation reports, and proposals.
 
 ## Checks
 
