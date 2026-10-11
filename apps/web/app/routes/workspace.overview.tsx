@@ -1,3 +1,4 @@
+import { Tag } from "antd";
 import { Link } from "react-router";
 
 import { useWorkspace } from "../workspace/context";
@@ -27,11 +28,12 @@ export default function WorkspaceOverview() {
         <dl className="bundle-status">
           <dt>Active bundle</dt>
           <dd>
-            <span
+            <Tag
               className={`badge ${ws.valid ? "badge-valid" : "badge-invalid"}`}
+              color={ws.valid ? "success" : "error"}
             >
               {ws.valid ? "valid" : "invalid"}
-            </span>
+            </Tag>
           </dd>
           <dt>Active digest</dt>
           <dd>

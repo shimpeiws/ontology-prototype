@@ -52,13 +52,14 @@ function ObservationCard({ observation }: { observation: PreviewObservation }) {
   return (
     <section className="form-card preview-observation">
       <p>
-        <span
+        <Tag
           className={`badge ${
             observation.status === "accepted" ? "badge-valid" : "badge-invalid"
           }`}
+          color={observation.status === "accepted" ? "success" : "error"}
         >
           {observation.status}
-        </span>{" "}
+        </Tag>{" "}
         <strong>Record row {observation.row}</strong>{" "}
         <code>{observation.observation_id}</code>
       </p>
@@ -182,7 +183,9 @@ function PreviewResult({ preview }: { preview: PreviewPayload }) {
           {preview.truncated ? (
             <>
               {" "}
-              <span className="badge badge-stale">truncated</span>
+              <Tag className="badge badge-stale" color="warning">
+                truncated
+              </Tag>
             </>
           ) : null}
         </dd>

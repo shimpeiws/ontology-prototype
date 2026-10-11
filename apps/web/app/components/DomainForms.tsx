@@ -13,7 +13,7 @@
  */
 
 import { useState } from "react";
-import { Button, Checkbox, Input, Select } from "antd";
+import { Button, Checkbox, Input, Select, Tag } from "antd";
 
 import { useWorkspace } from "../workspace/context";
 import {
@@ -837,9 +837,13 @@ export function DomainEditor({
       (d) => d.severity === "error",
     ).length;
     return n > 0 ? (
-      <span className="badge badge-invalid" title={`${n} error diagnostic(s)`}>
+      <Tag
+        className="badge badge-invalid"
+        color="error"
+        title={`${n} error diagnostic(s)`}
+      >
         {n}
-      </span>
+      </Tag>
     ) : null;
   };
 
