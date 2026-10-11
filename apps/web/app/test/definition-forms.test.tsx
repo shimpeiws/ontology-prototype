@@ -26,6 +26,7 @@ import {
   SYNTHETIC_DIAGNOSTIC,
   SYNTHETIC_FORM_OPEN_RESPONSE,
 } from "./fixtures";
+import { antdOptionLabels, antdSelectText, pickOption } from "./antdSelect";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -92,7 +93,11 @@ function draftText(file: WorkspaceFileName = "evaluation.yaml"): string {
 async function waitForContract() {
   await waitFor(() => expect(contractMock).toHaveBeenCalled());
   // Let the resolved contract land in state before asserting on options.
-  await screen.findByDisplayValue("median").catch(() => undefined);
+  await waitFor(() =>
+    expect(antdSelectText(screen.getByLabelText("Aggregation"))).toBe(
+      "median",
+    ),
+  ).catch(() => undefined);
 }
 
 describe("EvaluationForm", () => {
@@ -102,10 +107,12 @@ describe("EvaluationForm", () => {
       "completion-to-invoice-latency",
     );
     await waitFor(() =>
-      expect(screen.getByLabelText("Aggregation")).toHaveValue("median"),
+      expect(antdSelectText(screen.getByLabelText("Aggregation"))).toBe(
+        "median",
+      ),
     );
-    expect(screen.getByLabelText("Metric")).toHaveValue("duration");
-    expect(screen.getByLabelText("Unit")).toHaveValue("days");
+    expect(antdSelectText(screen.getByLabelText("Metric"))).toBe("duration");
+    expect(antdSelectText(screen.getByLabelText("Unit"))).toBe("days");
     expect(screen.getByLabelText("Start event")).toHaveValue("JobCompleted");
     expect(screen.getByLabelText("End event")).toHaveValue("InvoiceIssued");
     // Baseline value 9 and strict target lt 4 are editable in place.
@@ -115,26 +122,30 @@ describe("EvaluationForm", () => {
     expect(screen.getByLabelText("Baseline value")).toHaveValue(
       "9",
     );
-    expect(screen.getByLabelText("Target comparator")).toHaveValue("lt");
+    expect(
+      antdSelectText(screen.getByLabelText("Target comparator")),
+    ).toBe("lt");
     expect(screen.getByLabelText("Guardrail 1 name")).toHaveValue(
       "invoice-error-rate",
     );
   });
 
   it("vocabulary options come from the contract, not hardcoded lists", async () => {
+    const user = userEvent.setup();
     renderForm(<EvaluationForm />);
     await waitForContract();
-    const aggregation = screen.getByLabelText("Aggregation");
-    const optionTexts = Array.from(aggregation.querySelectorAll("option")).map(
-      (o) => o.value,
+    const optionTexts = await antdOptionLabels(
+      user,
+      screen.getByLabelText("Aggregation"),
     );
     expect(optionTexts).toEqual(
       expect.arrayContaining(["median", "mean", "min", "max", "count"]),
     );
     expect(optionTexts).not.toContain("p95");
-    const metricOptions = Array.from(
-      screen.getByLabelText("Metric").querySelectorAll("option"),
-    ).map((o) => o.value);
+    const metricOptions = await antdOptionLabels(
+      user,
+      screen.getByLabelText("Metric"),
+    );
     expect(metricOptions).toContain("duration");
     expect(metricOptions).not.toContain("error_rate");
   });
@@ -156,7 +167,7 @@ describe("EvaluationForm", () => {
     renderForm(<EvaluationForm />);
     await waitForContract();
 
-    await user.selectOptions(screen.getByLabelText("Aggregation"), "mean");
+    await pickOption(user, screen.getByLabelText("Aggregation"), "mean");
     expect(draftText()).toContain("aggregation: mean");
     // Untouched content survives the AST edit.
     expect(draftText()).toContain("# comment proving form edits preserve");
@@ -594,7 +605,8 @@ describe("AgentForm", () => {
     ).toHaveValue("Person");
 
     // Change the 'reason' param type to ref → a second ref field appears.
-    await user.selectOptions(
+    await pickOption(
+      user,
       screen.getByLabelText("Action 1 param 2 type"),
       "ref",
     );

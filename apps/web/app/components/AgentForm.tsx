@@ -10,6 +10,7 @@
  */
 
 import { useState } from "react";
+import { Button, Input } from "antd";
 import { isMap } from "yaml";
 import type { YAMLMap } from "yaml";
 
@@ -172,8 +173,8 @@ export function AgentForm() {
               {(deliverables?.items ?? []).map((item, i) => (
                 <div key={`${scalarText(item)}-${i}`} className="form-field">
                   <code>{scalarText(item)}</code>{" "}
-                  <button
-                    type="button"
+                  <Button
+                   
                     onClick={() =>
                       update((d) => {
                         const seq = seqAt(d, [ROOT, "task", "deliverables"]);
@@ -183,22 +184,21 @@ export function AgentForm() {
                     }
                   >
                     Remove
-                  </button>
+                  </Button>
                 </div>
               ))}
               <div className="add-row">
-                <input
-                  type="text"
+                <Input
                   aria-label="New deliverable name"
                   value={newDeliverable}
                   onChange={(e) => setNewDeliverable(e.target.value)}
                 />
-                <button
-                  type="button"
+                <Button
+                 
                   onClick={() => addDeliverable(newDeliverable)}
                 >
                   Add
-                </button>
+                </Button>
               </div>
             </>
           ) : (
@@ -223,8 +223,8 @@ export function AgentForm() {
                   <div key={`${scalarText(item)}-${i}`} className="form-field">
                     <code>{scalarText(item)}</code>{" "}
                     <span className="hint">unsupported deliverable</span>{" "}
-                    <button
-                      type="button"
+                    <Button
+                     
                       onClick={() =>
                         update((d) => {
                           const seq = seqAt(d, [ROOT, "task", "deliverables"]);
@@ -234,7 +234,7 @@ export function AgentForm() {
                       }
                     >
                       Remove
-                    </button>
+                    </Button>
                   </div>
                 ))}
             </>
@@ -252,8 +252,8 @@ export function AgentForm() {
         path="agent.permitted_actions"
         diagnostics={diagnostics}
         action={
-          <button
-            type="button"
+          <Button
+           
             onClick={() =>
               update((d) => {
                 const map = ensureMap(d, [...ACTIONS]);
@@ -269,7 +269,7 @@ export function AgentForm() {
             }
           >
             Add action
-          </button>
+          </Button>
         }
       >
         {actions === null || actions.items.length === 0 ? (
@@ -419,8 +419,8 @@ export function AgentForm() {
                             diagnostics={diagnostics}
                             path={`${paramPath}.description`}
                           />
-                          <button
-                            type="button"
+                          <Button
+                           
                             onClick={() =>
                               update((d) => {
                                 const s = specMap(d);
@@ -431,13 +431,13 @@ export function AgentForm() {
                             }
                           >
                             Remove param
-                          </button>
+                          </Button>
                         </fieldset>
                       );
                     })
                   )}
-                  <button
-                    type="button"
+                  <Button
+                   
                     onClick={() =>
                       update((d) => {
                         const s = specMap(d);
@@ -456,11 +456,11 @@ export function AgentForm() {
                     }
                   >
                     Add param
-                  </button>
+                  </Button>
                 </fieldset>
 
-                <button
-                  type="button"
+                <Button
+                 
                   onClick={() =>
                     update((d) => {
                       const m = mapAt(d, ACTIONS);
@@ -470,7 +470,7 @@ export function AgentForm() {
                   }
                 >
                   Remove action
-                </button>
+                </Button>
               </fieldset>
             );
           })

@@ -8,6 +8,7 @@
  * FormControls for the sync contract.
  */
 
+import { Button } from "antd";
 import { isMap } from "yaml";
 import type { YAMLMap } from "yaml";
 
@@ -193,8 +194,8 @@ export function EvaluationForm() {
         path="evaluation.guardrails"
         diagnostics={diagnostics}
         action={
-          <button
-            type="button"
+          <Button
+           
             onClick={() =>
               update((d) =>
                 ensureSeq(d, [ROOT, "guardrails"]).add(
@@ -204,7 +205,7 @@ export function EvaluationForm() {
             }
           >
             Add guardrail
-          </button>
+          </Button>
         }
       >
         {guardrails === null || guardrails.items.length === 0 ? (
@@ -277,8 +278,8 @@ export function EvaluationForm() {
                   diagnostics={diagnostics}
                   path={`${itemPath}.description`}
                 />
-                <button
-                  type="button"
+                <Button
+                 
                   onClick={() =>
                     update((d) => {
                       const seq = seqAt(d, [ROOT, "guardrails"]);
@@ -288,7 +289,7 @@ export function EvaluationForm() {
                   }
                 >
                   Remove guardrail
-                </button>
+                </Button>
               </fieldset>
             );
           })

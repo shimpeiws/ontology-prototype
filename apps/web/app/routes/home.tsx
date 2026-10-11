@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
+import { Button, Input, Typography } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import { useWorkspace } from "../workspace/context";
@@ -52,7 +53,7 @@ export default function Home() {
 
   return (
     <main className="home">
-      <h1>FDE workspace</h1>
+      <Typography.Title level={1}>FDE workspace</Typography.Title>
       <p>
         Open a workspace directory under the API's configured roots. Paths may
         be absolute or relative to a configured root — the API resolves them.
@@ -68,13 +69,13 @@ export default function Home() {
 
       <form onSubmit={submit} className="open-form" noValidate>
         <label htmlFor="workspace-path">Workspace path</label>
-        <input
+        <Input
           id="workspace-path"
           name="workspace-path"
-          type="text"
           value={path}
           onChange={(e) => setPath(e.target.value)}
           aria-describedby="workspace-path-hint"
+          status={pathError !== null ? "error" : undefined}
           aria-invalid={pathError !== null}
           autoFocus
         />
@@ -87,9 +88,9 @@ export default function Home() {
             {pathError}
           </p>
         ) : null}
-        <button type="submit" disabled={opening}>
+        <Button type="primary" htmlType="submit" disabled={opening}>
           Open workspace
-        </button>
+        </Button>
       </form>
 
       {opening ? <LoadingState label="Opening workspace…" /> : null}

@@ -13,6 +13,7 @@
  */
 
 import { useState } from "react";
+import { Button, Checkbox, Input, Select } from "antd";
 
 import { useWorkspace } from "../workspace/context";
 import {
@@ -136,15 +137,15 @@ export function ImpactPanel({
         </p>
       ) : null}
       {isRename && pending.hits.length > 0 ? (
-        <label className="impact-option">
-          <input
-            type="checkbox"
+        <div className="impact-option">
+          <Checkbox
             checked={updateRefs}
             onChange={(e) => setUpdateRefs(e.target.checked)}
-          />
-          Update {pending.hits.length} reference
-          {pending.hits.length === 1 ? "" : "s"} to the new name
-        </label>
+          >
+            Update {pending.hits.length} reference
+            {pending.hits.length === 1 ? "" : "s"} to the new name
+          </Checkbox>
+        </div>
       ) : null}
       {!isRename && pending.hits.length > 0 ? (
         <p className="hint">
@@ -153,12 +154,10 @@ export function ImpactPanel({
         </p>
       ) : null}
       <div className="impact-actions">
-        <button type="button" onClick={() => onConfirm(updateRefs)} autoFocus>
+        <Button onClick={() => onConfirm(updateRefs)} autoFocus>
           {isRename ? "Apply rename" : "Remove"}
-        </button>
-        <button type="button" onClick={onCancel}>
-          Cancel
-        </button>
+        </Button>
+        <Button onClick={onCancel}>Cancel</Button>
       </div>
     </div>
   );
@@ -184,28 +183,22 @@ function RenameControl({
   const [value, setValue] = useState(currentName);
   const inputId = `rename-${what}-${slug(currentName)}`;
   const trimmed = value.trim();
-  const collides =
-    trimmed !== currentName && existing.includes(trimmed);
+  const collides = trimmed !== currentName && existing.includes(trimmed);
   if (!open) {
-    return (
-      <button type="button" onClick={() => setOpen(true)}>
-        Rename…
-      </button>
-    );
+    return <Button onClick={() => setOpen(true)}>Rename…</Button>;
   }
   return (
     <span className="rename-control">
       <label className="sr-only" htmlFor={inputId}>
         New {what} name
       </label>
-      <input
+      <Input
         id={inputId}
         value={value}
         autoFocus
         onChange={(e) => setValue(e.target.value)}
       />
-      <button
-        type="button"
+      <Button
         disabled={trimmed === "" || trimmed === currentName || collides}
         onClick={() => {
           onRename(trimmed);
@@ -213,10 +206,8 @@ function RenameControl({
         }}
       >
         Apply rename
-      </button>
-      <button type="button" onClick={() => setOpen(false)}>
-        Cancel
-      </button>
+      </Button>
+      <Button onClick={() => setOpen(false)}>Cancel</Button>
       {collides ? (
         <span className="hint" role="alert">
           '{trimmed}' is already used in this scope
@@ -240,7 +231,7 @@ function DescriptionInput({
   return (
     <label className="field" htmlFor={id}>
       <span className="field-label">{label}</span>
-      <input
+      <Input
         id={id}
         value={value ?? ""}
         onChange={(e) => onCommit(e.target.value)}
@@ -338,26 +329,30 @@ function PropertyTable({
                     type of {p.name}
                   </label>
                   {propertyTypes.length > 0 ? (
-                    <select
+                    <Select
+                      virtual={false}
                       id={rowId(index, "type")}
                       value={p.type ?? ""}
-                      onChange={(e) =>
+                      onChange={(v) =>
                         onEdit((t) =>
-                          setPropertyField(t, owner, p.name, "type", e.target.value),
+                          setPropertyField(t, owner, p.name, "type", v),
                         )
                       }
-                    >
-                      {p.type === null || !propertyTypes.includes(p.type) ? (
-                        <option value={p.type ?? ""}>
-                          {p.type ?? "(unset)"}
-                        </option>
-                      ) : null}
-                      {propertyTypes.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
+                      options={[
+                        ...(p.type === null || !propertyTypes.includes(p.type)
+                          ? [
+                              {
+                                value: p.type ?? "",
+                                label: p.type ?? "(unset)",
+                              },
+                            ]
+                          : []),
+                        ...propertyTypes.map((t) => ({
+                          value: t,
+                          label: t,
+                        })),
+                      ]}
+                    />
                   ) : (
                     <code>{p.type ?? "(unset)"}</code>
                   )}
@@ -369,8 +364,7 @@ function PropertyTable({
                   />
                 </td>
                 <td>
-                  <input
-                    type="checkbox"
+                  <Checkbox
                     aria-label={`required: ${p.name}`}
                     checked={p.required}
                     onChange={(e) =>
@@ -392,31 +386,32 @@ function PropertyTable({
                       <label className="sr-only" htmlFor={rowId(index, "ref")}>
                         ref target of {p.name}
                       </label>
-                      <select
+                      <Select
+                        virtual={false}
                         id={rowId(index, "ref")}
                         value={p.ref ?? ""}
-                        onChange={(e) =>
+                        onChange={(v) =>
                           onEdit((t) =>
                             setPropertyField(
                               t,
                               owner,
                               p.name,
                               "ref",
-                              e.target.value === "" ? null : e.target.value,
+                              v === "" ? null : v,
                             ),
                           )
                         }
-                      >
-                        <option value="">(choose entity)</option>
-                        {p.ref !== null && !entityNames.includes(p.ref) ? (
-                          <option value={p.ref}>{p.ref} (undeclared)</option>
-                        ) : null}
-                        {entityNames.map((n) => (
-                          <option key={n} value={n}>
-                            {n}
-                          </option>
-                        ))}
-                      </select>
+                        options={[
+                          { value: "", label: "(choose entity)" },
+                          ...(p.ref !== null && !entityNames.includes(p.ref)
+                            ? [{ value: p.ref, label: `${p.ref} (undeclared)` }]
+                            : []),
+                          ...entityNames.map((n) => ({
+                            value: n,
+                            label: n,
+                          })),
+                        ]}
+                      />
                     </>
                   ) : (
                     <span className="hint">—</span>
@@ -432,7 +427,7 @@ function PropertyTable({
                   <label className="sr-only" htmlFor={rowId(index, "desc")}>
                     description of {p.name}
                   </label>
-                  <input
+                  <Input
                     id={rowId(index, "desc")}
                     value={p.description ?? ""}
                     onChange={(e) =>
@@ -456,9 +451,7 @@ function PropertyTable({
                     existing={properties.map((x) => x.name)}
                     onRename={(n) => onRename(concept, n)}
                   />
-                  <button type="button" onClick={() => onRemove(concept)}>
-                    Remove
-                  </button>
+                  <Button onClick={() => onRemove(concept)}>Remove</Button>
                 </td>
               </tr>
             );
@@ -469,14 +462,13 @@ function PropertyTable({
         <label className="sr-only" htmlFor={rowId(-1, "new-name")}>
           New property name on {ownerName}
         </label>
-        <input
+        <Input
           id={rowId(-1, "new-name")}
           placeholder="new property name"
           value={newProp}
           onChange={(e) => setNewProp(e.target.value)}
         />
-        <button
-          type="button"
+        <Button
           disabled={newProp.trim() === "" || existing.has(newProp.trim())}
           onClick={() => {
             const name = newProp.trim();
@@ -485,7 +477,7 @@ function PropertyTable({
           }}
         >
           Add property
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -523,9 +515,7 @@ function EntityForm({
           existing={view.entities.map((e) => e.name)}
           onRename={(n) => onRename(concept, n)}
         />
-        <button type="button" onClick={() => onRemove(concept)}>
-          Remove entity
-        </button>
+        <Button onClick={() => onRemove(concept)}>Remove entity</Button>
       </p>
       <DescriptionInput
         id={`entity-${slug(entity.name)}-desc`}
@@ -584,36 +574,32 @@ function EventForm({
           existing={view.events.map((e) => e.name)}
           onRename={(n) => onRename(concept, n)}
         />
-        <button type="button" onClick={() => onRemove(concept)}>
-          Remove event
-        </button>
+        <Button onClick={() => onRemove(concept)}>Remove event</Button>
       </p>
       <label className="field" htmlFor={subjectId}>
         <span className="field-label">subject</span>
-        <select
+        <Select
+          virtual={false}
           id={subjectId}
           value={event.subject ?? ""}
-          onChange={(e) =>
+          onChange={(v) =>
             onEdit((t) =>
-              setSubject(
-                t,
-                "events",
-                event.name,
-                e.target.value === "" ? null : e.target.value,
-              ),
+              setSubject(t, "events", event.name, v === "" ? null : v),
             )
           }
-        >
-          <option value="">(choose entity)</option>
-          {event.subject !== null && !entityNames.includes(event.subject) ? (
-            <option value={event.subject}>{event.subject} (undeclared)</option>
-          ) : null}
-          {entityNames.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: "", label: "(choose entity)" },
+            ...(event.subject !== null && !entityNames.includes(event.subject)
+              ? [
+                  {
+                    value: event.subject,
+                    label: `${event.subject} (undeclared)`,
+                  },
+                ]
+              : []),
+            ...entityNames.map((n) => ({ value: n, label: n })),
+          ]}
+        />
       </label>
       <DescriptionInput
         id={`event-${slug(event.name)}-desc`}
@@ -670,39 +656,38 @@ function ProjectionForm({
           existing={view.projections.map((p) => p.name)}
           onRename={(n) => onRename(concept, n)}
         />
-        <button type="button" onClick={() => onRemove(concept)}>
-          Remove projection
-        </button>
+        <Button onClick={() => onRemove(concept)}>Remove projection</Button>
       </p>
       <label className="field" htmlFor={subjectId}>
         <span className="field-label">subject</span>
-        <select
+        <Select
+          virtual={false}
           id={subjectId}
           value={projection.subject ?? ""}
-          onChange={(e) =>
+          onChange={(v) =>
             onEdit((t) =>
               setSubject(
                 t,
                 "projections",
                 projection.name,
-                e.target.value === "" ? null : e.target.value,
+                v === "" ? null : v,
               ),
             )
           }
-        >
-          <option value="">(choose entity)</option>
-          {projection.subject !== null &&
-          !entityNames.includes(projection.subject) ? (
-            <option value={projection.subject}>
-              {projection.subject} (undeclared)
-            </option>
-          ) : null}
-          {entityNames.map((n) => (
-            <option key={n} value={n}>
-              {n}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: "", label: "(choose entity)" },
+            ...(projection.subject !== null &&
+            !entityNames.includes(projection.subject)
+              ? [
+                  {
+                    value: projection.subject,
+                    label: `${projection.subject} (undeclared)`,
+                  },
+                ]
+              : []),
+            ...entityNames.map((n) => ({ value: n, label: n })),
+          ]}
+        />
       </label>
       <DescriptionInput
         id={`projection-${slug(projection.name)}-desc`}
@@ -740,14 +725,13 @@ function AddRow({
       <label className="sr-only" htmlFor={id}>
         {placeholder}
       </label>
-      <input
+      <Input
         id={id}
         placeholder={placeholder}
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <button
-        type="button"
+      <Button
         disabled={name.trim() === "" || existing.includes(name.trim())}
         onClick={() => {
           onAdd(name.trim());
@@ -755,7 +739,7 @@ function AddRow({
         }}
       >
         {buttonLabel}
-      </button>
+      </Button>
     </div>
   );
 }
@@ -811,8 +795,9 @@ export function DomainEditor({
     }
     // If the renamed concept is selected, follow it to the new name.
     setSelection((sel) =>
-      sel && conceptToSelection(concept)?.kind === sel.kind &&
-        sel.name === concept.name
+      sel &&
+      conceptToSelection(concept)?.kind === sel.kind &&
+      sel.name === concept.name
         ? { kind: sel.kind, name: newName }
         : sel,
     );
@@ -864,7 +849,7 @@ export function DomainEditor({
         <h2 id="domain-meta-heading">Domain</h2>
         <label className="field" htmlFor="domain-name-input">
           <span className="field-label">name</span>
-          <input
+          <Input
             id="domain-name-input"
             value={view.name ?? ""}
             onChange={(e) =>
@@ -876,7 +861,9 @@ export function DomainEditor({
           id="domain-desc-input"
           label="description"
           value={view.description}
-          onCommit={(v) => editDomain((t) => setDomainMeta(t, "description", v))}
+          onCommit={(v) =>
+            editDomain((t) => setDomainMeta(t, "description", v))
+          }
         />
         {view.policies ? (
           <dl className="definition-facts">
@@ -906,11 +893,7 @@ export function DomainEditor({
 
       <section aria-labelledby="domain-graph-heading">
         <h2 id="domain-graph-heading">Model</h2>
-        <DomainGraph
-          view={view}
-          selected={selection}
-          onSelect={setSelection}
-        />
+        <DomainGraph view={view} selected={selection} onSelect={setSelection} />
       </section>
 
       <section aria-labelledby="entities-heading">
@@ -921,15 +904,14 @@ export function DomainEditor({
           <ul className="definition-list">
             {view.entities.map((entity) => (
               <li key={entity.name}>
-                <button
-                  type="button"
+                <Button
                   className="link-button"
                   onClick={() =>
                     setSelection({ kind: "entity", name: entity.name })
                   }
                 >
                   <strong>{entity.name}</strong>
-                </button>{" "}
+                </Button>{" "}
                 {countBadge(`domain.entities.${entity.name}`)}
                 {entity.description ? ` — ${entity.description}` : null}
                 <ul>
@@ -966,15 +948,14 @@ export function DomainEditor({
           <ul className="definition-list">
             {view.events.map((event) => (
               <li key={event.name}>
-                <button
-                  type="button"
+                <Button
                   className="link-button"
                   onClick={() =>
                     setSelection({ kind: "event", name: event.name })
                   }
                 >
                   <strong>{event.name}</strong>
-                </button>{" "}
+                </Button>{" "}
                 {countBadge(`domain.events.${event.name}`)} on{" "}
                 <code>{event.subject ?? "(no subject)"}</code>
                 {event.description ? ` — ${event.description}` : null}
@@ -1002,15 +983,14 @@ export function DomainEditor({
           <ul className="definition-list">
             {view.projections.map((p) => (
               <li key={p.name}>
-                <button
-                  type="button"
+                <Button
                   className="link-button"
                   onClick={() =>
                     setSelection({ kind: "projection", name: p.name })
                   }
                 >
                   <strong>{p.name}</strong>
-                </button>{" "}
+                </Button>{" "}
                 {countBadge(`domain.projections.${p.name}`)} on{" "}
                 <code>{p.subject ?? "(no subject)"}</code>
                 {p.description ? ` — ${p.description}` : null}
@@ -1028,8 +1008,7 @@ export function DomainEditor({
         />
       ) : null}
 
-      {selection &&
-      (selectedEntity || selectedEvent || selectedProjection) ? (
+      {selection && (selectedEntity || selectedEvent || selectedProjection) ? (
         <section
           aria-labelledby="concept-editor-heading"
           className="concept-editor"

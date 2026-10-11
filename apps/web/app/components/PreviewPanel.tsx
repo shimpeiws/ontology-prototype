@@ -13,6 +13,7 @@
  */
 
 import { useId, useState } from "react";
+import { Button, Input, Select, Tag } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import { contractVocabulary, useContract } from "../lib/contract";
@@ -58,9 +59,7 @@ function ObservationCard({ observation }: { observation: PreviewObservation }) {
         >
           {observation.status}
         </span>{" "}
-        <strong>
-          Record row {observation.row}
-        </strong>{" "}
+        <strong>Record row {observation.row}</strong>{" "}
         <code>{observation.observation_id}</code>
       </p>
 
@@ -218,9 +217,7 @@ export function PreviewPanel() {
   // A remembered selection is only honored while the current draft still
   // declares that source — after a workspace switch or a source removal the
   // stale name must not leak into the request.
-  const effectiveSource = sources.includes(source)
-    ? source
-    : sources[0] || "";
+  const effectiveSource = sources.includes(source) ? source : sources[0] || "";
   const format = draftSourceFormat(
     mappingDraft,
     mappingFallback,
@@ -239,7 +236,13 @@ export function PreviewPanel() {
     const revision = state.draftRevision;
     const text = sample;
     const sourceName = effectiveSource;
-    setRun({ status: "running", path, revision, sample: text, source: sourceName });
+    setRun({
+      status: "running",
+      path,
+      revision,
+      sample: text,
+      source: sourceName,
+    });
     try {
       const response = await api.previewDraft(
         path,
@@ -282,8 +285,8 @@ export function PreviewPanel() {
     <section className="preview" aria-labelledby="preview-heading">
       <h2 id="preview-heading">Preview mapping</h2>
       <p className="hint">
-        Resolves the draft mapping against a pasted sample via the shared
-        core — isolated from the workspace files and the canonical store.
+        Resolves the draft mapping against a pasted sample via the shared core —
+        isolated from the workspace files and the canonical store.
         {format ? ` The selected source declares format ${format}.` : ""}
         {limits
           ? ` Samples are bounded to ${limits.maxBytes} bytes and ${limits.maxRecords} records.`
@@ -293,17 +296,13 @@ export function PreviewPanel() {
       {sources.length > 1 ? (
         <div className="form-field">
           <label htmlFor={sourceId}>Source</label>
-          <select
+          <Select
+            virtual={false}
             id={sourceId}
             value={effectiveSource}
-            onChange={(e) => setSource(e.target.value)}
-          >
-            {sources.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setSource(v)}
+            options={sources.map((name) => ({ value: name, label: name }))}
+          />
         </div>
       ) : null}
 
@@ -311,7 +310,7 @@ export function PreviewPanel() {
         <label htmlFor={sampleId}>
           Sample input ({format ?? "csv or json"})
         </label>
-        <textarea
+        <Input.TextArea
           id={sampleId}
           rows={8}
           value={sample}
@@ -326,20 +325,21 @@ export function PreviewPanel() {
         ) : null}
       </div>
 
-      <button
-        type="button"
+      <Button
         disabled={running || !state.workspace}
         onClick={() => void runPreview()}
       >
         {running ? "Running preview…" : "Run preview"}
-      </button>
+      </Button>
 
       <div aria-live="polite">
         {stale ? (
           <p className="field-diagnostics stale" role="status">
-            <span className="badge badge-stale">stale</span> The draft or the
-            sample changed since this preview ran — run it again to see
-            current results.
+            <Tag className="badge badge-stale" color="warning">
+              stale
+            </Tag>{" "}
+            The draft or the sample changed since this preview ran — run it
+            again to see current results.
           </p>
         ) : null}
 
@@ -348,9 +348,11 @@ export function PreviewPanel() {
         ) : run?.status === "failed" && run.error ? (
           <ErrorState
             error={run.error}
-            onRetry={run.error instanceof ApiError && run.error.retryable
-              ? () => void runPreview()
-              : undefined}
+            onRetry={
+              run.error instanceof ApiError && run.error.retryable
+                ? () => void runPreview()
+                : undefined
+            }
           />
         ) : run?.status === "done" && run.response ? (
           run.response.preview === null ? (

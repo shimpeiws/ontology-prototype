@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { Alert, Button, Tag } from "antd";
 
 import { useWorkspace } from "../workspace/context";
 import { isFileDirty } from "../workspace/store";
@@ -48,15 +49,15 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
           Draft <code>{file}</code>
         </h3>
         <div className="draft-editor-actions">
-          {dirty ? <span className="badge badge-draft">unsaved</span> : null}
+          {dirty ? <Tag className="badge badge-draft">unsaved</Tag> : null}
           {draft === null ? (
-            <span className="badge badge-missing">
+            <Tag className="badge badge-missing" color="warning">
               {onDisk ? "removed from draft" : "not on disk"}
-            </span>
+            </Tag>
           ) : null}
           {draft !== null ? (
-            <button
-              type="button"
+            <Button
+              size="small"
               onClick={() => removeFile(file)}
               disabled={state.saving}
               title={
@@ -66,12 +67,13 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
               }
             >
               Remove from draft
-            </button>
+            </Button>
           ) : null}
           {confirmingRevert && dirty && !state.saving ? (
             <>
-              <button
-                type="button"
+              <Button
+                size="small"
+                danger
                 onClick={() => {
                   // Same guard as the other discard paths: a save already
                   // sent cannot be recalled.
@@ -81,17 +83,17 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
                 }}
               >
                 Discard changes
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                size="small"
                 onClick={() => setArmedBaseline(null)}
               >
                 Keep editing
-              </button>
+              </Button>
             </>
           ) : (
-            <button
-              type="button"
+            <Button
+              size="small"
               onClick={() => setArmedBaseline(state.workspace)}
               disabled={!dirty || state.saving}
               title={
@@ -101,15 +103,22 @@ export function DraftEditor({ file }: { file: WorkspaceFileName }) {
               }
             >
               Revert to active
-            </button>
+            </Button>
           )}
         </div>
       </div>
       {confirmingRevert && dirty && !state.saving ? (
-        <p role="alert" className="state state-error">
-          Unsaved changes to <code>{file}</code> will be discarded — the file
-          returns to the active on-disk text.
-        </p>
+        <Alert
+          className="state state-error"
+          type="warning"
+          role="alert"
+          title={
+            <>
+              Unsaved changes to <code>{file}</code> will be discarded — the
+              file returns to the active on-disk text.
+            </>
+          }
+        />
       ) : null}
       <label className="sr-only" htmlFor={`${labelId}-textarea`}>
         {file} draft YAML

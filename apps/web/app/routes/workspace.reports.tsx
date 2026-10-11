@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { Button } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import type {
@@ -54,14 +55,14 @@ function RunRow({
 }) {
   return (
     <li>
-      <button
-        type="button"
+      <Button
+        type="link"
         className={`link-button${selected ? " report-selected" : ""}`}
         aria-pressed={selected}
         onClick={onSelect}
       >
         <code>{run.run_id}</code>
-      </button>{" "}
+      </Button>{" "}
       — {run.evaluation} as of <code>{run.as_of}</code>{" "}
       <StatusBadge status={run.report?.overall?.status ?? null} />
     </li>

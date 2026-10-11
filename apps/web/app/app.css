@@ -1,19 +1,41 @@
-:root {
-  color-scheme: light dark;
-  font-family:
-    system-ui,
-    -apple-system,
-    sans-serif;
-  line-height: 1.5;
-}
+/**
+ * App-level CSS for the Web Console (#92).
+ *
+ * Ant Design supplies every control style and the shared theme; this file
+ * carries only what antd does not own: page layout glue, bespoke surfaces
+ * (domain graph, YAML editor, diagnostics channel, record JSON), and
+ * semantic helpers. Colors mirror the standard light theme tokens — they
+ * are not a second design system; adjust appTheme in app/theme.ts first.
+ */
 
-body {
-  margin: 0;
+:root {
+  --app-border: #d9d9d9;
+  --app-border-split: #f0f0f0;
+  --app-text: rgba(0, 0, 0, 0.88);
+  --app-text-secondary: rgba(0, 0, 0, 0.65);
+  --app-text-tertiary: rgba(0, 0, 0, 0.45);
+  --app-primary: #1677ff;
+  --app-error: #ff4d4f;
+  --app-warning: #faad14;
+  --app-warning-bg: #fffbe6;
+  --app-success: #52c41a;
+  --app-info: #1677ff;
+  --app-bg-fill: rgba(0, 0, 0, 0.04);
+  --app-bg-layout: #f5f5f5;
+  --app-radius: 8px;
+  --app-radius-sm: 6px;
 }
 
 code {
-  font-family: ui-monospace, monospace;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
   font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  overflow-x: auto;
+  max-width: 100%;
 }
 
 .sr-only {
@@ -29,46 +51,28 @@ code {
 }
 
 .hint {
-  opacity: 0.75;
+  color: var(--app-text-secondary);
   font-size: 0.9em;
 }
 
 .field-error {
-  color: #b3261e;
+  color: var(--app-error);
 }
 
-/* Shared states */
+.hydrate-fallback {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 2rem 1rem;
+}
+
+/* Shared states — LoadingState wraps the antd Spin so the label and the
+ * live-region announcement stay under our control. */
 .state-loading {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-.spinner {
-  width: 0.9em;
-  height: 0.9em;
-  border: 2px solid currentColor;
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.state-error {
-  border: 1px solid #b3261e;
-  border-radius: 6px;
-  padding: 0.5rem 1rem;
-}
-
-.state-ok {
-  border: 1px solid #1a7f37;
-  border-radius: 6px;
-  padding: 0.5rem 1rem;
+  color: var(--app-text-secondary);
 }
 
 .error-detail {
@@ -78,44 +82,14 @@ code {
   margin: 0.25rem 0;
 }
 
-.state-empty {
-  opacity: 0.8;
-  font-style: italic;
+/* Status / nature badges — the tone mapping lives in
+ * components/StatusBadge.tsx; these classes carry only the bits antd Tag
+ * cannot express (the dashed "cannot decide" edge). */
+.status-badge.status-unknown {
+  border-style: dashed;
 }
 
-/* Badges */
-.badge {
-  display: inline-block;
-  padding: 0.1em 0.5em;
-  border-radius: 999px;
-  font-size: 0.8em;
-  border: 1px solid currentColor;
-}
-
-.badge-active {
-  color: #1a7f37;
-}
-
-.badge-draft,
-.badge-stale {
-  color: #9a6700;
-}
-
-.badge-invalid,
-.badge-error,
-.badge-missing {
-  color: #b3261e;
-}
-
-.badge-valid {
-  color: #1a7f37;
-}
-
-.badge-validating {
-  color: #0969da;
-}
-
-/* Layout */
+/* Home */
 .home {
   max-width: 42rem;
   margin: 3rem auto;
@@ -129,75 +103,77 @@ code {
   max-width: 24rem;
 }
 
+/* Workspace shell — antd Layout supplies the frame; these classes keep
+ * the identity/actions row tidy at every width. */
 .workspace-layout {
-  display: flex;
-  flex-direction: column;
   min-height: 100vh;
+}
+
+.workspace-sider {
+  border-right: 1px solid var(--app-border-split);
+}
+
+.workspace-brand {
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  font-size: 1.05rem;
+  border-bottom: 1px solid var(--app-border-split);
+}
+
+.workspace-sider .ant-menu {
+  border-inline-end: none;
 }
 
 .workspace-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+  gap: 0.75rem 1rem;
+  height: auto;
+  line-height: normal;
+  padding-block: 0.5rem;
+  border-bottom: 1px solid var(--app-border-split);
 }
 
 .workspace-identity {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  /* Paths and hex digests must wrap at narrow widths, not clip. */
+  overflow-wrap: anywhere;
 }
 
 .workspace-identity .digest {
   font-size: 0.8em;
-  opacity: 0.7;
-}
-
-.workspace-actions {
-  margin-left: auto;
-  display: flex;
-  gap: 0.5rem;
+  color: var(--app-text-secondary);
 }
 
 .draft-status {
   display: flex;
   gap: 0.4rem;
+  align-items: center;
 }
 
-.workspace-nav ul {
+.workspace-actions {
+  margin-left: auto;
   display: flex;
-  gap: 0.25rem;
-  list-style: none;
-  margin: 0;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-}
-
-.workspace-nav a {
-  display: inline-block;
-  padding: 0.35rem 0.75rem;
-  border-radius: 6px;
-  text-decoration: none;
-  color: inherit;
-}
-
-.workspace-nav a.active {
-  font-weight: 600;
-  outline: 2px solid #0969da;
-  outline-offset: -2px;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .workspace-main {
   flex: 1;
   padding: 1rem;
-  max-width: 64rem;
+  min-width: 0;
+}
+
+.workspace-content-inner {
+  max-width: 72rem;
   width: 100%;
 }
 
-/* Diagnostics */
+/* Diagnostics channel — verbatim core diagnostics; severity Tag supplies
+ * the tone, the left edge keeps scannability. */
 .diagnostics-list {
   list-style: none;
   padding: 0;
@@ -207,7 +183,7 @@ code {
 }
 
 .diagnostic {
-  border-left: 3px solid #9a6700;
+  border-left: 3px solid var(--app-warning);
   padding: 0.25rem 0.75rem;
   display: flex;
   flex-wrap: wrap;
@@ -216,20 +192,25 @@ code {
 }
 
 .diagnostic.severity-error {
-  border-left-color: #b3261e;
+  border-left-color: var(--app-error);
+}
+
+.diagnostic.severity-warning {
+  border-left-color: var(--app-warning);
 }
 
 .diagnostic-location,
 .diagnostic-hint {
   font-size: 0.85em;
-  opacity: 0.75;
+  color: var(--app-text-secondary);
 }
 
-/* Definition pages */
+/* Fact lists (kept as semantic <dl> — the right element for label/value
+ * pairs; styled to match the light theme). */
 .bundle-status,
 .definition-facts {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 0.25rem 1rem;
 }
 
@@ -241,13 +222,15 @@ code {
 .bundle-status dd,
 .definition-facts dd {
   margin: 0;
+  min-width: 0;
 }
 
 .file-status-list {
   list-style: none;
   padding: 0;
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
 }
 
 .definition-list ul {
@@ -258,23 +241,22 @@ code {
   margin-right: 0.4rem;
 }
 
-/* Draft editor */
+/* Draft editor — bespoke YAML surface (not a code editor). */
 .draft-editor {
   margin-top: 1.5rem;
-  border-top: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-  padding-top: 1rem;
 }
 
 .draft-editor-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 1rem;
 }
 
 .draft-editor-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
 }
@@ -282,7 +264,8 @@ code {
 .draft-editor-textarea {
   width: 100%;
   min-height: 16rem;
-  font-family: ui-monospace, monospace;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
   font-size: 0.85rem;
   box-sizing: border-box;
 }
@@ -293,9 +276,11 @@ code {
   max-width: 32rem;
   margin: 0 auto;
   padding: 1rem;
-  border: 1px solid #9a6700;
-  border-radius: 8px;
-  background: light-dark(#fff, #1a1a1a);
+  border: 1px solid var(--app-warning);
+  border-radius: var(--app-radius);
+  background: #fff;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1000;
   display: flex;
   flex-wrap: wrap;
   gap: 0.75rem;
@@ -306,17 +291,15 @@ code {
   flex-basis: 100%;
   margin: 0;
 }
-/* Structured definition forms (#18) */
+
+/* Structured definition forms — semantic groups styled as light cards. */
 .definition-form {
   margin-top: 1.5rem;
-  border-top: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-  padding-top: 0.5rem;
 }
 
 .form-section {
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-  border-radius: 6px;
+  border: 1px solid var(--app-border-split);
+  border-radius: var(--app-radius);
   margin: 0.75rem 0;
   padding: 0.5rem 1rem 1rem;
 }
@@ -327,16 +310,15 @@ code {
 }
 
 .form-card {
-  border: 1px dashed
-    light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.3));
-  border-radius: 6px;
+  border: 1px dashed var(--app-border);
+  border-radius: var(--app-radius-sm);
   margin: 0.5rem 0;
   padding: 0.5rem 0.75rem 0.75rem;
 }
 
 .form-card legend {
   font-size: 0.9em;
-  opacity: 0.8;
+  color: var(--app-text-secondary);
 }
 
 .form-field {
@@ -345,6 +327,7 @@ code {
   gap: 0.15rem;
   margin: 0.5rem 0;
   max-width: 28rem;
+  min-width: 0;
 }
 
 .form-field > label,
@@ -387,20 +370,14 @@ code {
 }
 
 .link-button {
-  background: none;
-  border: none;
   padding: 0;
-  font: inherit;
-  color: #0969da;
-  cursor: pointer;
-  text-decoration: underline;
 }
 
 .domain-meta {
   margin-bottom: 1rem;
 }
 
-/* Domain graph */
+/* Domain graph — bespoke SVG/node visualization, kept per issue scope. */
 .graph-canvas {
   position: relative;
   overflow-x: auto;
@@ -415,7 +392,7 @@ code {
 }
 
 .graph-edge {
-  stroke: #6e7781;
+  stroke: #8c8c8c;
   stroke-width: 1.5;
 }
 
@@ -424,14 +401,14 @@ code {
 }
 
 .graph-arrowhead {
-  fill: #6e7781;
+  fill: #8c8c8c;
 }
 
 .graph-edge-label {
   font-size: 0.7rem;
-  fill: #57606a;
+  fill: #595959;
   paint-order: stroke;
-  stroke: light-dark(#fff, #1a1a1a);
+  stroke: #fff;
   stroke-width: 3px;
 }
 
@@ -447,30 +424,30 @@ code {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  opacity: 0.6;
+  color: var(--app-text-tertiary);
   margin-top: 0.75rem;
   display: inline-block;
 }
 
 .graph-card {
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.3), rgba(255, 255, 255, 0.35));
-  border-radius: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
   padding: 0.4rem 0.6rem;
   min-width: 9rem;
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
-  background: light-dark(#fff, #24292f);
+  background: #fff;
   cursor: pointer;
   position: relative;
 }
 
 .graph-card:focus-visible {
-  outline: 2px solid #0969da;
+  outline: 2px solid var(--app-primary);
 }
 
 .graph-card.selected {
-  outline: 2px solid #0969da;
+  outline: 2px solid var(--app-primary);
 }
 
 .graph-card-event {
@@ -483,7 +460,7 @@ code {
 
 .graph-card-missing {
   border-style: dashed;
-  border-color: #b3261e;
+  border-color: var(--app-error);
   opacity: 0.8;
   cursor: default;
 }
@@ -494,46 +471,70 @@ code {
 
 .graph-prop {
   font-size: 0.75rem;
-  font-family: ui-monospace, monospace;
-  opacity: 0.85;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    monospace;
+  color: var(--app-text-secondary);
 }
 
-/* Property table + concept form */
-.property-table {
+/* Property table + concept form — tables stay semantic; block display
+ * lets a wide table scroll inside the page instead of overflowing. */
+.property-table,
+.preview-record,
+.report-table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   margin: 0.5rem 0;
   font-size: 0.9em;
 }
 
 .property-table th,
-.property-table td {
-  border: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
+.property-table td,
+.preview-record th,
+.preview-record td,
+.report-table th,
+.report-table td {
+  border: 1px solid var(--app-border-split);
   padding: 0.3rem 0.5rem;
   text-align: left;
   vertical-align: top;
+}
+
+.property-table th,
+.preview-record th,
+.report-table th {
+  background: #fafafa;
+}
+
+.report-table caption {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.85em;
+  color: var(--app-text-secondary);
+  padding-bottom: 0.15rem;
 }
 
 .prop-actions {
   white-space: nowrap;
 }
 
-.prop-actions button + button,
-.rename-control button + button {
+.prop-actions .ant-btn + .ant-btn,
+.rename-control .ant-btn + .ant-btn {
   margin-left: 0.4rem;
 }
 
 .add-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
   margin-top: 0.5rem;
 }
 
 .concept-form {
-  border: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-  border-radius: 8px;
+  border: 1px solid var(--app-border-split);
+  border-radius: var(--app-radius);
   padding: 0.75rem 1rem;
 }
 
@@ -544,13 +545,13 @@ code {
   flex-wrap: wrap;
 }
 
-/* Impact panel */
+/* Impact panel — the rename/remove blast-radius alertdialog. */
 .impact-panel {
-  border: 1px solid #9a6700;
-  border-radius: 8px;
+  border: 1px solid var(--app-warning);
+  border-radius: var(--app-radius);
   padding: 0.75rem 1rem;
   margin: 1rem 0;
-  background: light-dark(#fffbe5, #2a2300);
+  background: var(--app-warning-bg);
 }
 
 .impact-list {
@@ -571,17 +572,12 @@ code {
   gap: 0.5rem;
 }
 
-/* Mapping form + preview panel (#17) */
-.assignment {
-  border-left: 3px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.25));
-  padding-left: 0.75rem;
-  margin: 0.5rem 0;
-}
-
-.assignment-row {
-  border-left: 3px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.25));
+/* Mapping form + preview panel */
+.assignment,
+.assignment-row,
+.condition-node,
+.condition-value {
+  border-left: 3px solid var(--app-border-split);
   padding-left: 0.75rem;
   margin: 0.5rem 0;
 }
@@ -590,125 +586,24 @@ code {
   margin: 0.75rem 0;
 }
 
-.condition-node {
-  border-left: 3px solid
-    light-dark(rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.3));
-  padding-left: 0.75rem;
-  margin: 0.5rem 0;
-}
-
-.condition-args {
-  margin: 0.25rem 0 0.5rem;
-}
-
+.condition-args,
 .condition-values {
   margin: 0.25rem 0 0.5rem;
 }
 
-.condition-value {
-  border-left: 3px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.25));
-  padding-left: 0.75rem;
-  margin: 0.5rem 0;
-}
-
 .preview {
   margin-top: 1.5rem;
-  border-top: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-  padding-top: 0.5rem;
 }
 
-.preview textarea {
-  font-family: ui-monospace, monospace;
-}
-
-.preview-record {
-  border-collapse: collapse;
-  margin: 0.5rem 0;
-  font-size: 0.9em;
-}
-
-.preview-record th,
-.preview-record td {
-  border: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-  padding: 0.25rem 0.5rem;
-  text-align: left;
-  vertical-align: top;
+.preview-observation {
+  border: 1px solid var(--app-border-split);
+  border-left: 3px solid var(--app-border);
+  border-radius: var(--app-radius-sm);
+  padding: 0.5rem 0.75rem;
 }
 
 .preview-null {
-  opacity: 0.6;
-}
-
-.preview-observation ul {
-  margin: 0.25rem 0;
-}
-
-/* Operational inspection views (#62): status tones and nature labels.
- * The tone mapping lives in components/StatusBadge.tsx — these classes
- * must keep `not_met`/`unverified` visually distinct from success and
- * `unavailable` distinct from `passed`. */
-.status-badge.status-ok {
-  color: #1a7f37;
-  border-color: #1a7f37;
-}
-
-.status-badge.status-bad {
-  color: #b3261e;
-  border-color: #b3261e;
-  background: light-dark(rgba(179, 38, 30, 0.08), rgba(179, 38, 30, 0.2));
-}
-
-.status-badge.status-warn {
-  color: #9a6700;
-  border-color: #9a6700;
-}
-
-.status-badge.status-unknown {
-  /* "cannot decide" — dashed border separates it from real verdicts. */
-  color: #57606a;
-  border-style: dashed;
-}
-
-.status-badge.status-neutral {
-  color: inherit;
-  opacity: 0.85;
-}
-
-/* Nature labels (docs/trace.md): one hue per voice of the loop. */
-.nature-badge {
-  font-weight: 400;
-}
-
-.nature-badge.nature-observed {
-  color: #57606a;
-}
-
-.nature-badge.nature-derived {
-  color: #0969da;
-}
-
-.nature-badge.nature-ai {
-  color: #8250df;
-}
-
-.nature-badge.nature-human {
-  color: #1a7f37;
-}
-
-.nature-badge.nature-writeback {
-  color: #9a6700;
-}
-
-.nature-badge.nature-evaluated {
-  color: #cf7224;
-}
-
-.nature-badge.nature-unknown {
-  color: inherit;
-  opacity: 0.7;
+  color: var(--app-text-tertiary);
 }
 
 /* Trace page */
@@ -720,8 +615,8 @@ code {
 }
 
 .trace-stage {
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18));
-  border-radius: 6px;
+  border: 1px solid var(--app-border-split);
+  border-radius: var(--app-radius-sm);
   padding: 0.5rem 1rem;
   margin: 0.75rem 0;
 }
@@ -752,7 +647,7 @@ code {
 }
 
 .journal-event-failed {
-  border-left: 3px solid #b3261e;
+  border-left: 3px solid var(--app-error);
   padding-left: 0.5rem;
 }
 
@@ -761,7 +656,7 @@ code {
   margin: 0.15rem 0;
   white-space: pre-wrap;
   word-break: break-word;
-  opacity: 0.85;
+  color: var(--app-text-secondary);
 }
 
 .link-unresolved code {
@@ -795,32 +690,9 @@ code {
 
 .cohort {
   flex: 1 1 22rem;
-  border: 1px solid light-dark(rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.18));
-  border-radius: 6px;
+  border: 1px solid var(--app-border-split);
+  border-radius: var(--app-radius-sm);
   padding: 0.5rem 1rem 0.75rem;
-}
-
-.report-table {
-  border-collapse: collapse;
-  margin: 0.5rem 0;
-  font-size: 0.9em;
-}
-
-.report-table caption {
-  text-align: left;
-  font-weight: 600;
-  font-size: 0.85em;
-  opacity: 0.75;
-  padding-bottom: 0.15rem;
-}
-
-.report-table th,
-.report-table td {
-  border: 1px solid
-    light-dark(rgba(0, 0, 0, 0.15), rgba(255, 255, 255, 0.2));
-  padding: 0.25rem 0.5rem;
-  text-align: left;
-  vertical-align: top;
 }
 
 .report-guardrails {
@@ -830,12 +702,49 @@ code {
 .report-note {
   margin-top: 1rem;
   padding: 0.5rem 0.75rem;
-  border-left: 3px solid
-    light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.3));
+  border-left: 3px solid var(--app-border);
   font-size: 0.9em;
-  opacity: 0.85;
+  color: var(--app-text-secondary);
 }
 
 .report-selected {
   font-weight: 600;
+}
+
+/* Run page */
+.run-next {
+  margin-bottom: 1rem;
+}
+
+.run-next-badge {
+  vertical-align: middle;
+}
+
+.run-stages {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.run-stage {
+  border: 1px solid var(--app-border-split);
+  border-radius: var(--app-radius);
+  padding: 0.75rem 1rem 1rem;
+}
+
+.run-stage[data-next] {
+  border-color: var(--app-primary);
+}
+
+.run-stage > h2 {
+  margin-top: 0;
+}
+
+.run-execute-row {
+  border: 1px solid var(--app-border-split);
+  border-radius: var(--app-radius-sm);
+  padding: 0.5rem 0.75rem;
+  margin: 0.5rem 0;
 }

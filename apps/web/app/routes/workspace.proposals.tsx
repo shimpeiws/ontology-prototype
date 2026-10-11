@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useId, useRef, useState } from "react";
+import { Button, Input } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import type { ProposalsResponse } from "../lib/types";
@@ -92,9 +93,8 @@ export default function ProposalsPage() {
 
       <div className="form-field reviewer-field">
         <label htmlFor={reviewerId}>Reviewer identity</label>
-        <input
+        <Input
           id={reviewerId}
-          type="text"
           value={reviewer}
           onChange={(e) => setReviewer(e.target.value)}
           placeholder="who records the decision (e.g. fde-sato)"
@@ -106,13 +106,9 @@ export default function ProposalsPage() {
       </div>
 
       <div className="add-row">
-        <button
-          type="button"
-          disabled={!path || refreshing}
-          onClick={refresh}
-        >
+        <Button disabled={!path || refreshing} onClick={refresh}>
           {refreshing ? "Refreshing…" : "Refresh"}
-        </button>
+        </Button>
         <p className="hint">
           This page does not watch the store — refresh to pick up
           proposals a CLI diagnosis run persisted since the page loaded.

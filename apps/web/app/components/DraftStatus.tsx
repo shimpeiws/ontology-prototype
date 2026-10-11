@@ -4,6 +4,8 @@
  * (on-disk) content, and whether shown validation is stale.
  */
 
+import { Tag } from "antd";
+
 import {
   isDraftDirty,
   isFileDirty,
@@ -19,20 +21,23 @@ export function DraftStatusBadge({ state }: { state: WorkspaceState }) {
   const stale = isValidationStale(state);
   return (
     <div className="draft-status" aria-live="polite">
-      <span className={`badge ${dirty ? "badge-draft" : "badge-active"}`}>
+      <Tag
+        className={`badge ${dirty ? "badge-draft" : "badge-active"}`}
+        color={dirty ? "warning" : "success"}
+      >
         {dirty ? "unsaved draft" : "active"}
-      </span>
+      </Tag>
       {state.saving ? (
-        <span className="badge badge-validating" role="status">
+        <Tag className="badge badge-validating" role="status">
           saving…
-        </span>
+        </Tag>
       ) : null}
       {state.validating ? (
-        <span className="badge badge-validating" role="status">
+        <Tag className="badge badge-validating" role="status">
           validating…
-        </span>
+        </Tag>
       ) : state.validation ? (
-        <span
+        <Tag
           className={`badge ${
             stale
               ? "badge-stale"
@@ -40,18 +45,19 @@ export function DraftStatusBadge({ state }: { state: WorkspaceState }) {
                 ? "badge-valid"
                 : "badge-invalid"
           }`}
+          color={stale ? "warning" : state.validation.valid ? "success" : "error"}
         >
           {stale
             ? "validation stale"
             : state.validation.valid
               ? "draft valid"
               : "draft invalid"}
-        </span>
+        </Tag>
       ) : null}
       {state.validationError ? (
-        <span className="badge badge-error" role="status">
+        <Tag className="badge badge-error" color="error" role="status">
           validation failed
-        </span>
+        </Tag>
       ) : null}
     </div>
   );
@@ -82,11 +88,17 @@ function FileStatus({
     <li>
       <code>{file}</code>{" "}
       {dirty ? (
-        <span className="badge badge-draft">unsaved</span>
+        <Tag className="badge badge-draft" color="warning">
+          unsaved
+        </Tag>
       ) : !onDisk ? (
-        <span className="badge badge-missing">missing</span>
+        <Tag className="badge badge-missing" color="warning">
+          missing
+        </Tag>
       ) : (
-        <span className="badge badge-active">active</span>
+        <Tag className="badge badge-active" color="success">
+          active
+        </Tag>
       )}
     </li>
   );

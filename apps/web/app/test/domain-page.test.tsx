@@ -28,6 +28,7 @@ import {
   SYNTHETIC_BUNDLE_OPEN_RESPONSE,
   SYNTHETIC_CONTRACT,
 } from "./fixtures";
+import { antdSelectText, pickOption } from "./antdSelect";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -113,9 +114,9 @@ describe("domain page", () => {
     ).toBeInTheDocument();
     // The property type vocabulary comes from the contract.
     const typeSelect = await screen.findByLabelText("type of status");
-    expect(typeSelect).toHaveValue("string");
+    expect(antdSelectText(typeSelect)).toBe("string");
 
-    await user.selectOptions(typeSelect, "integer");
+    await pickOption(user, typeSelect, "integer");
     expect(drafts()["domain.yaml"]).toContain("type: integer");
     // Draft-only: the textarea mirrors the same text and the badge shows.
     expect(
@@ -131,8 +132,8 @@ describe("domain page", () => {
 
     await user.click(screen.getByRole("button", { name: "Entity Job" }));
     const refSelect = await screen.findByLabelText("ref target of assignee");
-    expect(refSelect).toHaveValue("Person");
-    await user.selectOptions(refSelect, "Job");
+    expect(antdSelectText(refSelect)).toBe("Person");
+    await pickOption(user, refSelect, "Job");
     expect(drafts()["domain.yaml"]).toContain("ref: Job");
   });
 

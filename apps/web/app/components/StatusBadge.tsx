@@ -8,6 +8,8 @@
  * client renders what the API sent and never invents a verdict.
  */
 
+import { Tag } from "antd";
+
 export type StatusTone = "ok" | "bad" | "warn" | "unknown" | "neutral";
 
 const TONE_BY_STATUS: Record<string, StatusTone> = {
@@ -45,6 +47,17 @@ export function statusTone(status: string | null | undefined): StatusTone {
   return (status && TONE_BY_STATUS[status]) || "neutral";
 }
 
+/** StatusTone → the standard Tag color carrying that tone. `unknown`
+ *  keeps no preset color: its dashed edge (`.status-unknown` in app.css)
+ *  is the marker that it decided nothing. */
+const TAG_COLOR_BY_TONE: Record<StatusTone, string | undefined> = {
+  ok: "success",
+  bad: "error",
+  warn: "warning",
+  unknown: undefined,
+  neutral: undefined,
+};
+
 export function StatusBadge({
   status,
   label,
@@ -54,29 +67,36 @@ export function StatusBadge({
   label?: string;
 }) {
   const text = label ?? status ?? "unknown";
+  const tone = statusTone(status);
   return (
-    <span className={`badge status-badge status-${statusTone(status)}`}>
+    <Tag
+      className={`badge status-badge status-${tone}`}
+      color={TAG_COLOR_BY_TONE[tone]}
+    >
       {text}
-    </span>
+    </Tag>
   );
 }
 
-/** Nature labels from the trace contract (docs/trace.md). */
-const NATURES = new Set([
-  "observed",
-  "derived",
-  "ai",
-  "human",
-  "writeback",
-  "evaluated",
-]);
+/** Nature labels from the trace contract (docs/trace.md) — one hue per
+ *  voice of the loop, so model output never reads as observed fact. */
+const NATURE_COLORS: Record<string, string> = {
+  observed: "#57606a",
+  derived: "#0969da",
+  ai: "#8250df",
+  human: "#1a7f37",
+  writeback: "#9a6700",
+  evaluated: "#cf7224",
+};
 
 export function NatureBadge({ nature }: { nature: string }) {
+  const known = nature in NATURE_COLORS;
   return (
-    <span
-      className={`badge nature-badge nature-${NATURES.has(nature) ? nature : "unknown"}`}
+    <Tag
+      className={`badge nature-badge nature-${known ? nature : "unknown"}`}
+      color={known ? NATURE_COLORS[nature] : undefined}
     >
       {nature}
-    </span>
+    </Tag>
   );
 }

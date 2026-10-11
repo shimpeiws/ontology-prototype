@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
+import { Button, Input, Select, Tag } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import type {
@@ -49,7 +50,11 @@ type StageResult<R> =
 type Overview =
   | { status: "loading" }
   | { status: "failed"; error: ApiError | Error }
-  | { status: "done"; trace: TraceOverviewResponse; proposals: ProposalsResponse };
+  | {
+      status: "done";
+      trace: TraceOverviewResponse;
+      proposals: ProposalsResponse;
+    };
 
 /** The stage the loop is waiting on, plus why — the next-action banner. */
 interface LoopPosition {
@@ -92,7 +97,8 @@ function loopPosition(
     return {
       stage: "ingest",
       label: "Ingest a source snapshot",
-      detail: "No observations are recorded yet — the loop starts with evidence.",
+      detail:
+        "No observations are recorded yet — the loop starts with evidence.",
     };
   }
   const lastProjection = trace.projection_runs?.at(-1);
@@ -139,9 +145,7 @@ function loopPosition(
   const executed = proposals.filter((p) =>
     p.executions.some((e) => e.status === "succeeded"),
   );
-  const awaitingApproval = proposals.filter(
-    (p) => p.status === "proposed",
-  );
+  const awaitingApproval = proposals.filter((p) => p.status === "proposed");
   const awaitingExecution = proposals.filter(
     (p) => p.status === "approved" && !executed.includes(p),
   );
@@ -166,7 +170,8 @@ function loopPosition(
     return {
       stage: "evaluate",
       label: "Run an outcome evaluation",
-      detail: "Write-back succeeded — measure the cohorts against the declared boundary.",
+      detail:
+        "Write-back succeeded — measure the cohorts against the declared boundary.",
     };
   }
   const newestUpstream = [
@@ -304,8 +309,7 @@ export default function RunPage() {
     setPendingStage(null);
   }, [path]);
 
-  const trace =
-    overview.status === "done" ? overview.trace : null;
+  const trace = overview.status === "done" ? overview.trace : null;
   const proposals =
     overview.status === "done" ? (overview.proposals.proposals ?? []) : [];
   const position = loopPosition(trace, proposals);
@@ -324,7 +328,9 @@ export default function RunPage() {
   const projectionRuns = trace?.projection_runs ?? [];
   const lastProjectionRun = projectionRuns.at(-1);
 
-  const runStage = async <R extends { ok: boolean; diagnostics?: Diagnostic[] }>(
+  const runStage = async <
+    R extends { ok: boolean; diagnostics?: Diagnostic[] },
+  >(
     stage: string,
     call: () => Promise<R>,
     apply: (r: StageResult<R>) => void,
@@ -357,64 +363,64 @@ export default function RunPage() {
   if (!path) return null;
 
   const submitIngest = () =>
-    runStage("ingest", () =>
-      api.ingest(path, {
-        text: snapshotText,
-        name: snapshotName.trim() || undefined,
-        source:
-          sources.length > 1
-            ? snapshotSource || undefined
-            : sources[0]?.name,
-      }),
+    runStage(
+      "ingest",
+      () =>
+        api.ingest(path, {
+          text: snapshotText,
+          name: snapshotName.trim() || undefined,
+          source:
+            sources.length > 1 ? snapshotSource || undefined : sources[0]?.name,
+        }),
       setIngestResult,
       (r) => (r.accepted ?? 0) > 0,
     );
 
   const submitProject = () =>
-    runStage("project", () =>
-      api.project(
-        path,
-        asOf,
-        projectionName || undefined,
-      ),
+    runStage(
+      "project",
+      () => api.project(path, asOf, projectionName || undefined),
       setProjectResult,
       (r) => r.recorded === true,
     );
 
   const submitDiagnose = () =>
-    runStage("diagnose", () =>
-      api.diagnose(
-        path,
-        diagSource === "run"
-          ? { runId: lastProjectionRun?.run_id }
-          : { asOf: diagAsOf },
-        { provider, model: model.trim() || undefined },
-      ),
+    runStage(
+      "diagnose",
+      () =>
+        api.diagnose(
+          path,
+          diagSource === "run"
+            ? { runId: lastProjectionRun?.run_id }
+            : { asOf: diagAsOf },
+          { provider, model: model.trim() || undefined },
+        ),
       setDiagnoseResult,
       (r) => r.recorded === true,
     );
 
   const submitEvaluate = () =>
-    runStage("evaluate", () =>
-      api.evaluate(path, boundary, evalAsOf),
+    runStage(
+      "evaluate",
+      () => api.evaluate(path, boundary, evalAsOf),
       setEvaluateResult,
       (r) => r.recorded === true,
     );
 
   const stageMarker = (stage: LoopPosition["stage"]) =>
     position.stage === stage ? (
-      <span className="run-next-badge" role="status">
+      <Tag className="run-next-badge" role="status" color="blue">
         next
-      </span>
+      </Tag>
     ) : null;
 
   return (
     <div className="run-page">
       <h1>Run the loop</h1>
       <p className="hint">
-        The five stages in order — ingest → project → diagnose →
-        review/execute → evaluate. Each trigger runs the same shared
-        core as its CLI command and writes to this workspace's
+        The five stages in order — ingest → project → diagnose → review/execute
+        → evaluate. Each trigger runs the same shared core as its CLI command
+        and writes to this workspace's
         <code>.ontology/</code>. Inspect anything on{" "}
         <Link to="/workspace/trace">Trace</Link>,{" "}
         <Link to="/workspace/proposals">Proposals</Link>, or{" "}
@@ -450,13 +456,9 @@ export default function RunPage() {
             </p>
             <p className="hint">{position.detail}</p>
             <div className="add-row">
-              <button
-                type="button"
-                disabled={refreshing}
-                onClick={refresh}
-              >
+              <Button disabled={refreshing} onClick={refresh}>
                 {refreshing ? "Refreshing…" : "Refresh state"}
-              </button>
+              </Button>
             </div>
           </>
         )}
@@ -472,9 +474,7 @@ export default function RunPage() {
           aria-label="stage 1 ingest"
           data-next={position.stage === "ingest" || undefined}
         >
-          <h2>
-            1. Ingest {stageMarker("ingest")}
-          </h2>
+          <h2>1. Ingest {stageMarker("ingest")}</h2>
           <p className="hint">
             Last run:{" "}
             {trace?.evidence?.ingest_runs?.length ? (
@@ -485,7 +485,7 @@ export default function RunPage() {
           </p>
           <div className="form-field">
             <label htmlFor="run-snapshot-text">Snapshot text</label>
-            <textarea
+            <Input.TextArea
               id="run-snapshot-text"
               rows={6}
               value={snapshotText}
@@ -495,9 +495,8 @@ export default function RunPage() {
           </div>
           <div className="form-field">
             <label htmlFor="run-snapshot-name">Name (optional)</label>
-            <input
+            <Input
               id="run-snapshot-name"
-              type="text"
               value={snapshotName}
               onChange={(e) => setSnapshotName(e.target.value)}
               placeholder="e.g. jobs-current.csv — a label only; the API sanitizes it to a basename"
@@ -506,23 +505,23 @@ export default function RunPage() {
           {sources.length > 1 ? (
             <div className="form-field">
               <label htmlFor="run-snapshot-source">Source</label>
-              <select
+              <Select
+                virtual={false}
                 id="run-snapshot-source"
                 value={snapshotSource}
-                onChange={(e) => setSnapshotSource(e.target.value)}
-              >
-                <option value="">— choose a declared source —</option>
-                {sources.map((s) => (
-                  <option key={s.name} value={s.name}>
-                    {s.name} ({s.format})
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setSnapshotSource(v)}
+                options={[
+                  { value: "", label: "— choose a declared source —" },
+                  ...sources.map((s) => ({
+                    value: s.name,
+                    label: `${s.name} (${s.format})`,
+                  })),
+                ]}
+              />
             </div>
           ) : null}
           <div className="add-row">
-            <button
-              type="button"
+            <Button
               disabled={
                 pendingStage !== null ||
                 snapshotText === "" ||
@@ -531,7 +530,7 @@ export default function RunPage() {
               onClick={() => void submitIngest()}
             >
               {pendingStage === "ingest" ? "Ingesting…" : "Ingest snapshot"}
-            </button>
+            </Button>
             <p className="hint">
               Same bytes, same ingest — a re-submitted snapshot re-observes
               events instead of duplicating them.
@@ -568,9 +567,7 @@ export default function RunPage() {
           aria-label="stage 2 project"
           data-next={position.stage === "project" || undefined}
         >
-          <h2>
-            2. Project {stageMarker("project")}
-          </h2>
+          <h2>2. Project {stageMarker("project")}</h2>
           <p className="hint">
             Last run:{" "}
             {lastProjectionRun ? (
@@ -585,9 +582,8 @@ export default function RunPage() {
           </p>
           <div className="form-field">
             <label htmlFor="run-as-of">Projection as-of (required)</label>
-            <input
+            <Input
               id="run-as-of"
-              type="text"
               value={asOf}
               onChange={(e) => setAsOf(e.target.value)}
               placeholder="2026-10-05T00:00:00Z — ISO 8601 with an explicit offset"
@@ -596,30 +592,31 @@ export default function RunPage() {
           {projections.length ? (
             <div className="form-field">
               <label htmlFor="run-projection">Projection</label>
-              <select
+              <Select
+                virtual={false}
                 id="run-projection"
                 value={projectionName}
-                onChange={(e) => setProjectionName(e.target.value)}
-              >
-                <option value="">
-                  {defaultProjection || "default"} (default)
-                </option>
-                {projections.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setProjectionName(v)}
+                options={[
+                  {
+                    value: "",
+                    label: `${defaultProjection || "default"} (default)`,
+                  },
+                  ...projections.map((name) => ({
+                    value: name,
+                    label: name,
+                  })),
+                ]}
+              />
             </div>
           ) : null}
           <div className="add-row">
-            <button
-              type="button"
+            <Button
               disabled={pendingStage !== null || asOf.trim() === ""}
               onClick={() => void submitProject()}
             >
               {pendingStage === "project" ? "Projecting…" : "Run projection"}
-            </button>
+            </Button>
           </div>
           <ResultBlock
             result={projectResult}
@@ -634,9 +631,7 @@ export default function RunPage() {
                     {" "}
                     —{" "}
                     {r.candidates
-                      .map(
-                        (c) => `${c.subject.entity}/${c.subject.id}`,
-                      )
+                      .map((c) => `${c.subject.entity}/${c.subject.id}`)
                       .join(", ")}
                   </>
                 ) : null}
@@ -650,9 +645,7 @@ export default function RunPage() {
           aria-label="stage 3 diagnose"
           data-next={position.stage === "diagnose" || undefined}
         >
-          <h2>
-            3. Diagnose {stageMarker("diagnose")}
-          </h2>
+          <h2>3. Diagnose {stageMarker("diagnose")}</h2>
           <p className="hint">
             Last run:{" "}
             {trace?.diagnosis_runs?.length ? (
@@ -670,33 +663,34 @@ export default function RunPage() {
           </p>
           {lastProjectionRun && lastProjectionRun.candidates === 0 ? (
             <p className="hint" role="note">
-              The last projection selected no candidates — a diagnosis now
-              would find nothing. Adjust the as-of or ingest more evidence.
+              The last projection selected no candidates — a diagnosis now would
+              find nothing. Adjust the as-of or ingest more evidence.
             </p>
           ) : null}
           <div className="form-field">
             <label htmlFor="run-diag-source">Candidate source</label>
-            <select
+            <Select
+              virtual={false}
               id="run-diag-source"
               value={diagSource}
-              onChange={(e) =>
-                setDiagSource(e.target.value as "run" | "as_of")
-              }
-            >
-              <option value="run" disabled={!lastProjectionRun}>
-                {lastProjectionRun
-                  ? `latest projection run (${lastProjectionRun.run_id})`
-                  : "latest projection run (none yet)"}
-              </option>
-              <option value="as_of">as-of timestamp</option>
-            </select>
+              onChange={(v) => setDiagSource(v as "run" | "as_of")}
+              options={[
+                {
+                  value: "run",
+                  disabled: !lastProjectionRun,
+                  label: lastProjectionRun
+                    ? `latest projection run (${lastProjectionRun.run_id})`
+                    : "latest projection run (none yet)",
+                },
+                { value: "as_of", label: "as-of timestamp" },
+              ]}
+            />
           </div>
           {diagSource === "as_of" ? (
             <div className="form-field">
               <label htmlFor="run-diag-as-of">As-of</label>
-              <input
+              <Input
                 id="run-diag-as-of"
-                type="text"
                 value={diagAsOf}
                 onChange={(e) => setDiagAsOf(e.target.value)}
                 placeholder="2026-10-05T00:00:00Z"
@@ -705,29 +699,27 @@ export default function RunPage() {
           ) : null}
           <div className="form-field">
             <label htmlFor="run-diag-provider">Provider</label>
-            <select
+            <Select
+              virtual={false}
               id="run-diag-provider"
               value={provider}
-              onChange={(e) => setProvider(e.target.value)}
-            >
-              {providers.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setProvider(v)}
+              options={providers.map((name) => ({
+                value: name,
+                label: name,
+              }))}
+            />
             {provider === "openrouter" ? (
               <p className="hint">
-                Requires OPENROUTER_API_KEY on the API host — use stub for
-                a credential-free local run.
+                Requires OPENROUTER_API_KEY on the API host — use stub for a
+                credential-free local run.
               </p>
             ) : null}
           </div>
           <div className="form-field">
             <label htmlFor="run-diag-model">Model (optional)</label>
-            <input
+            <Input
               id="run-diag-model"
-              type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder={
@@ -736,8 +728,7 @@ export default function RunPage() {
             />
           </div>
           <div className="add-row">
-            <button
-              type="button"
+            <Button
               disabled={
                 pendingStage !== null ||
                 (diagSource === "run" && !lastProjectionRun) ||
@@ -746,10 +737,10 @@ export default function RunPage() {
               onClick={() => void submitDiagnose()}
             >
               {pendingStage === "diagnose" ? "Diagnosing…" : "Run diagnosis"}
-            </button>
+            </Button>
             <p className="hint">
-              Each run — including a retry after a busy store — records a
-              new diagnosis run and calls the provider again.
+              Each run — including a retry after a busy store — records a new
+              diagnosis run and calls the provider again.
             </p>
           </div>
           <ResultBlock
@@ -758,9 +749,9 @@ export default function RunPage() {
           >
             {(r) => (
               <p>
-                run <code>{r.run_id}</code> <StatusBadge status={r.status ?? null} />{" "}
-                — {r.candidate_count} candidate(s),{" "}
-                {r.proposals?.length ?? 0} proposal(s)
+                run <code>{r.run_id}</code>{" "}
+                <StatusBadge status={r.status ?? null} /> — {r.candidate_count}{" "}
+                candidate(s), {r.proposals?.length ?? 0} proposal(s)
                 {r.proposals?.length ? (
                   <>
                     {" "}
@@ -776,13 +767,13 @@ export default function RunPage() {
           className="run-stage"
           aria-label="stage 4 review and execute"
           data-next={
-            position.stage === "review" || position.stage === "execute" ||
+            position.stage === "review" ||
+            position.stage === "execute" ||
             undefined
           }
         >
           <h2>
-            4. Review &amp; execute{" "}
-            {stageMarker("review")}
+            4. Review &amp; execute {stageMarker("review")}
             {stageMarker("execute")}
           </h2>
           <p className="hint">
@@ -790,16 +781,15 @@ export default function RunPage() {
             {Object.entries(trace?.proposals?.by_status ?? {})
               .map(([status, n]) => `${n} ${status}`)
               .join(", ") || "none"}
-            ; {trace?.executions?.attempts ?? 0} execution attempt(s)
-            recorded. Decisions are recorded on the{" "}
+            ; {trace?.executions?.attempts ?? 0} execution attempt(s) recorded.
+            Decisions are recorded on the{" "}
             <Link to="/workspace/proposals">Proposals</Link> page.
           </p>
           {proposals.filter((p) => p.status === "proposed").length ? (
             <p className="hint" role="note">
               Blocked: {proposals.filter((p) => p.status === "proposed").length}{" "}
-              proposal(s) await a human decision — execution stays gated
-              until approved.{" "}
-              <Link to="/workspace/proposals">Review now</Link>.
+              proposal(s) await a human decision — execution stays gated until
+              approved. <Link to="/workspace/proposals">Review now</Link>.
             </p>
           ) : null}
           {proposals
@@ -830,9 +820,7 @@ export default function RunPage() {
           aria-label="stage 5 evaluate"
           data-next={position.stage === "evaluate" || undefined}
         >
-          <h2>
-            5. Evaluate {stageMarker("evaluate")}
-          </h2>
+          <h2>5. Evaluate {stageMarker("evaluate")}</h2>
           <p className="hint">
             Last run:{" "}
             {trace?.evaluation_runs?.length ? (
@@ -848,29 +836,24 @@ export default function RunPage() {
           </p>
           <div className="form-field">
             <label htmlFor="run-boundary">Boundary (required)</label>
-            <input
+            <Input
               id="run-boundary"
-              type="text"
               value={boundary}
               onChange={(e) => setBoundary(e.target.value)}
               placeholder="2026-10-15T00:00:00Z — the cohort split instant"
             />
           </div>
           <div className="form-field">
-            <label htmlFor="run-eval-as-of">
-              Evaluation as-of (required)
-            </label>
-            <input
+            <label htmlFor="run-eval-as-of">Evaluation as-of (required)</label>
+            <Input
               id="run-eval-as-of"
-              type="text"
               value={evalAsOf}
               onChange={(e) => setEvalAsOf(e.target.value)}
               placeholder="2026-10-26T00:00:00Z"
             />
           </div>
           <div className="add-row">
-            <button
-              type="button"
+            <Button
               disabled={
                 pendingStage !== null ||
                 boundary.trim() === "" ||
@@ -879,7 +862,7 @@ export default function RunPage() {
               onClick={() => void submitEvaluate()}
             >
               {pendingStage === "evaluate" ? "Evaluating…" : "Run evaluation"}
-            </button>
+            </Button>
           </div>
           <ResultBlock
             result={evaluateResult}
@@ -888,8 +871,8 @@ export default function RunPage() {
             {(r) => (
               <p>
                 run <code>{r.run_id}</code>{" "}
-                <StatusBadge status={r.report?.overall?.status ?? null} />{" "}
-                — <Link to="/workspace/reports">open the report</Link>
+                <StatusBadge status={r.report?.overall?.status ?? null} /> —{" "}
+                <Link to="/workspace/reports">open the report</Link>
               </p>
             )}
           </ResultBlock>

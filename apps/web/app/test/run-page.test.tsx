@@ -35,6 +35,7 @@ import {
   SYNTHETIC_TRACE_OVERVIEW,
   SYNTHETIC_TRACE_OVERVIEW_EMPTY,
 } from "./fixtures";
+import { antdSelectText } from "./antdSelect";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -464,7 +465,7 @@ describe("run page", () => {
 
     // ADR 0004: the console defaults to the credential-free stub; a
     // billed provider is always an explicit choice.
-    expect(screen.getByLabelText("Provider")).toHaveValue("stub");
+    expect(antdSelectText(screen.getByLabelText("Provider"))).toBe("stub");
     await user.click(
       screen.getByRole("button", { name: "Run diagnosis" }),
     );
