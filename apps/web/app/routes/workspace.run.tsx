@@ -374,7 +374,7 @@ export default function RunPage() {
     runStage("project", () =>
       api.project(
         path,
-        asOf,
+        asOf.trim(),
         projectionName || undefined,
       ),
       setProjectResult,
@@ -387,7 +387,7 @@ export default function RunPage() {
         path,
         diagSource === "run"
           ? { runId: lastProjectionRun?.run_id }
-          : { asOf: diagAsOf },
+          : { asOf: diagAsOf.trim() },
         { provider, model: model.trim() || undefined },
       ),
       setDiagnoseResult,
@@ -396,7 +396,7 @@ export default function RunPage() {
 
   const submitEvaluate = () =>
     runStage("evaluate", () =>
-      api.evaluate(path, boundary, evalAsOf),
+      api.evaluate(path, boundary.trim(), evalAsOf.trim()),
       setEvaluateResult,
       (r) => r.recorded === true,
     );

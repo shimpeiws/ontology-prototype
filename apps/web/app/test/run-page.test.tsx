@@ -525,6 +525,120 @@ describe("run page", () => {
     ).toHaveAttribute("href", "/workspace/reports");
   });
 
+  it("trims surrounding whitespace from the projection as-of", async () => {
+    ready();
+    project.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: true,
+      run_id: "prj-trim",
+      projection: "CompletedButNotInvoiced",
+      as_of: "2026-10-21T00:00:00Z",
+      definition_digest: "sha256:x",
+      recorded: true,
+      candidates: [],
+      inputs: [{}],
+      diagnostics: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("stage 2 project");
+    await user.type(
+      screen.getByLabelText("Projection as-of (required)"),
+      "  2026-10-21T00:00:00Z ",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Run projection" }),
+    );
+    await waitFor(() =>
+      expect(project).toHaveBeenCalledWith(
+        "job-invoicing",
+        "2026-10-21T00:00:00Z",
+        undefined,
+      ),
+    );
+  });
+
+  it("trims surrounding whitespace from the diagnose as-of", async () => {
+    ready();
+    diagnose.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: true,
+      run_id: "dgx-trim",
+      provider: "stub",
+      model: "stub-offline",
+      status: "ok",
+      candidate_count: 1,
+      deliverables: {},
+      proposals: [],
+      rejected: [],
+      recorded: true,
+      diagnostics: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("stage 3 diagnose");
+    await user.selectOptions(
+      screen.getByLabelText("Candidate source"),
+      "as_of",
+    );
+    await user.type(
+      screen.getByLabelText("As-of"),
+      " 2026-10-21T00:00:00Z ",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Run diagnosis" }),
+    );
+    await waitFor(() =>
+      expect(diagnose).toHaveBeenCalledWith(
+        "job-invoicing",
+        { asOf: "2026-10-21T00:00:00Z" },
+        { provider: "stub", model: undefined },
+      ),
+    );
+  });
+
+  it("trims surrounding whitespace from the evaluation boundary and as-of", async () => {
+    ready();
+    evaluate.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: true,
+      run_id: "evl-trim",
+      evaluation: "completion-to-invoice-latency",
+      as_of: "2026-10-26T00:00:00Z",
+      boundary: "2026-10-15T00:00:00Z",
+      contract_digest: "sha256:c",
+      recorded: true,
+      report: {
+        overall: { status: "success" },
+      } as unknown as EvaluationReport,
+      diagnostics: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("stage 5 evaluate");
+    await user.type(
+      screen.getByLabelText("Boundary (required)"),
+      " 2026-10-15T00:00:00Z",
+    );
+    await user.type(
+      screen.getByLabelText("Evaluation as-of (required)"),
+      "2026-10-26T00:00:00Z ",
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Run evaluation" }),
+    );
+    await waitFor(() =>
+      expect(evaluate).toHaveBeenCalledWith(
+        "job-invoicing",
+        "2026-10-15T00:00:00Z",
+        "2026-10-26T00:00:00Z",
+      ),
+    );
+  });
+
   it("surfaces a transport failure as a retryable error", async () => {
     ready(SYNTHETIC_TRACE_OVERVIEW_EMPTY, SYNTHETIC_PROPOSALS_EMPTY);
     const { ApiError } = await import("../lib/api");
