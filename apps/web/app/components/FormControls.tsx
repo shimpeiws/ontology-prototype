@@ -7,11 +7,16 @@
  * with `editFile`. Changes made anywhere else — the raw DraftEditor,
  * revert, remove — re-parse the document, so the form never clobbers or
  * goes stale against the textarea below it.
+ *
+ * Controls are Ant Design inputs wired by hand (no Form.Item / Form
+ * instance): the YAML document, not a form-model, owns the values, so
+ * antd's form-state machinery would only add a second source of truth.
  */
 
 import { useCallback, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { Document } from "yaml";
+import { Button, Checkbox, Input, Select } from "antd";
 
 import { useWorkspace } from "../workspace/context";
 import { isValidationStale } from "../workspace/store";
@@ -164,16 +169,17 @@ export function TextField({
     lastSync.current = value;
     setText(value);
   }
+  const hasError = !stale && hasErrorAt(diagnostics, path);
   return (
     <div className="form-field">
       <label htmlFor={id}>{label}</label>
-      <input
+      <Input
         id={id}
-        type="text"
         value={text}
         inputMode={inputMode}
         list={datalist?.id}
-        aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
+        status={hasError ? "error" : undefined}
+        aria-invalid={hasError || undefined}
         onChange={(e) => {
           setText(e.target.value);
           lastSync.current = commit(e.target.value);
@@ -217,34 +223,34 @@ export function SelectField({
   // degrade to free text instead of a select that can only unset the value.
   const unavailable = options === null || options.length === 0;
   const unsupported = value !== "" && !unavailable && !options.includes(value);
+  const hasError = !stale && hasErrorAt(diagnostics, path);
   return (
     <div className="form-field">
       <label htmlFor={id}>{label}</label>
       {unavailable ? (
-        <input
+        <Input
           id={id}
-          type="text"
           value={value}
-          aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
+          status={hasError ? "error" : undefined}
+          aria-invalid={hasError || undefined}
           onChange={(e) => commit(e.target.value)}
         />
       ) : (
-        <select
+        <Select
+          virtual={false}
           id={id}
           value={value}
-          aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
-          onChange={(e) => commit(e.target.value)}
-        >
-          <option value="">(unset)</option>
-          {options.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-          {unsupported ? (
-            <option value={value}>{value} — unsupported</option>
-          ) : null}
-        </select>
+          status={hasError ? "error" : undefined}
+          aria-invalid={hasError || undefined}
+          options={[
+            { value: "", label: "(unset)" },
+            ...options.map((o) => ({ value: o, label: o })),
+            ...(unsupported
+              ? [{ value, label: `${value} — unsupported` }]
+              : []),
+          ]}
+          onChange={(v) => commit(v)}
+        />
       )}
       {unavailable ? (
         <p className="hint">Contract vocabulary unavailable — free text.</p>
@@ -271,14 +277,14 @@ export function CheckField({
   const stale = useDiagnosticsStale();
   return (
     <div className="form-field form-field-check">
-      <input
+      <Checkbox
         id={id}
-        type="checkbox"
         checked={checked}
         aria-invalid={(!stale && hasErrorAt(diagnostics, path)) || undefined}
         onChange={(e) => onChange(e.target.checked)}
-      />
-      <label htmlFor={id}>{label}</label>
+      >
+        {label}
+      </Checkbox>
       <FieldDiagnostics diagnostics={diagnostics} path={path} />
     </div>
   );
@@ -333,9 +339,9 @@ export function DraftDocGate({
           <code>{file}</code> is not in the draft — the structured form has
           nothing to edit.
         </p>
-        <button type="button" onClick={() => editFile(file, skeletonText(kind))}>
+        <Button onClick={() => editFile(file, skeletonText(kind))}>
           Create {file} skeleton
-        </button>
+        </Button>
       </div>
     );
   }

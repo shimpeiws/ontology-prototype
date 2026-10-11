@@ -13,6 +13,7 @@
  */
 
 import { useRef, useState } from "react";
+import { Alert, Button, Input } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import type { DecisionResponse, Diagnostic, ProposalView } from "../lib/types";
@@ -250,17 +251,16 @@ export function ProposalReviewCard({
           <label htmlFor={`reason-${proposal.proposal_id}`}>
             Reason (optional)
           </label>
-          <input
+          <Input
             id={`reason-${proposal.proposal_id}`}
-            type="text"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="Why this decision — recorded with it"
           />
         </div>
         <div className="add-row">
-          <button
-            type="button"
+          <Button
+            type="primary"
             disabled={pending !== null || reviewerBlank}
             title={
               reviewerBlank
@@ -270,10 +270,9 @@ export function ProposalReviewCard({
             onClick={() => void submit("approved")}
           >
             {pending === "approved" ? "Recording…" : "Approve"}
-          </button>
-          <button
-            type="button"
-            className="danger"
+          </Button>
+          <Button
+            danger
             disabled={pending !== null || reviewerBlank}
             title={
               reviewerBlank
@@ -283,13 +282,20 @@ export function ProposalReviewCard({
             onClick={() => void submit("rejected")}
           >
             {pending === "rejected" ? "Recording…" : "Reject"}
-          </button>
+          </Button>
         </div>
         {outcome?.kind === "recorded" ? (
-          <p className="state state-saved" role="status">
-            {outcome.response.decision} recorded as{" "}
-            <code>{outcome.response.decision_id}</code>
-          </p>
+          <Alert
+            className="state state-saved"
+            type="success"
+            role="status"
+            title={
+              <>
+                {outcome.response.decision} recorded as{" "}
+                <code>{outcome.response.decision_id}</code>
+              </>
+            }
+          />
         ) : null}
         {outcome?.kind === "domain" ? (
           <DiagnosticsList diagnostics={outcome.diagnostics} />

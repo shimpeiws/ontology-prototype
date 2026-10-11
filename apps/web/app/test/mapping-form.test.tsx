@@ -31,6 +31,7 @@ import {
   SYNTHETIC_MULTI_SOURCE_OPEN_RESPONSE,
   SYNTHETIC_PREVIEW_RESPONSE,
 } from "./fixtures";
+import { antdOptionLabels, antdSelectText, pickOption } from "./antdSelect";
 
 vi.mock("../lib/api", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../lib/api")>();
@@ -142,7 +143,11 @@ function card(label: string): HTMLElement {
 
 async function waitForContract() {
   await waitFor(() => expect(contractMock).toHaveBeenCalled());
-  await screen.findByDisplayValue("csv").catch(() => undefined);
+  await waitFor(() =>
+    expect(antdSelectText(screen.getByLabelText("Source format"))).toBe(
+      "csv",
+    ),
+  ).catch(() => undefined);
 }
 
 describe("MappingForm", () => {
@@ -152,7 +157,9 @@ describe("MappingForm", () => {
 
     expect(screen.getByLabelText("Name")).toHaveValue("jobs-csv");
     expect(screen.getByLabelText("Source name")).toHaveValue("jobs");
-    expect(screen.getByLabelText("Source format")).toHaveValue("csv");
+    expect(antdSelectText(screen.getByLabelText("Source format"))).toBe(
+      "csv",
+    );
 
     const job = card("Entity binding 1");
     expect(within(job).getByLabelText("Entity")).toHaveValue("Job");
@@ -178,16 +185,14 @@ describe("MappingForm", () => {
       within(event1).getByLabelText("occurred_at (occurrence) field"),
     ).toHaveValue("completed_at");
     expect(
-      within(event1).getByLabelText("occurred_at (occurrence) cast (as)"),
-    ).toHaveValue("datetime");
+      antdSelectText(
+        within(event1).getByLabelText("occurred_at (occurrence) cast (as)"),
+      ),
+    ).toBe("datetime");
 
     // The `and` condition renders its two nested arguments.
     const ops = within(event1).getAllByLabelText("Operator");
-    expect(ops.map((o) => (o as HTMLSelectElement).value)).toEqual([
-      "and",
-      "eq",
-      "not_null",
-    ]);
+    expect(ops.map(antdSelectText)).toEqual(["and", "eq", "not_null"]);
 
     // observed_at renders only on event binding 2.
     const event2 = card("Event binding 2");
@@ -212,11 +217,12 @@ describe("MappingForm", () => {
   });
 
   it("source format options come from the contract", async () => {
+    const user = userEvent.setup();
     renderForm(<MappingForm />);
     await waitForContract();
-    const select = screen.getByLabelText("Source format");
-    const options = Array.from(select.querySelectorAll("option")).map(
-      (o) => o.value,
+    const options = await antdOptionLabels(
+      user,
+      screen.getByLabelText("Source format"),
     );
     expect(options).toEqual(expect.arrayContaining(["csv", "json"]));
     expect(options).not.toContain("xml");
@@ -277,7 +283,8 @@ describe("MappingForm", () => {
     await waitForContract();
 
     const job = card("Entity binding 1");
-    await user.selectOptions(
+    await pickOption(
+      user,
       within(job).getByLabelText("Entity id source"),
       "literal",
     );
@@ -314,8 +321,8 @@ describe("MappingForm", () => {
 
     const event2 = card("Event binding 2");
     const op = within(event2).getByLabelText("Operator");
-    expect(op).toHaveValue("not_null");
-    await user.selectOptions(op, "is_null");
+    expect(antdSelectText(op)).toBe("not_null");
+    await pickOption(user, op, "is_null");
     await waitFor(() =>
       expect(draftText()).toContain("op: is_null"),
     );
@@ -352,13 +359,12 @@ describe("MappingForm", () => {
   });
 
   it("occurrence cast options come from the contract's time_casts", async () => {
+    const user = userEvent.setup();
     renderForm(<MappingForm />);
     await waitForContract();
-    const select = screen.getAllByLabelText(
-      "occurred_at (occurrence) cast (as)",
-    )[0];
-    const options = Array.from(select.querySelectorAll("option")).map(
-      (o) => o.value,
+    const options = await antdOptionLabels(
+      user,
+      screen.getAllByLabelText("occurred_at (occurrence) cast (as)")[0],
     );
     expect(options).toEqual(expect.arrayContaining(["date", "datetime"]));
     expect(options).not.toContain("string");
@@ -475,7 +481,8 @@ describe("MappingForm", () => {
     await waitForContract();
 
     const job = card("Entity binding 1");
-    await user.selectOptions(
+    await pickOption(
+      user,
       within(job).getByLabelText("Entity id source"),
       "literal",
     );
@@ -495,7 +502,8 @@ describe("MappingForm", () => {
     await waitForContract();
 
     const job = card("Entity binding 1");
-    await user.selectOptions(
+    await pickOption(
+      user,
       within(job).getByLabelText("Property status source"),
       "literal",
     );
@@ -511,7 +519,8 @@ describe("MappingForm", () => {
     );
 
     // The explicit type switch stores the same text as a JSON scalar.
-    await user.selectOptions(
+    await pickOption(
+      user,
       within(job).getByLabelText("Property status literal type"),
       "json",
     );
@@ -528,18 +537,22 @@ describe("MappingForm", () => {
     await waitForContract();
 
     const job = card("Entity binding 1");
-    await user.selectOptions(
+    await pickOption(
+      user,
       within(job).getByLabelText("Property status source"),
       "literal",
     );
     // Choosing JSON on an empty literal must not snap back to string.
-    await user.selectOptions(
+    await pickOption(
+      user,
       within(job).getByLabelText("Property status literal type"),
       "json",
     );
     expect(
-      within(job).getByLabelText("Property status literal type"),
-    ).toHaveValue("json");
+      antdSelectText(
+        within(job).getByLabelText("Property status literal type"),
+      ),
+    ).toBe("json");
 
     // `12.` is not valid JSON mid-edit; the draft holds it as a string
     // while the picker stays on JSON, and the finished `12.5` parses.
@@ -553,8 +566,10 @@ describe("MappingForm", () => {
       ).toBe(12.5),
     );
     expect(
-      within(job).getByLabelText("Property status literal type"),
-    ).toHaveValue("json");
+      antdSelectText(
+        within(job).getByLabelText("Property status literal type"),
+      ),
+    ).toBe("json");
   });
 
   it("renders one binding section per sources[] entry", async () => {
@@ -567,7 +582,7 @@ describe("MappingForm", () => {
     expect(names).toEqual(["jobs", "invoices"]);
     const formats = screen
       .getAllByLabelText("Source format")
-      .map((el) => (el as HTMLSelectElement).value);
+      .map(antdSelectText);
     expect(formats).toEqual(["csv", "json"]);
 
     const jobs = card("Source 1");
@@ -789,7 +804,7 @@ describe("PreviewPanel", () => {
     await waitForContract();
 
     const select = screen.getByLabelText("Source");
-    expect(select).toHaveValue("jobs");
+    expect(antdSelectText(select)).toBe("jobs");
 
     await user.type(screen.getByLabelText(/Sample input/), "a,b");
     await user.click(screen.getByRole("button", { name: "Run preview" }));
@@ -803,7 +818,7 @@ describe("PreviewPanel", () => {
 
     // Switching to the second source marks the shown result stale and
     // the next run sends that source's name.
-    await user.selectOptions(select, "invoices");
+    await pickOption(user, select, "invoices");
     expect(await screen.findByText("stale")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Run preview" }));
     await waitFor(() => expect(previewMock).toHaveBeenCalledTimes(2));
@@ -834,7 +849,7 @@ describe("PreviewPanel", () => {
     );
     await waitForContract();
 
-    await user.selectOptions(screen.getByLabelText("Source"), "invoices");
+    await pickOption(user, screen.getByLabelText("Source"), "invoices");
 
     // Open a workspace that declares only "jobs".
     await user.click(screen.getByTestId("switch-workspace"));

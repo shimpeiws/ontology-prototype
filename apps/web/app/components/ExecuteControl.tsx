@@ -12,6 +12,7 @@
  */
 
 import { useRef, useState } from "react";
+import { Alert, Button } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import type { Diagnostic, ExecuteResponse } from "../lib/types";
@@ -84,32 +85,36 @@ export function ExecuteControl({
     <div className="execute-control">
       {armed ? (
         <div className="execute-confirm">
-          <p role="alert" className="state state-error">
-            This runs the write-back for <code>{proposalId}</code> —
-            the same core gate as <code>ontology execute</code>.
-          </p>
+          <Alert
+            className="state state-error"
+            type="warning"
+            role="alert"
+            title={
+              <>
+                This runs the write-back for <code>{proposalId}</code> —
+                the same core gate as <code>ontology execute</code>.
+              </>
+            }
+          />
           <div className="add-row">
-            <button
-              type="button"
-              className="danger"
+            <Button
+              danger
               disabled={pending}
               onClick={() => void run()}
             >
               {pending ? "Executing…" : "Confirm write-back"}
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
               disabled={pending}
               onClick={() => setArmed(false)}
             >
               Cancel
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
         <div className="add-row">
-          <button
-            type="button"
+          <Button
             disabled={disabled || pending}
             title={disabled ? disabledReason : undefined}
             onClick={() => {
@@ -118,7 +123,7 @@ export function ExecuteControl({
             }}
           >
             Execute proposal
-          </button>
+          </Button>
           {disabled && disabledReason ? (
             <p className="hint">{disabledReason}</p>
           ) : null}

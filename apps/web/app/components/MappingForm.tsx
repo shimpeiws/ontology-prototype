@@ -12,6 +12,7 @@
  */
 
 import { useId, useRef, useState } from "react";
+import { Button, Input, Select } from "antd";
 import { isMap, isScalar, isSeq } from "yaml";
 import type { Document, YAMLMap, YAMLSeq } from "yaml";
 
@@ -154,8 +155,8 @@ function ConditionEditor({
   if (depth > MAX_CONDITION_DEPTH) {
     return (
       <p className="hint">
-        This condition is nested too deeply for the form — edit it in the
-        raw YAML editor below.
+        This condition is nested too deeply for the form — edit it in the raw
+        YAML editor below.
       </p>
     );
   }
@@ -234,8 +235,7 @@ function ConditionEditor({
                     diagnostics={diagnostics}
                     path={`${diagPath}.values[${i}]`}
                   />
-                  <button
-                    type="button"
+                  <Button
                     onClick={() =>
                       mutate((m) => {
                         const seq = seqAt(m, ["values"]);
@@ -245,7 +245,7 @@ function ConditionEditor({
                     }
                   >
                     Remove value {i + 1}
-                  </button>
+                  </Button>
                 </div>
               ))
             : null}
@@ -265,8 +265,7 @@ function ConditionEditor({
               path={`${diagPath}.values`}
             />
           ) : null}
-          <button
-            type="button"
+          <Button
             onClick={() =>
               mutate((m, d) => {
                 const seq =
@@ -285,7 +284,7 @@ function ConditionEditor({
             }
           >
             Add value
-          </button>
+          </Button>
           <FieldDiagnostics
             diagnostics={diagnostics}
             path={`${diagPath}.values`}
@@ -325,8 +324,7 @@ function ConditionEditor({
               }
             />
           ))}
-          <button
-            type="button"
+          <Button
             onClick={() =>
               mutate((m, d) => {
                 const seq =
@@ -341,7 +339,7 @@ function ConditionEditor({
             }
           >
             Add argument
-          </button>
+          </Button>
         </div>
       ) : null}
 
@@ -364,9 +362,7 @@ function ConditionEditor({
         />
       ) : null}
 
-      <button type="button" onClick={() => replace(null)}>
-        Remove condition
-      </button>
+      <Button onClick={() => replace(null)}>Remove condition</Button>
       <FieldDiagnostics diagnostics={diagnostics} path={diagPath} deep />
     </div>
   );
@@ -435,11 +431,11 @@ function AssignmentFields({
     <div className="assignment">
       <div className="form-field">
         <label htmlFor={`${id}-mode`}>{label} source</label>
-        <select
+        <Select
+          virtual={false}
           id={`${id}-mode`}
           value={mode}
-          onChange={(e) => {
-            const next = e.target.value;
+          onChange={(next) => {
             edit((a) => {
               if (next === "field") {
                 a.delete("literal");
@@ -453,11 +449,12 @@ function AssignmentFields({
               }
             });
           }}
-        >
-          <option value="unset">(unset)</option>
-          <option value="field">source field</option>
-          <option value="literal">literal</option>
-        </select>
+          options={[
+            { value: "unset", label: "(unset)" },
+            { value: "field", label: "source field" },
+            { value: "literal", label: "literal" },
+          ]}
+        />
       </div>
 
       {mode === "field" ? (
@@ -624,8 +621,7 @@ function EntityBindingCard({
                   })
                 }
               />
-              <button
-                type="button"
+              <Button
                 onClick={() =>
                   editItem(item, (m) => {
                     const live = mapAt(m, ["properties"]);
@@ -635,15 +631,14 @@ function EntityBindingCard({
                 }
               >
                 Remove property {name}
-              </button>
+              </Button>
             </div>
           );
         })}
         <div className="form-field">
           <label htmlFor={propListId}>New property name</label>
-          <input
+          <Input
             id={propListId}
-            type="text"
             value={newProp}
             list={suggestions.length ? `${propListId}-options` : undefined}
             onChange={(e) => setNewProp(e.target.value)}
@@ -656,8 +651,7 @@ function EntityBindingCard({
             </datalist>
           ) : null}
         </div>
-        <button
-          type="button"
+        <Button
           disabled={newProp.trim() === ""}
           onClick={() => {
             const name = newProp.trim();
@@ -677,12 +671,10 @@ function EntityBindingCard({
           }}
         >
           Add property assignment
-        </button>
+        </Button>
       </div>
 
-      <button type="button" onClick={onRemove}>
-        Remove entity binding
-      </button>
+      <Button onClick={onRemove}>Remove entity binding</Button>
     </fieldset>
   );
 }
@@ -735,9 +727,7 @@ function EventBindingCard({
       />
       <TextField
         label="Subject entity"
-        value={
-          map ? scalarText(map.getIn(["subject", "entity"], true)) : ""
-        }
+        value={map ? scalarText(map.getIn(["subject", "entity"], true)) : ""}
         commit={(text) => {
           editItem(item, (m, d) => {
             commitText(ensureAssignment(m, ["subject"], d), ["entity"], text);
@@ -768,8 +758,7 @@ function EventBindingCard({
         diagnostics={diagnostics}
       >
         {whenNode === undefined ? (
-          <button
-            type="button"
+          <Button
             onClick={() =>
               editItem(item, (m, d) => {
                 m.set("when", d.createNode({ op: "eq", field: "", value: "" }));
@@ -777,7 +766,7 @@ function EventBindingCard({
             }
           >
             Add condition
-          </button>
+          </Button>
         ) : (
           <ConditionEditor
             node={whenNode}
@@ -786,9 +775,7 @@ function EventBindingCard({
             vocabulary={vocabulary}
             depth={0}
             mutate={(fn) =>
-              editItem(item, (m, d) =>
-                fn(ensureAssignment(m, ["when"], d), d),
-              )
+              editItem(item, (m, d) => fn(ensureAssignment(m, ["when"], d), d))
             }
             replace={(value) =>
               editItem(item, (m, d) => {
@@ -815,8 +802,7 @@ function EventBindingCard({
       />
 
       {observedNode === undefined ? (
-        <button
-          type="button"
+        <Button
           onClick={() =>
             editItem(item, (m, d) => {
               m.set(
@@ -827,7 +813,7 @@ function EventBindingCard({
           }
         >
           Add {timeFields.observation}
-        </button>
+        </Button>
       ) : (
         <div className="assignment-row">
           <AssignmentFields
@@ -843,8 +829,7 @@ function EventBindingCard({
               )
             }
           />
-          <button
-            type="button"
+          <Button
             onClick={() =>
               editItem(item, (m) => {
                 m.delete(timeFields.observation);
@@ -852,13 +837,11 @@ function EventBindingCard({
             }
           >
             Remove {timeFields.observation}
-          </button>
+          </Button>
         </div>
       )}
 
-      <button type="button" onClick={onRemove}>
-        Remove event binding
-      </button>
+      <Button onClick={onRemove}>Remove event binding</Button>
     </fieldset>
   );
 }
@@ -924,8 +907,7 @@ function BindingsSections({
         path={`${diagBase}.entities`}
         diagnostics={diagnostics}
         action={
-          <button
-            type="button"
+          <Button
             onClick={() =>
               update((d) => {
                 ensureSeq(d, entitiesPath).add(
@@ -935,7 +917,7 @@ function BindingsSections({
             }
           >
             Add entity binding
-          </button>
+          </Button>
         }
       >
         {entities === null || entities.items.length === 0 ? (
@@ -965,8 +947,7 @@ function BindingsSections({
         path={`${diagBase}.events`}
         diagnostics={diagnostics}
         action={
-          <button
-            type="button"
+          <Button
             onClick={() =>
               update((d) => {
                 ensureSeq(d, eventsPath).add(
@@ -980,7 +961,7 @@ function BindingsSections({
             }
           >
             Add event binding
-          </button>
+          </Button>
         }
       >
         {events === null || events.items.length === 0 ? (
@@ -1029,7 +1010,11 @@ function SourceScope({
   return (
     <fieldset className="form-card">
       <legend>Source {index + 1}</legend>
-      <FieldDiagnostics diagnostics={diagnostics} path={diagBase} deep={false} />
+      <FieldDiagnostics
+        diagnostics={diagnostics}
+        path={diagBase}
+        deep={false}
+      />
       <TextField
         label="Source name"
         value={value([...path, "name"])}
@@ -1051,9 +1036,9 @@ function SourceScope({
         diagBase={diagBase}
         ctx={ctx}
       />
-      <button type="button" onClick={() => removeItem([ROOT, "sources"])(item)}>
+      <Button onClick={() => removeItem([ROOT, "sources"])(item)}>
         Remove source
-      </button>
+      </Button>
     </fieldset>
   );
 }
@@ -1072,7 +1057,10 @@ export function MappingForm() {
 
   if (parsed.status !== "ready") {
     return (
-      <section className="definition-form" aria-labelledby="mapping-form-heading">
+      <section
+        className="definition-form"
+        aria-labelledby="mapping-form-heading"
+      >
         <h2 id="mapping-form-heading">Edit mapping</h2>
         <DraftDocGate file={FILE} kind="mapping" parsed={parsed} />
       </section>
@@ -1087,28 +1075,27 @@ export function MappingForm() {
     (text: string): string =>
       update((d) => commitText(d, path, text)) ?? text;
 
-  const entityOptions = { id: "mapping-domain-entities", options: refs.entities };
+  const entityOptions = {
+    id: "mapping-domain-entities",
+    options: refs.entities,
+  };
   const eventOptions = { id: "mapping-domain-events", options: refs.events };
 
-  const editItem: BindingContext["editItem"] =
-    (seqPath) =>
-    (item, fn) =>
-      update((d) => {
-        const seq = seqAt(d, seqPath);
-        const idx = seq ? seq.items.indexOf(item) : -1;
-        if (!seq || idx < 0) return;
-        if (!isMap(seq.items[idx])) seq.items[idx] = d.createNode({});
-        fn(seq.items[idx] as YAMLMap, d);
-      });
+  const editItem: BindingContext["editItem"] = (seqPath) => (item, fn) =>
+    update((d) => {
+      const seq = seqAt(d, seqPath);
+      const idx = seq ? seq.items.indexOf(item) : -1;
+      if (!seq || idx < 0) return;
+      if (!isMap(seq.items[idx])) seq.items[idx] = d.createNode({});
+      fn(seq.items[idx] as YAMLMap, d);
+    });
 
-  const removeItem: BindingContext["removeItem"] =
-    (seqPath) =>
-    (item) =>
-      update((d) => {
-        const seq = seqAt(d, seqPath);
-        const idx = seq ? seq.items.indexOf(item) : -1;
-        if (seq && idx >= 0) seq.items.splice(idx, 1);
-      });
+  const removeItem: BindingContext["removeItem"] = (seqPath) => (item) =>
+    update((d) => {
+      const seq = seqAt(d, seqPath);
+      const idx = seq ? seq.items.indexOf(item) : -1;
+      if (seq && idx >= 0) seq.items.splice(idx, 1);
+    });
 
   const ctx: BindingContext = {
     diagnostics,
@@ -1157,8 +1144,7 @@ export function MappingForm() {
             path="mapping.source"
             diagnostics={diagnostics}
             action={
-              <button
-                type="button"
+              <Button
                 onClick={() =>
                   update((d) => {
                     const m = mapAt(d, [ROOT]);
@@ -1187,7 +1173,7 @@ export function MappingForm() {
                 }
               >
                 Convert to sources list
-              </button>
+              </Button>
             }
           >
             <TextField
@@ -1220,8 +1206,7 @@ export function MappingForm() {
           path="mapping.sources"
           diagnostics={diagnostics}
           action={
-            <button
-              type="button"
+            <Button
               onClick={() =>
                 update((d) => {
                   ensureSeq(d, [ROOT, "sources"]).add(
@@ -1236,7 +1221,7 @@ export function MappingForm() {
               }
             >
               Add source
-            </button>
+            </Button>
           }
         >
           {sourcesSeq.items.length === 0 ? (

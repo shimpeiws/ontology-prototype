@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useId, useRef, useState } from "react";
+import { Button, Input, Tag } from "antd";
 
 import { api, ApiError } from "../lib/api";
 import type {
@@ -139,9 +140,8 @@ export default function TracePage() {
         <div className="form-field">
           <label htmlFor={subjectId}>Subject</label>
           <div className="add-row">
-            <input
+            <Input
               id={subjectId}
-              type="text"
               value={subjectInput}
               placeholder="Job/101"
               onChange={(e) => setSubjectInput(e.target.value)}
@@ -149,21 +149,19 @@ export default function TracePage() {
                 if (e.key === "Enter") void runLookup("subject", subjectInput);
               }}
             />
-            <button
-              type="button"
+            <Button
               disabled={!path || !subjectInput.trim() || lookup?.status === "running"}
               onClick={() => void runLookup("subject", subjectInput)}
             >
               Follow subject
-            </button>
+            </Button>
           </div>
         </div>
         <div className="form-field">
           <label htmlFor={artifactId}>Artifact id</label>
           <div className="add-row">
-            <input
+            <Input
               id={artifactId}
-              type="text"
               value={artifactInput}
               placeholder="dgx-… / evl-… / obs-…"
               onChange={(e) => setArtifactInput(e.target.value)}
@@ -171,15 +169,14 @@ export default function TracePage() {
                 if (e.key === "Enter") void runLookup("artifact", artifactInput);
               }}
             />
-            <button
-              type="button"
+            <Button
               disabled={
                 !path || !artifactInput.trim() || lookup?.status === "running"
               }
               onClick={() => void runLookup("artifact", artifactInput)}
             >
               Inspect artifact
-            </button>
+            </Button>
           </div>
         </div>
       </section>
@@ -187,8 +184,11 @@ export default function TracePage() {
       <div aria-live="polite">
         {lookupStale ? (
           <p className="field-diagnostics stale" role="status">
-            <span className="badge badge-stale">stale</span> The input changed
-            since this lookup ran — run it again for current results.
+            <Tag className="badge badge-stale" color="warning">
+              stale
+            </Tag>{" "}
+            The input changed since this lookup ran — run it again for
+            current results.
           </p>
         ) : null}
         {lookup?.status === "running" ? (

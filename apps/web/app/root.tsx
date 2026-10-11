@@ -1,9 +1,12 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import type { LinksFunction } from "react-router";
 import type { ReactNode } from "react";
+import { ConfigProvider, Spin } from "antd";
 
 import { WorkspaceProvider } from "./workspace/context";
+import { appTheme } from "./theme";
 import stylesheet from "./app.css?url";
+import "antd/dist/reset.css";
 
 export const links: LinksFunction = () => [
   { rel: "stylesheet", href: stylesheet },
@@ -31,16 +34,18 @@ export function Layout({ children }: { children: ReactNode }) {
 // it is what renders before the client hydrates.
 export function HydrateFallback() {
   return (
-    <p role="status" aria-live="polite">
-      Loading workspace UI…
-    </p>
+    <div role="status" aria-live="polite" className="hydrate-fallback">
+      <Spin size="small" aria-hidden="true" /> Loading workspace UI…
+    </div>
   );
 }
 
 export default function App() {
   return (
-    <WorkspaceProvider>
-      <Outlet />
-    </WorkspaceProvider>
+    <ConfigProvider theme={appTheme}>
+      <WorkspaceProvider>
+        <Outlet />
+      </WorkspaceProvider>
+    </ConfigProvider>
   );
 }

@@ -7,6 +7,29 @@ of the authoring contract in [authoring-flow.md](authoring-flow.md):
 workspace open, navigation across the four definitions, and the shared
 loading/error/empty/draft-status patterns.
 
+## Presentation
+
+The console is built on Ant Design (`antd`) (#92): a single
+`ConfigProvider` in `app/root.tsx` applies the standard light theme
+through the token set in `app/theme.ts`, and `antd/dist/reset.css`
+provides the baseline reset. The workspace shell uses `Layout` +
+`Menu` (each entry stays a real React Router link inside its menu item,
+so navigation remains anchor semantics and the dirty-draft blocker works
+on any activation), and the pages use `Button`, `Input`, `Select`,
+`Checkbox`, `Tag`, `Alert`, `Spin`, and `Empty` for controls and
+shared states. App-specific CSS in `app/app.css` covers only layout,
+the domain graph canvas, the YAML draft editor, and wide scrollable
+content (tables, YAML, payloads, long identifiers scroll horizontally
+instead of wrapping). Selects render with `virtual={false}` — every
+option list here is contract/domain vocabulary, small enough that
+virtualization buys nothing and jsdom cannot measure it.
+
+jsdom tests drive antd `Select` through `app/test/antdSelect.ts`:
+the labeled element is a readonly combobox input that never carries the
+chosen value (read the displayed label via `.ant-select-content`), and
+the option list only exists while the popup is open — open/close is
+tracked via `aria-expanded`, never a blind toggle.
+
 ## Boundaries
 
 The Web app is presentation only:

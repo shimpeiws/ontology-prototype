@@ -13,6 +13,7 @@
  */
 
 import type { ReactNode } from "react";
+import { Button } from "antd";
 
 import type {
   SubjectTrace,
@@ -682,13 +683,13 @@ export function AnchorTraceView({
             {trace.subjects.map((subject) => (
               <li key={subject}>
                 {onFollowSubject ? (
-                  <button
-                    type="button"
+                  <Button
+                    type="link"
                     className="link-button"
                     onClick={() => onFollowSubject(subject)}
                   >
                     {subject}
-                  </button>
+                  </Button>
                 ) : (
                   <code>{subject}</code>
                 )}

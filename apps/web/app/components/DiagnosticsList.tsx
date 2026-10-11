@@ -5,8 +5,24 @@
  * transport errors are rendered by ErrorState instead.
  */
 
+import { Tag, Typography } from "antd";
+
 import type { Diagnostic } from "../lib/types";
 import { EmptyState } from "./states";
+
+const SEVERITY_COLORS: Record<string, string> = {
+  error: "error",
+  warning: "warning",
+  info: "blue",
+};
+
+function SeverityTag({ severity }: { severity: string }) {
+  return (
+    <Tag className="diagnostic-severity" color={SEVERITY_COLORS[severity]}>
+      {severity}
+    </Tag>
+  );
+}
 
 export function DiagnosticsList({
   diagnostics,
@@ -30,8 +46,10 @@ export function DiagnosticsList({
     <ul className="diagnostics-list">
       {shown.map((d, i) => (
         <li key={i} className={`diagnostic severity-${d.severity}`}>
-          <span className="diagnostic-severity">{d.severity}</span>{" "}
-          <code className="diagnostic-code">{d.code}</code>{" "}
+          <SeverityTag severity={d.severity} />
+          <Typography.Text code className="diagnostic-code">
+            {d.code}
+          </Typography.Text>{" "}
           <span className="diagnostic-message">{d.message}</span>
           <span className="diagnostic-location">
             {[d.file, d.path, d.line !== null ? `line ${d.line}` : null]
@@ -60,8 +78,10 @@ export function FieldDiagnostics({
     <ul className="field-diagnostics">
       {diagnostics.map((d, i) => (
         <li key={i} className={`diagnostic severity-${d.severity}`}>
-          <span className="diagnostic-severity">{d.severity}</span>{" "}
-          <code className="diagnostic-code">{d.code}</code>{" "}
+          <SeverityTag severity={d.severity} />
+          <Typography.Text code className="diagnostic-code">
+            {d.code}
+          </Typography.Text>{" "}
           <span className="diagnostic-message">{d.message}</span>
           {d.hint ? <span className="diagnostic-hint">{d.hint}</span> : null}
         </li>
