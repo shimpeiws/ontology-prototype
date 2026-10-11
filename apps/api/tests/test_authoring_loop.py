@@ -287,13 +287,13 @@ def test_ticket_sla_ui_saved_bundle_loads_in_cli(tmp_path, capsys, roots) -> Non
     assert warn_checked["diagnostics"] == warn_validated["diagnostics"]
 
 
-def test_contract_exposes_no_action_authority(roots) -> None:
-    """The API grants no execution or run-trigger capability.
+def test_contract_lists_every_operation(roots) -> None:
+    """The contract enumerates every surface the console may reach.
 
-    ``decide`` is the operational surface's single write (ADR 0003): a
-    human approve/reject recorded through the core's ``decide``. It is
-    governance, not action authority — it never runs a run trigger or
-    write-back.
+    ADR 0003 (v0.4): the API granted no run-trigger capability — the
+    operational surface was read-only plus ``decide``. ADR 0004 (v0.5)
+    supersedes that: the console may trigger all five loop stages, so
+    the contract pins the complete operation set — no hidden routes.
     """
     body = make_client(roots).get("/api/v1/contract").json()
     operations = set(body["operations"])
@@ -302,8 +302,8 @@ def test_contract_exposes_no_action_authority(roots) -> None:
         "validate_draft",
         "save",
         "preview_draft",
-        # Issue #61: read-only operational inspection. These add views
-        # over `.ontology/`, not action authority.
+        # Issue #61: read-only operational inspection — views over
+        # `.ontology/`.
         "trace_overview",
         "trace_subject",
         "trace_run",
@@ -312,9 +312,15 @@ def test_contract_exposes_no_action_authority(roots) -> None:
         "proposals",
         "proposal",
         # Issue #63: the human decision write — bound to a persisted
-        # proposal's payload digest, never a run trigger or executor.
+        # proposal's payload digest.
         "decide",
+        # Issue #83–#88 / ADR 0004: the five loop-stage triggers.
+        "ingest",
+        "project",
+        "diagnose",
+        "evaluate",
+        "execute",
     }
-    forbidden = {"execute", "diagnose", "approve", "run", "ingest",
-                 "project", "evaluate"}
+    # Still no unnamed action-authority escape hatch.
+    forbidden = {"approve", "run", "write", "act"}
     assert not (operations & forbidden)

@@ -13,11 +13,16 @@ import type {
   ApiErrorBody,
   ContractResponse,
   DecisionResponse,
+  DiagnoseRunResponse,
   DraftPreviewResponse,
   DraftValidateResponse,
+  EvaluateRunTriggerResponse,
   EvaluationRunResponse,
   EvaluationRunsResponse,
+  ExecuteResponse,
+  IngestResponse,
   OpenResponse,
+  ProjectRunResponse,
   ProposalResponse,
   ProposalsResponse,
   SaveResponse,
@@ -236,10 +241,9 @@ export const api = {
       signal,
     ),
 
-  /* The surface's single write (ADR 0003): a human approve/reject on a
+  /* The human decision write (ADR 0003): an approve/reject on a
    * persisted proposal, recorded through the core's `decide` and bound
-   * to the exact payload digest. Execution stays CLI-only — there is no
-   * run trigger on this surface. */
+   * to the exact payload digest. */
   decide: (
     path: string,
     proposalId: string,
@@ -251,6 +255,64 @@ export const api = {
     post<DecisionResponse>(
       "/workspaces/proposals/decide",
       { path, proposal_id: proposalId, decision, reviewer, reason },
+      signal,
+    ),
+
+  /* Loop-stage triggers (ADR 0004): one trigger per stage, each
+   * returning the CLI's `--json` payload plus `api_version`. Domain
+   * outcomes arrive as `ok:false` payloads with core diagnostics;
+   * lock contention throws STORAGE.WRITE_BUSY (retryable). */
+  ingest: (
+    path: string,
+    snapshot: { text: string; name?: string; source?: string },
+    signal?: AbortSignal,
+  ) =>
+    post<IngestResponse>("/workspaces/ingest", { path, snapshot }, signal),
+  project: (
+    path: string,
+    asOf: string,
+    projection?: string,
+    signal?: AbortSignal,
+  ) =>
+    post<ProjectRunResponse>(
+      "/workspaces/project",
+      { path, as_of: asOf, projection },
+      signal,
+    ),
+  diagnose: (
+    path: string,
+    source: { runId?: string; asOf?: string },
+    options?: { provider?: string; model?: string },
+    signal?: AbortSignal,
+  ) =>
+    post<DiagnoseRunResponse>(
+      "/workspaces/diagnose",
+      {
+        path,
+        run_id: source.runId ?? null,
+        as_of: source.asOf ?? null,
+        // The console's deliberate default is the credential-free stub
+        // (ADR 0004); a billed provider is always an explicit choice.
+        provider: options?.provider ?? "stub",
+        model: options?.model ?? null,
+      },
+      signal,
+    ),
+  evaluate: (
+    path: string,
+    boundary: string,
+    asOf: string,
+    signal?: AbortSignal,
+  ) =>
+    post<EvaluateRunTriggerResponse>(
+      "/workspaces/evaluate",
+      { path, boundary, as_of: asOf },
+      signal,
+    ),
+  execute: (path: string, proposalId: string, signal?: AbortSignal) =>
+    post<ExecuteResponse>(
+      "/workspaces/execute",
+      { path, proposal_id: proposalId },
       signal,
     ),
 };

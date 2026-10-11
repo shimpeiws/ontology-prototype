@@ -10,7 +10,12 @@ readme = { text = "Local API application for the ontology-prototype monorepo.", 
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["ontology-core>=0.0.1", "fastapi>=0.115", "uvicorn>=0.30"]
+dependencies = [
+    "ontology-core>=0.0.1",
+    "ontology-cli>=0.0.1",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=8", "httpx2>=2"]
@@ -23,3 +28,4 @@ where = ["src"]
 
 [tool.uv.sources]
 ontology-core = { workspace = true }
+ontology-cli = { workspace = true }

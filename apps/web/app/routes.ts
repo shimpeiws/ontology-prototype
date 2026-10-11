@@ -9,6 +9,7 @@ export default [
     route("evaluation", "routes/workspace.evaluation.tsx"),
     route("agent", "routes/workspace.agent.tsx"),
     route("proposals", "routes/workspace.proposals.tsx"),
+    route("run", "routes/workspace.run.tsx"),
     route("trace", "routes/workspace.trace.tsx"),
     route("reports", "routes/workspace.reports.tsx"),
   ]),

@@ -151,6 +151,7 @@ version = "0.0.1"
 source = { editable = "apps/api" }
 dependencies = [
     { name = "fastapi" },
+    { name = "ontology-cli" },
     { name = "ontology-core" },
     { name = "uvicorn" },
 ]
@@ -165,6 +166,7 @@ test = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx2", marker = "extra == 'test'", specifier = ">=2" },
+    { name = "ontology-cli", editable = "apps/cli" },
     { name = "ontology-core", editable = "packages/core" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
     { name = "uvicorn", specifier = ">=0.30" },

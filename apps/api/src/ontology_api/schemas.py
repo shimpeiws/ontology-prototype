@@ -124,6 +124,75 @@ class ProposalRequest(WorkspacePathRequest):
     proposal_id: str = Field(min_length=1, max_length=1024)
 
 
+class IngestSnapshot(BaseModel):
+    """A snapshot submitted as text — the console's equivalent of the
+    snapshot file the CLI reads. ``name`` is an optional label echoed in
+    diagnostics (sanitized to a basename by the service); ``source``
+    selects the declared source, required when the mapping declares
+    several. The format is always the selected source's declared format —
+    never request-controlled (ADR 0004)."""
+
+    text: str
+    name: str | None = Field(default=None, max_length=512)
+    source: str | None = Field(default=None, max_length=1024)
+
+
+class IngestRequest(WorkspacePathRequest):
+    """Run one ingest from the console — the CLI's
+    ``ingest <workspace> <snapshot> --json``."""
+
+    snapshot: IngestSnapshot
+
+
+class ProjectRunRequest(WorkspacePathRequest):
+    """Compute a projection from the console — the CLI's
+    ``project --as-of --json``.
+
+    ``as_of`` is optional at the schema layer so a missing value fails
+    the same way the CLI's missing ``--as-of`` does — a
+    ``PROJECTION.AS_OF_REQUIRED`` domain diagnostic, not a 422.
+    """
+
+    as_of: str | None = Field(default=None, max_length=1024)
+    projection: str | None = Field(default=None, max_length=1024)
+
+
+class DiagnoseRunRequest(WorkspacePathRequest):
+    """Run a diagnosis from the console — the CLI's
+    ``diagnose --run|--as-of --provider --json``.
+
+    ``provider`` defaults to the CLI's default (``openrouter``); the
+    console offers ``stub`` as the credential-free choice. ``model``
+    follows the CLI's env/default chain when omitted. Exactly one of
+    ``run_id``/``as_of`` must be set — checked in the service so the
+    conflict is the CLI's ``DIAGNOSIS.*`` diagnostic, not a 422.
+    """
+
+    run_id: str | None = Field(default=None, max_length=1024)
+    as_of: str | None = Field(default=None, max_length=1024)
+    provider: str = Field(default="openrouter", min_length=1, max_length=64)
+    model: str | None = Field(default=None, max_length=1024)
+
+
+class EvaluateRunTriggerRequest(WorkspacePathRequest):
+    """Compute an evaluation from the console — the CLI's
+    ``evaluate --boundary --as-of --json``.
+
+    Both times are optional at the schema layer so a missing value fails
+    with the CLI's ``EVALUATION.REQUIRED_ARGS`` diagnostic, not a 422.
+    """
+
+    boundary: str | None = Field(default=None, max_length=1024)
+    as_of: str | None = Field(default=None, max_length=1024)
+
+
+class ExecuteRequest(WorkspacePathRequest):
+    """Trigger write-back of an approved proposal — the CLI's
+    ``execute <workspace> <proposal> --json`` (ADR 0004)."""
+
+    proposal_id: str = Field(min_length=1, max_length=1024)
+
+
 class DecideRequest(WorkspacePathRequest):
     """Record a human decision on a persisted proposal — the CLI's
     ``decide --approve/--reject --reviewer``.
@@ -314,6 +383,121 @@ class DecisionResponse(BaseModel):
     decision_id: str | None = None
     proposal_id: str | None = None
     decision: str | None = None
+    recorded: bool | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class IngestResponse(BaseModel):
+    """The ``ingest --json`` payload plus ``api_version``. ``snapshot``
+    is the staged label the console submitted, not a server path."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    valid: bool | None = None
+    snapshot: str | None = None
+    ingest_id: str | None = None
+    source: str | None = None
+    content_digest: str | None = None
+    mapping_digest: str | None = None
+    observed_at: str | None = None
+    accepted: int | None = None
+    rejected: int | None = None
+    canonical: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class ProjectRunResponse(BaseModel):
+    """The ``project --json`` payload plus ``api_version``: a frozen
+    projection run with its candidates on success."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    valid: bool | None = None
+    run_id: str | None = None
+    projection: str | None = None
+    as_of: str | None = None
+    definition_digest: str | None = None
+    recorded: bool | None = None
+    candidates: list[dict[str, Any]] | None = None
+    inputs: list[dict[str, Any]] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class DiagnoseRunResponse(BaseModel):
+    """The ``diagnose --json`` payload plus ``api_version``: the
+    diagnosis run with validated proposals and rejections."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    valid: bool | None = None
+    run_id: str | None = None
+    projection_run_id: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    status: str | None = None
+    candidate_count: int | None = None
+    deliverables: dict[str, Any] | None = None
+    proposals: list[dict[str, Any]] | None = None
+    rejected: list[dict[str, Any]] | None = None
+    recorded: bool | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class EvaluateRunTriggerResponse(BaseModel):
+    """The ``evaluate --json`` payload plus ``api_version``: the frozen
+    report on success (distinct from the read-only
+    ``EvaluationRunResponse``)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    valid: bool | None = None
+    run_id: str | None = None
+    evaluation: str | None = None
+    as_of: str | None = None
+    boundary: str | None = None
+    contract_digest: str | None = None
+    recorded: bool | None = None
+    report: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class ExecuteResponse(BaseModel):
+    """The ``execute --json`` payload plus ``api_version`` (ADR 0004).
+
+    ``ok: false`` with ``diagnostics`` covers the refusal paths —
+    ``DECISION.NOT_APPROVED``, ``EXECUTION.UNKNOWN_PROPOSAL``, store
+    errors. A replayed execution reports ``replayed: true`` with the
+    recorded receipt and appends nothing.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    execution_id: str | None = None
+    idempotency_key: str | None = None
+    proposal_id: str | None = None
+    adapter: str | None = None
+    status: str | None = None
+    attempt: int | None = None
+    attempts: int | None = None
+    replayed: bool | None = None
+    receipt: dict[str, Any] | None = None
+    error: str | None = None
     recorded: bool | None = None
     diagnostics: list[dict[str, Any]] | None = None
 

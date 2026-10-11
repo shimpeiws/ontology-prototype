@@ -1,9 +1,11 @@
 /**
- * Proposals page tests (#63) — synthetic fixture mode (fixtures.ts).
- * `api.proposals` and `api.decide` are mocked; the page renders inside a
- * seeded WorkspaceProvider. The card shows the exact persisted payload
- * and digest; the AI rationale is labeled a hypothesis; decisions post
- * through `api.decide` and refresh the list; executions are status-only.
+ * Proposals page tests (#63, #84) — synthetic fixture mode
+ * (fixtures.ts). `api.proposals`, `api.decide`, and `api.execute` are
+ * mocked; the page renders inside a seeded WorkspaceProvider. The card
+ * shows the exact persisted payload and digest; the AI rationale is
+ * labeled a hypothesis; decisions post through `api.decide`; an
+ * approved proposal executes through an armed confirm (#84 / ADR 0004)
+ * that shows the receipt or the refusal diagnostics in place.
  */
 
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -36,12 +38,14 @@ vi.mock("../lib/api", async (importOriginal) => {
       ...mod.api,
       proposals: vi.fn(),
       decide: vi.fn(),
+      execute: vi.fn(),
     },
   };
 });
 
 const proposals = vi.mocked(api.proposals);
 const decide = vi.mocked(api.decide);
+const execute = vi.mocked(api.execute);
 
 function cleanState(): WorkspaceState {
   return workspaceReducer(initialWorkspaceState, {
@@ -69,6 +73,7 @@ function cardFor(proposalId: string): HTMLElement {
 afterEach(() => {
   proposals.mockReset();
   decide.mockReset();
+  execute.mockReset();
 });
 
 describe("proposals page", () => {
@@ -101,30 +106,151 @@ describe("proposals page", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders execution history as status only — no execute affordance", async () => {
+  it("shows the armed execute affordance on approved proposals only", async () => {
     proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
     renderPage();
+
+    // The approved+executed card offers the trigger (replays are
+    // idempotent)…
+    const executed = await screen
+      .findByText("dgx-20261004T090000000000Z-bbbb1111-p0")
+      .then((el) => el.closest("article") as HTMLElement);
+    expect(
+      within(executed).getByRole("button", { name: "Execute proposal" }),
+    ).toBeEnabled();
+    expect(
+      within(executed).getByText("exe-20261004T101000000000Z-aaaa6666"),
+    ).toBeInTheDocument();
+
+    // …the undecided card's trigger stays inert — execution requires
+    // an approved decision.
+    const open = await screen
+      .findByText("dgx-20261005T120600000000Z-cccc2222-p0")
+      .then((el) => el.closest("article") as HTMLElement);
+    const view = within(open);
+    expect(
+      view.getByRole("button", { name: "Execute proposal" }),
+    ).toBeDisabled();
+    expect(view.getByRole("button", { name: "Approve" })).toBeDisabled();
+  });
+
+  it("executes an approved proposal through an armed confirm", async () => {
+    proposals
+      .mockResolvedValueOnce(SYNTHETIC_PROPOSALS_AFTER_APPROVE)
+      .mockResolvedValueOnce(SYNTHETIC_PROPOSALS_AFTER_APPROVE);
+    execute.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: true,
+      execution_id: "exe-20261005T150000000000Z-hhhh9999",
+      idempotency_key: "idem-x",
+      proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
+      adapter: "csv",
+      status: "succeeded",
+      attempt: 1,
+      attempts: 1,
+      replayed: false,
+      receipt: { path: ".ontology/reminders.csv", row: 2 },
+      error: null,
+      recorded: true,
+      diagnostics: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    const card = await screen
+      .findByText("dgx-20261005T120600000000Z-cccc2222-p0")
+      .then((el) => el.closest("article") as HTMLElement);
+    const view = within(card);
+
+    // First click arms — nothing fires yet.
+    await user.click(
+      view.getByRole("button", { name: "Execute proposal" }),
+    );
+    expect(execute).not.toHaveBeenCalled();
+    await user.click(
+      view.getByRole("button", { name: "Confirm write-back" }),
+    );
+
+    await waitFor(() =>
+      expect(execute).toHaveBeenCalledWith(
+        "job-invoicing",
+        "dgx-20261005T120600000000Z-cccc2222-p0",
+      ),
+    );
+    // The receipt renders in place — run identity, attempt, receipt.
+    await view.findByText("exe-20261005T150000000000Z-hhhh9999");
+    expect(view.getByText("succeeded")).toBeInTheDocument();
+    expect(view.getByText("receipt")).toBeInTheDocument();
+  });
+
+  it("renders the refusal diagnostics when the gate refuses", async () => {
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_AFTER_APPROVE);
+    execute.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: false,
+      diagnostics: [
+        {
+          severity: "error",
+          code: "DECISION.NOT_APPROVED",
+          message: "latest decision is not an approval",
+          file: null,
+          path: null,
+          line: null,
+          hint: null,
+        },
+      ],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
+    const card = await screen
+      .findByText("dgx-20261005T120600000000Z-cccc2222-p0")
+      .then((el) => el.closest("article") as HTMLElement);
+    const view = within(card);
+    await user.click(
+      view.getByRole("button", { name: "Execute proposal" }),
+    );
+    await user.click(
+      view.getByRole("button", { name: "Confirm write-back" }),
+    );
+    await view.findByText("DECISION.NOT_APPROVED");
+  });
+
+  it("marks a replayed execution as already executed", async () => {
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    execute.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: true,
+      execution_id: "exe-20261004T101000000000Z-aaaa6666",
+      idempotency_key: "idem-20261004T101000000000Z-bbbb7777",
+      proposal_id: "dgx-20261004T090000000000Z-bbbb1111-p0",
+      adapter: "csv",
+      status: "succeeded",
+      attempt: 1,
+      attempts: 1,
+      replayed: true,
+      receipt: { path: ".ontology/reminders.csv", row: 2 },
+      error: null,
+      recorded: true,
+      diagnostics: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+
     const card = await screen
       .findByText("dgx-20261004T090000000000Z-bbbb1111-p0")
       .then((el) => el.closest("article") as HTMLElement);
     const view = within(card);
-
-    // The recorded attempt is visible with its status…
-    expect(
-      view.getByText("exe-20261004T101000000000Z-aaaa6666"),
-    ).toBeInTheDocument();
-    expect(view.getByText("succeeded")).toBeInTheDocument();
-    // …but the only controls are the decision pair — nothing can
-    // trigger a run or a write-back from here.
-    expect(
-      view.queryByRole("button", { name: /execute|run|trigger/i }),
-    ).toBeNull();
-    expect(
-      view.getByRole("button", { name: "Approve" }),
-    ).toBeInTheDocument();
-    expect(
-      view.getByRole("button", { name: "Reject" }),
-    ).toBeInTheDocument();
+    await user.click(
+      view.getByRole("button", { name: "Execute proposal" }),
+    );
+    await user.click(
+      view.getByRole("button", { name: "Confirm write-back" }),
+    );
+    await view.findByText(/already executed/);
   });
 
   it("records an approval through the API and refreshes the card", async () => {

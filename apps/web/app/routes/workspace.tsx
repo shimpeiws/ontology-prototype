@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { to: "/workspace/evaluation", label: "Evaluation" },
   { to: "/workspace/agent", label: "Agent task" },
   { to: "/workspace/proposals", label: "Proposals" },
+  { to: "/workspace/run", label: "Run" },
   { to: "/workspace/trace", label: "Trace" },
   { to: "/workspace/reports", label: "Reports" },
 ] as const;

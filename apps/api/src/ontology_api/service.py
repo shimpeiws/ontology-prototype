@@ -9,25 +9,40 @@ can inject a different implementation without touching the transport.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import ontology_core
+from ontology_cli.providers import (
+    DEFAULT_MODEL,
+    MODEL_ENV,
+    PROVIDERS,
+    resolve_provider,
+)
 from ontology_core import (
     RUNTIME_DIR,
     WORKSPACE_FILES,
+    CsvReminderAdapter,
     Diagnostic,
+    ProviderError,
     SqliteCanonicalStore,
     Workspace,
     bundle_digest,
     decide,
+    execute,
     get_evaluation_run,
+    ingest_snapshot,
     load_workspace,
     load_workspace_texts,
     proposal_view,
+    run_diagnosis,
+    run_evaluation,
+    run_projection,
     save_workspace,
     store_error_code,
     traceview,
@@ -176,6 +191,43 @@ class WorkspaceService(Protocol):
         reviewer: str,
         reason: str | None = None,
     ) -> dict[str, Any]: ...
+
+    def ingest(
+        self,
+        path: str,
+        snapshot_text: str,
+        *,
+        source: str | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def project(
+        self,
+        path: str,
+        as_of: str | None,
+        *,
+        projection: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def diagnose(
+        self,
+        path: str,
+        *,
+        run_id: str | None = None,
+        as_of: str | None = None,
+        provider: str = "openrouter",
+        model: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    def evaluate(
+        self,
+        path: str,
+        *,
+        boundary: str | None,
+        as_of: str | None,
+    ) -> dict[str, Any]: ...
+
+    def execute(self, path: str, proposal_id: str) -> dict[str, Any]: ...
 
 
 class CoreWorkspaceService:
@@ -501,22 +553,339 @@ class CoreWorkspaceService:
             )
         finally:
             store.close()
-        busy = next(
-            (
-                d
-                for d in result.diagnostics
-                if d.severity == "error" and d.code == "STORAGE.WRITE_BUSY"
-            ),
-            None,
-        )
-        if busy is not None:
-            raise ApiError(503, "STORAGE.WRITE_BUSY", busy.message)
+        _raise_if_busy(result.diagnostics)
         return {
             "workspace": str(resolved),
             "ok": result.ok,
             "decision_id": result.decision_id,
             "proposal_id": result.proposal_id,
             "decision": result.decision,
+            "recorded": result.recorded,
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
+
+    # --------------------------------------------------- run triggers
+    #
+    # ADR 0004: one trigger per loop stage, each returning the CLI's
+    # ``--json`` payload verbatim. Every trigger resolves the workspace
+    # under the roots and refuses an escaping ``.ontology`` before any
+    # write; domain failures are ``ok: false`` payloads at 200, and a
+    # writer that loses the bounded busy wait is 503 STORAGE.WRITE_BUSY
+    # — the same split ``decide`` established.
+
+    def ingest(
+        self,
+        path: str,
+        snapshot_text: str,
+        *,
+        source: str | None = None,
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        """The ``ontology ingest <snapshot> --json`` payload.
+
+        The submitted text is staged as a temp file whose name is the
+        sanitized client label — ``ingest_snapshot`` reads a path, and
+        the label is what row-level diagnostics echo. Nothing about the
+        staging reaches the store: evidence is written by content
+        digest, identical to a CLI ingest of the same bytes.
+        """
+        resolved = self._workspace_dir(path)
+        self._check_runtime(resolved / RUNTIME_DIR)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return _invalid_workspace(resolved, loaded)
+        assert loaded.workspace is not None
+        content = snapshot_text.encode("utf-8", errors="surrogatepass")
+        label = _snapshot_label(name)
+        canonical_store = SqliteCanonicalStore(resolved / RUNTIME_DIR)
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="ontology-api-ingest-"
+            ) as staging:
+                staged = Path(staging) / label
+                staged.write_bytes(content)
+                result = ingest_snapshot(
+                    loaded.workspace,
+                    staged,
+                    source=source,
+                    canonical=canonical_store,
+                )
+        finally:
+            canonical_store.close()
+        _raise_if_busy(result.diagnostics)
+        return {
+            "workspace": str(resolved),
+            "snapshot": label,
+            "ok": result.ok,
+            "ingest_id": result.ingest_id,
+            "source": result.source,
+            "content_digest": result.content_digest,
+            "mapping_digest": result.mapping_digest,
+            "observed_at": (
+                result.observed_at.isoformat()
+                if result.observed_at
+                else None
+            ),
+            "accepted": len(result.accepted),
+            "rejected": len(result.rejected),
+            "canonical": (
+                {
+                    "entities_upserted": result.canonical.entities_upserted,
+                    "events_appended": result.canonical.events_appended,
+                    "events_reobserved": result.canonical.events_reobserved,
+                    "fact_links": [
+                        link.to_dict() for link in result.canonical.links
+                    ],
+                }
+                if result.canonical is not None
+                else None
+            ),
+            "evidence": {
+                "snapshot": str(result.snapshot_path)
+                if result.snapshot_path
+                else None,
+                "observations": str(result.observations_path)
+                if result.observations_path
+                else None,
+            },
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
+
+    def project(
+        self,
+        path: str,
+        as_of: str | None,
+        *,
+        projection: str | None = None,
+    ) -> dict[str, Any]:
+        """The ``ontology project --as-of --json`` payload."""
+        resolved = self._workspace_dir(path)
+        self._check_runtime(resolved / RUNTIME_DIR)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return _invalid_workspace(resolved, loaded)
+        if as_of is None:
+            return _failure(
+                resolved,
+                "PROJECTION.AS_OF_REQUIRED",
+                "as_of is required to compute a projection",
+                hint="or inspect a frozen run through the trace view",
+            )
+        as_of_dt = _parse_as_of(as_of)
+        if as_of_dt is None:
+            return _failure(
+                resolved,
+                "PROJECTION.INVALID_AS_OF",
+                f"invalid as_of {_bounded(as_of)!r}: expected an ISO 8601 "
+                "datetime with an explicit offset "
+                "(e.g. '2026-10-05T00:00:00Z')",
+            )
+        assert loaded.workspace is not None
+        name = projection or loaded.workspace.agent.projection
+        store = SqliteCanonicalStore(resolved / RUNTIME_DIR)
+        try:
+            result = run_projection(
+                loaded.workspace, name, as_of=as_of_dt, store=store
+            )
+        finally:
+            store.close()
+        _raise_if_busy(result.diagnostics)
+        return {
+            "workspace": str(resolved),
+            "ok": result.ok,
+            "run_id": result.run_id,
+            "projection": result.projection,
+            "as_of": result.as_of.isoformat() if result.as_of else None,
+            "definition_digest": result.definition_digest,
+            "recorded": result.recorded,
+            "candidates": [c.to_dict() for c in result.candidates],
+            "inputs": result.inputs,
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
+
+    def diagnose(
+        self,
+        path: str,
+        *,
+        run_id: str | None = None,
+        as_of: str | None = None,
+        provider: str = "openrouter",
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """The ``ontology diagnose --json`` payload.
+
+        Candidate-source validation runs before provider resolution —
+        the same order the CLI takes, so a credential error can never
+        mask a missing or conflicting ``run_id``/``as_of``.
+        """
+        resolved = self._workspace_dir(path)
+        self._check_runtime(resolved / RUNTIME_DIR)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return _invalid_workspace(resolved, loaded)
+        if run_id is not None and as_of is not None:
+            return _failure(
+                resolved,
+                "DIAGNOSIS.CONFLICTING_ARGS",
+                "a diagnosis run takes either run_id or as_of, not both",
+            )
+        if run_id is None and as_of is None:
+            return _failure(
+                resolved,
+                "DIAGNOSIS.NO_INPUT",
+                "a diagnosis run needs a candidate source",
+                hint="pass run_id of a frozen projection run or an as_of",
+            )
+        if as_of is not None:
+            as_of_dt = _parse_as_of(as_of)
+            if as_of_dt is None:
+                return _failure(
+                    resolved,
+                    "DIAGNOSIS.INVALID_AS_OF",
+                    f"invalid as_of {_bounded(as_of)!r}: expected an ISO "
+                    "8601 datetime with an explicit offset "
+                    "(e.g. '2026-10-05T00:00:00Z')",
+                )
+        else:
+            as_of_dt = None
+        try:
+            provider_adapter = resolve_provider(provider)
+        except ProviderError as exc:
+            return _failure(
+                resolved, "DIAGNOSIS.PROVIDER_ERROR", str(exc)
+            )
+        assert loaded.workspace is not None
+        chosen_model = model or os.environ.get(MODEL_ENV) or DEFAULT_MODEL
+        store = SqliteCanonicalStore(resolved / RUNTIME_DIR)
+        try:
+            result = run_diagnosis(
+                loaded.workspace,
+                provider_adapter,
+                model=chosen_model,
+                run_id=run_id,
+                as_of=as_of_dt,
+                store=store,
+            )
+        finally:
+            store.close()
+        _raise_if_busy(result.diagnostics)
+        return {
+            "workspace": str(resolved),
+            "ok": result.ok,
+            "run_id": result.run_id,
+            "projection_run_id": result.projection_run_id,
+            "provider": result.provider,
+            "model": result.model,
+            "status": result.status,
+            "candidate_count": result.candidate_count,
+            "deliverables": result.deliverables,
+            "proposals": [p.to_dict() for p in result.proposals],
+            "rejected": result.rejected,
+            "recorded": result.recorded,
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
+
+    def evaluate(
+        self,
+        path: str,
+        *,
+        boundary: str | None,
+        as_of: str | None,
+    ) -> dict[str, Any]:
+        """The ``ontology evaluate --boundary --as-of --json`` payload."""
+        resolved = self._workspace_dir(path)
+        self._check_runtime(resolved / RUNTIME_DIR)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return _invalid_workspace(resolved, loaded)
+        missing = [
+            name
+            for name, value in (("boundary", boundary), ("as_of", as_of))
+            if value is None
+        ]
+        if missing:
+            return _failure(
+                resolved,
+                "EVALUATION.REQUIRED_ARGS",
+                f"computing an evaluation needs {' and '.join(missing)}",
+            )
+        parsed: dict[str, datetime] = {}
+        for name, text in (("boundary", boundary), ("as_of", as_of)):
+            # Both are non-None: `missing` above returned early otherwise.
+            parsed_dt = _parse_as_of(text) if text is not None else None
+            if parsed_dt is None:
+                return _failure(
+                    resolved,
+                    "EVALUATION.INVALID_TIME",
+                    f"invalid {name} {_bounded(text or '')!r}: expected an "
+                    "ISO 8601 datetime with an explicit offset "
+                    "(e.g. '2026-10-05T00:00:00Z')",
+                )
+            parsed[name] = parsed_dt
+        assert loaded.workspace is not None
+        store = SqliteCanonicalStore(resolved / RUNTIME_DIR)
+        try:
+            result = run_evaluation(
+                loaded.workspace,
+                as_of=parsed["as_of"],
+                boundary=parsed["boundary"],
+                store=store,
+            )
+        finally:
+            store.close()
+        _raise_if_busy(result.diagnostics)
+        return {
+            "workspace": str(resolved),
+            "ok": result.ok,
+            "run_id": result.run_id,
+            "evaluation": result.evaluation,
+            "as_of": result.as_of.isoformat() if result.as_of else None,
+            "boundary": (
+                result.boundary.isoformat() if result.boundary else None
+            ),
+            "contract_digest": result.contract_digest,
+            "recorded": result.recorded,
+            "report": result.report,
+            "diagnostics": [d.to_dict() for d in result.diagnostics],
+        }
+
+    def execute(self, path: str, proposal_id: str) -> dict[str, Any]:
+        """The ``ontology execute --json`` payload.
+
+        The API supplies the same adapter and destination as the CLI;
+        the approval gate lives inside the core executor, so a refused
+        execution is the CLI's diagnostics — never an adapter call.
+        """
+        resolved = self._workspace_dir(path)
+        self._check_runtime(resolved / RUNTIME_DIR)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return _invalid_workspace(resolved, loaded)
+        assert loaded.workspace is not None
+        adapter = CsvReminderAdapter(
+            Path(loaded.workspace.path) / RUNTIME_DIR / "reminders.csv"
+        )
+        store = SqliteCanonicalStore(resolved / RUNTIME_DIR)
+        try:
+            result = execute(
+                loaded.workspace, proposal_id, adapter, store=store
+            )
+        finally:
+            store.close()
+        _raise_if_busy(result.diagnostics)
+        return {
+            "workspace": str(resolved),
+            "ok": result.ok,
+            "execution_id": result.execution_id,
+            "idempotency_key": result.idempotency_key,
+            "proposal_id": result.proposal_id,
+            "adapter": result.adapter,
+            "status": result.status,
+            "attempt": result.attempt,
+            "attempts": result.attempts,
+            "replayed": result.replayed,
+            "receipt": result.receipt,
+            "error": result.error,
             "recorded": result.recorded,
             "diagnostics": [d.to_dict() for d in result.diagnostics],
         }
@@ -680,6 +1049,54 @@ class CoreWorkspaceService:
         return files, omitted
 
 
+def _raise_if_busy(diagnostics: list[Diagnostic]) -> None:
+    """Map a lost busy wait to the transport failure — 503
+    ``STORAGE.WRITE_BUSY`` — so every write trigger reports contention
+    the way ``decide`` does (ADR 0003/0004): a retry is meaningful."""
+    busy = next(
+        (
+            d
+            for d in diagnostics
+            if d.severity == "error" and d.code == "STORAGE.WRITE_BUSY"
+        ),
+        None,
+    )
+    if busy is not None:
+        raise ApiError(503, "STORAGE.WRITE_BUSY", busy.message)
+
+
+def _invalid_workspace(resolved: Path, loaded) -> dict[str, Any]:
+    """The invalid-workspace payload the run-trigger commands emit —
+    ``valid`` like the CLI's project/diagnose/evaluate JSON errors."""
+    return {
+        "workspace": str(resolved),
+        "valid": False,
+        "ok": False,
+        "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+    }
+
+
+def _parse_as_of(text: str) -> datetime | None:
+    """The CLI's as-of contract: ISO 8601 with an explicit offset —
+    a naive value is rejected, never guessed."""
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.tzinfo.utcoffset(parsed) is None:
+        return None
+    return parsed
+
+
+def _snapshot_label(name: str | None) -> str:
+    """The staged snapshot's filename — the client label sanitized to a
+    basename so it can never name a path outside the temp dir."""
+    if name is None:
+        return "snapshot"
+    label = Path(name).name.strip()[:200]
+    return label if label not in ("", ".", "..") else "snapshot"
+
+
 def _failure(
     resolved: Path, code: str, message: str, *, hint: str | None = None
 ) -> dict[str, Any]:
@@ -782,6 +1199,11 @@ def contract_metadata() -> dict[str, Any]:
             "proposals": f"POST /api/{API_VERSION}/workspaces/proposals",
             "proposal": f"POST /api/{API_VERSION}/workspaces/proposals/show",
             "decide": f"POST /api/{API_VERSION}/workspaces/proposals/decide",
+            "ingest": f"POST /api/{API_VERSION}/workspaces/ingest",
+            "project": f"POST /api/{API_VERSION}/workspaces/project",
+            "diagnose": f"POST /api/{API_VERSION}/workspaces/diagnose",
+            "evaluate": f"POST /api/{API_VERSION}/workspaces/evaluate",
+            "execute": f"POST /api/{API_VERSION}/workspaces/execute",
         },
         "contract": {
             "property_types": list(PROPERTY_TYPES),
@@ -811,5 +1233,9 @@ def contract_metadata() -> dict[str, Any]:
                 "duration_units": list(DURATION_UNITS),
             },
             "deliverables": list(DELIVERABLES),
+            "diagnosis": {
+                "providers": list(PROVIDERS),
+                "default_model": DEFAULT_MODEL,
+            },
         },
     }

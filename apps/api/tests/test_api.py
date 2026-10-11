@@ -24,6 +24,7 @@ from ontology_api import (
     __version__,
     create_app,
 )
+from ontology_api.config import ORIGINS_ENV
 from ontology_core import (
     MAX_PREVIEW_BYTES,
     bundle_digest,
@@ -1175,7 +1176,7 @@ class TestServiceInjection:
 
 
 class TestTransport:
-    def test_cors_preflight_allowed_from_localhost(
+    def test_cors_preflight_allowed_from_console_origin(
         self, roots: Path
     ) -> None:
         client = make_client(roots)
@@ -1192,6 +1193,21 @@ class TestTransport:
             == "http://localhost:5173"
         )
 
+    def test_cors_preflight_rejected_from_unlisted_loopback_port(
+        self, roots: Path
+    ) -> None:
+        # An untrusted page on any other localhost port must not be able
+        # to drive the write-side triggers through a browser.
+        client = make_client(roots)
+        response = client.options(
+            "/api/v1/workspaces/execute",
+            headers={
+                "Origin": "http://localhost:9999",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert "access-control-allow-origin" not in response.headers
+
     def test_cors_preflight_rejected_from_foreign_origin(
         self, roots: Path
     ) -> None:
@@ -1204,6 +1220,31 @@ class TestTransport:
             },
         )
         assert "access-control-allow-origin" not in response.headers
+
+    def test_cors_origins_configurable_via_env(self, roots: Path) -> None:
+        config = ApiConfig.from_env(
+            {ORIGINS_ENV: "http://localhost:3000, https://console.local"}
+        )
+        client = TestClient(create_app(config=config))
+        response = client.options(
+            "/api/v1/workspaces/open",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert (
+            response.headers["access-control-allow-origin"]
+            == "http://localhost:3000"
+        )
+        rejected = client.options(
+            "/api/v1/workspaces/open",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert "access-control-allow-origin" not in rejected.headers
 
     def test_unexpected_service_failure_returns_structured_500(
         self,

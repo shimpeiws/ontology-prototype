@@ -6,9 +6,10 @@
  * digest, grounding evidence — so the reviewer decides on the same bytes
  * the approval binds to (`payload_digest`). The proposal's `reason` is
  * AI output recorded at diagnosis time: it is labeled a hypothesis and
- * never presented as fact. Execution history is status only — ADR 0003
- * keeps run triggers and write-back on the CLI; there is no execute
- * affordance here.
+ * never presented as fact. An approved proposal can be executed from
+ * this card (ADR 0004): the armed confirm runs the same core gate the
+ * CLI enforces, and the receipt — or the refusal diagnostics — renders
+ * in place.
  */
 
 import { useRef, useState } from "react";
@@ -16,6 +17,7 @@ import { useRef, useState } from "react";
 import { api, ApiError } from "../lib/api";
 import type { DecisionResponse, Diagnostic, ProposalView } from "../lib/types";
 import { DiagnosticsList } from "./DiagnosticsList";
+import { ExecuteControl } from "./ExecuteControl";
 import { EmptyState, ErrorState } from "./states";
 import { NatureBadge, StatusBadge } from "./StatusBadge";
 import { RecordDetails } from "./TraceView";
@@ -201,8 +203,8 @@ export function ProposalReviewCard({
           Executions <NatureBadge nature="writeback" />
         </h4>
         <p className="hint">
-          Recorded attempts only — execution runs through{" "}
-          <code>ontology execute</code>, never from this console.
+          Recorded write-back attempts — triggered from the CLI or from
+          this console; an idempotent replay appends nothing.
         </p>
         {proposal.executions.length ? (
           <ul className="trace-list">
@@ -227,6 +229,19 @@ export function ProposalReviewCard({
         ) : (
           <EmptyState title="No write-back attempts recorded." />
         )}
+      </section>
+
+      <section className="proposal-execute" aria-label="execute proposal">
+        <h4>
+          Execute <NatureBadge nature="writeback" />
+        </h4>
+        <ExecuteControl
+          path={path}
+          proposalId={proposal.proposal_id}
+          disabled={proposal.status !== "approved"}
+          disabledReason="Execution requires an approved decision on this exact payload — the core enforces the gate."
+          onExecuted={onDecided}
+        />
       </section>
 
       <section className="proposal-decide" aria-label="record a decision">

@@ -9,9 +9,11 @@ subprocess, and — on the authoring surface documented here — never touches
 canonical state, proposals, approvals, or write-back storage.
 
 The operational surface is a separate set of endpoints governed by
-[ADR 0003](adr/0003-api-operational-boundary.md): inspection reads and
-human decision writes through the same core — never execution, write-back,
-or run triggers.
+[ADR 0003](adr/0003-api-operational-boundary.md) (inspection reads and
+the human-decision write) and
+[ADR 0004](adr/0004-write-console-triggers.md) (one run trigger per loop
+stage — ingest, project, diagnose, evaluate, execute) — all through the
+same core, on the same `canon.db`.
 
 ## Install and startup
 
@@ -49,11 +51,21 @@ their contents are never returned to the client.
 ### CORS
 
 The API serves a browser UI, so `OPTIONS` preflights are answered for
-loopback origins only — `http(s)://localhost:<port>` and
-`http(s)://127.0.0.1:<port>` — with no credentials. Any other origin is
-rejected. The Vite dev proxy remains the primary development path (see
-ADR 0001); CORS exists so direct cross-origin calls from a local dev
-server also work.
+an explicit origin allowlist — by default the console's own dev and
+preview origins (`http://localhost:5173`, `http://127.0.0.1:5173`,
+`http://localhost:4173`, `http://127.0.0.1:4173`), with no credentials.
+`ONTOLOGY_API_ORIGINS` (comma-separated) overrides the list at startup.
+A page on any other origin — a different loopback port included —
+fails preflight, so an untrusted local web page cannot drive the
+write-side triggers through a browser. The Vite dev proxy remains the
+primary development path (see ADR 0001); CORS exists so direct
+cross-origin calls from the console's own dev server also work.
+
+CORS is a browser control, not authentication: the API is a
+single-user local tool bound to loopback and deliberately
+unauthenticated — any process running under the local user account
+(curl, scripts, other local tools) can call every endpoint regardless
+of origin. The trust boundary is the machine.
 
 ## Endpoints
 
@@ -282,8 +294,10 @@ configured roots — a symlink escaping them is refused with
 The seven read endpoints take `{"path": "<workspace under a configured
 root>"}` plus the extra field listed; `path` follows the same
 root-containment rules as every other endpoint. The eighth row in the
-table is the surface's single write — the human decision — documented
-under [Human decisions](#human-decisions) below.
+table is the human-decision write documented under
+[Human decisions](#human-decisions); the five run triggers added by
+ADR 0004 are documented under
+[Loop run triggers](#loop-run-triggers).
 
 | Endpoint | CLI equivalent | Success payload |
 | --- | --- | --- |
@@ -334,11 +348,10 @@ index as-is (`proposals` omits them, `proposals/show` returns
 ## Human decisions
 
 `POST /api/v1/workspaces/proposals/decide` is the operational surface's
-single write (ADR 0003): a human approve/reject on a persisted proposal,
+review write (ADR 0003): a human approve/reject on a persisted proposal,
 recorded through the shared core's `decide` on the same writable
 `canon.db` the CLI uses — so a decision made over HTTP is honored by
-`ontology execute` exactly like a CLI decision. There is no execute,
-diagnose, or run-trigger endpoint; execution stays CLI-only.
+`ontology execute` exactly like a CLI decision.
 
 ```json
 {
@@ -382,6 +395,75 @@ writer that loses the bounded `busy_timeout` wait reports
 `{"error": {"code": "STORAGE.WRITE_BUSY", "message": "…"}}` — because
 the condition is transient and a retry is meaningful. The same
 contention on the CLI exits non-zero naming `STORAGE.WRITE_BUSY`.
+
+## Loop run triggers
+
+One route per loop stage, added under
+[ADR 0004](adr/0004-write-console-triggers.md) so the console can run
+the whole loop. Each route mirrors its CLI subcommand: the success
+payload is the `--json` output verbatim plus `api_version`, the run goes
+through the same core call on the same `canon.db`, and a run started
+over HTTP is the same trace artifact a `trace --run` lookup returns.
+Domain outcomes — `ok: false` with the core's `diagnostics` — are `200`
+responses; `STORAGE.WRITE_BUSY` stays the `503` transport error. What a
+retry means is stage-specific: `execute` is idempotent (a re-run replays
+the stored receipt) and `ingest` of identical bytes re-observes without
+duplicating, while `project`, `evaluate`, and `diagnose` each record a
+new run — and a `diagnose` retry is a new provider call too.
+
+Every trigger resolves `path` under the configured roots and refuses an
+`.ontology/` tree that escapes them before any write — the same guards
+as every other endpoint.
+
+| Endpoint | CLI equivalent | Success payload |
+| --- | --- | --- |
+| `POST /api/v1/workspaces/ingest` | `ontology ingest --json` | `workspace`, `snapshot`, `ingest_id`, `source`, `content_digest`, `mapping_digest`, `observed_at`, `accepted`, `rejected`, `canonical`, `evidence`, `diagnostics` |
+| `POST /api/v1/workspaces/project` | `ontology project --json` | `run_id`, `projection`, `as_of`, `definition_digest`, `recorded`, `candidates`, `inputs`, `diagnostics` |
+| `POST /api/v1/workspaces/diagnose` | `ontology diagnose --json` | `run_id`, `provider`, `model`, `status`, `proposals`, `rejected`, `deliverables`, `diagnostics` |
+| `POST /api/v1/workspaces/evaluate` | `ontology evaluate --json` | `run_id`, `boundary`, `as_of`, the frozen `report`, `diagnostics` |
+| `POST /api/v1/workspaces/execute` | `ontology execute --json` | `execution_id`, `idempotency_key`, `attempt`, `status`, `replayed`, `receipt`, `error`, `diagnostics` |
+
+Request bodies all carry `"path"` plus:
+
+```jsonc
+// ingest — the snapshot text is staged server-side; `name` is a label
+// sanitized to a basename, `source` is required when the mapping
+// declares several sources
+{ "path": "job-invoicing",
+  "snapshot": { "text": "id,status,…", "name": "jobs.csv", "source": "jobs" } }
+
+// project — `projection` optional, defaults to the agent task's
+{ "path": "job-invoicing", "as_of": "2026-10-21T00:00:00Z",
+  "projection": null }
+
+// diagnose — exactly one candidate source; `provider` optional and
+// defaults to the CLI's `openrouter` (the Web console preselects `stub`,
+// per ADR 0004); `model` optional, resolved through the same
+// env/default chain as the CLI
+{ "path": "job-invoicing", "run_id": "prj-…", "as_of": null,
+  "provider": "stub", "model": null }
+
+// evaluate — both instants required, ISO 8601 with an explicit offset
+{ "path": "job-invoicing", "boundary": "2026-10-15T00:00:00Z",
+  "as_of": "2026-10-26T00:00:00Z" }
+
+// execute — the persisted proposal id; the core's check_approval gate
+// re-evaluates before the adapter call exactly as on the CLI
+{ "path": "job-invoicing", "proposal_id": "dgx-…-p0" }
+```
+
+Validation order mirrors the CLI: a diagnosis request naming both
+`run_id` and `as_of` — or neither — is refused as a domain diagnostic
+(`DIAGNOSIS.CONFLICTING_ARGS` / `DIAGNOSIS.NO_INPUT`) before provider
+resolution, so a credential error can never mask a missing input.
+Provider credentials come only from the server environment; no request
+field accepts one and no payload echoes one. Execution stays gated by
+`check_approval` inside the core executor — an undecided, rejected, or
+payload-changed proposal returns `ok: false` with the CLI's
+`DECISION.NOT_APPROVED`, and a repeated execute of a delivered proposal
+replays its receipt (`replayed: true`, `attempt` unchanged). Idempotent
+re-ingest of identical bytes re-observes rather than duplicates, exactly
+as on the CLI.
 
 ## Errors
 
