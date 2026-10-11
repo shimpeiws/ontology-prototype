@@ -441,7 +441,7 @@ export interface ProposalView {
   status: string;
   latest_decision: TraceDecision | null;
   decisions: TraceDecision[];
-  /** Recorded execution attempts — status only; runs stay CLI-only. */
+  /** Recorded execution attempts — written by CLI or console trigger. */
   executions: TraceExecution[];
 }
 
@@ -462,6 +462,110 @@ export interface DecisionResponse extends OperationalResponse {
   decision_id?: string | null;
   proposal_id?: string | null;
   decision?: string | null;
+  recorded?: boolean | null;
+}
+
+/* ---- Loop-stage triggers (ADR 0004 write surface) ----
+ *
+ * Each payload is the CLI's `--json` output verbatim plus
+ * `api_version`: `ok:false` with `diagnostics` is a domain outcome
+ * (missing args, unknown proposal, provider error); lock contention
+ * never reaches here — it arrives as 503 STORAGE.WRITE_BUSY. Fields are
+ * optional because a domain failure carries only the failure shape.
+ */
+
+/** `ingest <snapshot> --json` — the snapshot the console staged. */
+export interface IngestResponse extends OperationalResponse {
+  /** The sanitized label the staged snapshot was named. */
+  snapshot?: string;
+  ingest_id?: string | null;
+  source?: string | null;
+  content_digest?: string | null;
+  mapping_digest?: string | null;
+  observed_at?: string | null;
+  accepted?: number;
+  rejected?: number;
+  canonical?: {
+    entities_upserted: number;
+    events_appended: number;
+    events_reobserved: number;
+    fact_links: {
+      fact_key: string;
+      relation: string;
+      target: string;
+    }[];
+  } | null;
+  evidence?: {
+    snapshot: string | null;
+    observations: string | null;
+  };
+}
+
+/** One projection candidate (`project --json` `candidates[]`). */
+export interface ProjectionCandidate {
+  subject: { entity: string; id: string };
+  occurred_at: string;
+  elapsed_seconds: number;
+  elapsed_days: number;
+  properties: Record<string, unknown>;
+  property_types: Record<string, string>;
+  evidence: Record<string, unknown>;
+}
+
+/** `project --as-of --json`. */
+export interface ProjectRunResponse extends OperationalResponse {
+  run_id?: string | null;
+  projection?: string | null;
+  as_of?: string | null;
+  definition_digest?: string | null;
+  recorded?: boolean;
+  candidates?: ProjectionCandidate[];
+  inputs?: Record<string, unknown>;
+}
+
+/** `diagnose --run|--as-of --provider --json`. */
+export interface DiagnoseRunResponse extends OperationalResponse {
+  run_id?: string | null;
+  projection_run_id?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  status?: string | null;
+  candidate_count?: number;
+  deliverables?: Record<string, unknown>;
+  /** Persisted proposal payloads (core proposal dicts). */
+  proposals?: Record<string, unknown>[];
+  rejected?: Record<string, unknown>[];
+  recorded?: boolean;
+}
+
+/** `evaluate --boundary --as-of --json`. */
+export interface EvaluateRunTriggerResponse extends OperationalResponse {
+  run_id?: string | null;
+  evaluation?: string | null;
+  as_of?: string | null;
+  boundary?: string | null;
+  contract_digest?: string | null;
+  recorded?: boolean;
+  report?: EvaluationReport | null;
+}
+
+/**
+ * `execute <proposal> --json` — the write-back of an approved proposal.
+ * `replayed` marks an idempotent repeat of an already-executed
+ * proposal; `receipt` is the adapter's recorded write receipt.
+ */
+export interface ExecuteResponse extends OperationalResponse {
+  execution_id?: string | null;
+  idempotency_key?: string | null;
+  proposal_id?: string | null;
+  adapter?: string | null;
+  /** "succeeded" | "failed" | "uncertain" | null when refused early. */
+  status?: string | null;
+  attempt?: number | null;
+  attempts?: Record<string, unknown>[];
+  replayed?: boolean | null;
+  receipt?: Record<string, unknown> | null;
+  error?: string | null;
   recorded?: boolean | null;
 }
 

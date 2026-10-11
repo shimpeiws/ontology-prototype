@@ -408,6 +408,10 @@ export const SYNTHETIC_CONTRACT_RESPONSE: ContractResponse = {
       "follow_up_questions",
       "action_proposals",
     ],
+    diagnosis: {
+      providers: ["openrouter", "stub"],
+      default_model: "anthropic/claude-haiku-4.5",
+    },
   },
 };
 

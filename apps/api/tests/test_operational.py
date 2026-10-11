@@ -1,10 +1,16 @@
-"""Read-only operational inspection: trace, evaluations, proposals.
+"""Operational inspection + run triggers: trace, evaluations,
+proposals, decide, and the five loop-stage triggers.
 
 Issue #61: the operational surface exposes the CLI's read views over the
 shared ``.ontology/`` store. Payloads match the CLI ``--json`` output for
 the same queries on the job-invoicing walkthrough state; reads never
 create ``.ontology/`` or ``canon.db``; core diagnostics pass through
 unchanged while transport failures stay ``{error}``.
+
+Issue #83–#88 / ADR 0004: the console may also trigger the five loop
+stages — ingest, project, diagnose, evaluate, execute. Each trigger
+returns the CLI's ``--json`` payload plus ``api_version`` and writes
+through the same core operations on the same ``canon.db``.
 """
 
 from __future__ import annotations
@@ -902,12 +908,12 @@ class TestPathGuards:
 
 
 class TestDecide:
-    """Issue #63 / ADR 0003: the operational surface's single write —
+    """Issue #63 / ADR 0003: the operational surface's human write —
     a human approve/reject on a persisted proposal, recorded through
     the shared core's ``decide`` on the same ``canon.db`` the CLI uses.
     A decision made over HTTP is honored by ``ontology execute``
-    exactly like a CLI decision; the API never gains an execute or
-    run-trigger route."""
+    exactly like a CLI decision; execution itself is triggered through
+    ``/workspaces/execute`` under ADR 0004 (see ``TestRunTriggers``)."""
 
     ROUTE = "/api/v1/workspaces/proposals/decide"
 
@@ -930,22 +936,21 @@ class TestDecide:
         assert operations["decide"] == (
             "POST /api/v1/workspaces/proposals/decide"
         )
-        # Still no run triggers or action authority anywhere.
-        for op in (
-            "execute", "diagnose", "project", "ingest", "evaluate",
-            "approve",
-        ):
-            assert op not in operations
 
-    def test_no_execute_route(self, roots, proposed) -> None:
-        response = make_client(roots).post(
-            "/api/v1/workspaces/execute",
-            json={
-                "path": str(proposed.workspace),
-                "proposal_id": proposed.proposal_id,
-            },
+    def test_execute_refuses_undecided(self, roots, proposed) -> None:
+        """ADR 0004: the execute route exists — approval is a domain
+        gate, not a missing route."""
+        body = post(
+            make_client(roots),
+            "execute",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
         )
-        assert response.status_code == 404
+        assert body["ok"] is False
+        assert any(
+            d["code"] == "DECISION.NOT_APPROVED"
+            for d in body["diagnostics"]
+        )
 
     def test_approve_is_recorded_and_visible(
         self, proposed, roots
@@ -1599,3 +1604,706 @@ class TestTicketSlaOperational:
             proposal_id=ticket_walked.proposal_id,
         )
         assert detail == {"api_version": "v1", **expected}
+
+
+class TestRunTriggers:
+    """Issue #83–#88 / ADR 0004: one trigger route per loop stage,
+    each returning the CLI ``--json`` payload verbatim plus
+    ``api_version``. Domain outcomes stay ``ok``/``diagnostics``
+    payloads; containment, runtime escape, and lock contention behave
+    exactly like the ``decide`` write."""
+
+    # ------------------------------------------------ contract
+
+    def test_contract_lists_run_triggers(self, roots) -> None:
+        contract = make_client(roots).get("/api/v1/contract").json()
+        operations = contract["operations"]
+        for op in ("ingest", "project", "diagnose", "evaluate", "execute"):
+            assert operations[op] == (
+                f"POST /api/v1/workspaces/{op}"
+            )
+        diagnosis = contract["contract"]["diagnosis"]
+        assert diagnosis["providers"] == ["openrouter", "stub"]
+        assert diagnosis["default_model"]
+
+    # ------------------------------------------------ ingest
+
+    def test_ingest_same_bytes_as_cli(
+        self, roots, workspace, capsys
+    ) -> None:
+        """A pasted snapshot ingests exactly like the CLI ingest of the
+        same file: identical content digest, canonical outcome, and
+        evidence shape — the staging name never leaks into the store."""
+        text = (DEMO_DATA / "jobs-baseline.csv").read_text()
+        client = make_client(roots)
+        body = post(
+            client,
+            "ingest",
+            path=str(workspace),
+            snapshot={
+                "text": text,
+                "name": "jobs-baseline.csv",
+                "source": "jobs",
+            },
+        )
+        assert body["ok"] is True
+        assert body["source"] == "jobs"
+        assert body["accepted"] > 0 and body["rejected"] == 0
+        assert body["snapshot"] == "jobs-baseline.csv"
+        assert body["evidence"]["snapshot"] and body["evidence"][
+            "observations"
+        ]
+        # Evidence lands under this workspace's runtime, written by
+        # content digest — never under a temp staging dir.
+        assert str(workspace / ".ontology") in body["evidence"][
+            "snapshot"
+        ]
+        assert "ontology-api-ingest-" not in body["evidence"]["snapshot"]
+
+        # CLI ingest of the same bytes into a sibling workspace reaches
+        # the same canonical state.
+        other = apisupport.copy_example(roots, name="workspace-cli")
+        cli_body = cli_json(
+            capsys,
+            "ingest",
+            str(other),
+            str(DEMO_DATA / "jobs-baseline.csv"),
+            "--source",
+            "jobs",
+            "--json",
+        )
+        assert body["content_digest"] == cli_body["content_digest"]
+        assert body["mapping_digest"] == cli_body["mapping_digest"]
+        assert body["accepted"] == cli_body["accepted"]
+        assert body["canonical"] == cli_body["canonical"]
+
+        api_trace = post(client, "trace", path=str(workspace))
+        cli_trace = cli_json(capsys, "trace", str(other), "--json")
+        assert api_trace["canonical"] == cli_trace["canonical"]
+
+    def test_ingest_reobserve_appends_nothing(
+        self, roots, workspace
+    ) -> None:
+        text = (DEMO_DATA / "jobs-baseline.csv").read_text()
+        client = make_client(roots)
+        first = post(
+            client, "ingest", path=str(workspace),
+            snapshot={"text": text, "source": "jobs"},
+        )
+        second = post(
+            client, "ingest", path=str(workspace),
+            snapshot={"text": text, "source": "jobs"},
+        )
+        assert second["content_digest"] == first["content_digest"]
+        assert second["ingest_id"] != first["ingest_id"]
+        assert second["canonical"]["events_appended"] == 0
+        assert second["canonical"]["events_reobserved"] == (
+            first["canonical"]["events_appended"]
+        )
+
+    def test_ingest_row_rejection_is_a_domain_outcome(
+        self, roots, workspace
+    ) -> None:
+        """A bad row is a rejected observation, not a transport error —
+        the response stays 200 with the row-level diagnostics in the
+        observations evidence and the run-level codes on the payload."""
+        text = (
+            "id,status,assignee,completed_at,invoiced_at\n"
+            "X01,completed,taro,2026-10-01,2026-10-05\n"
+            ",completed,hanako,2026-10-02,2026-10-05\n"
+        )
+        body = post(
+            make_client(roots),
+            "ingest",
+            path=str(workspace),
+            snapshot={
+                "text": text,
+                "name": "../rows.csv",
+                "source": "jobs",
+            },
+        )
+        assert body["ok"] is False
+        assert body["accepted"] == 1 and body["rejected"] == 1
+        # The client label is sanitized to a basename before staging.
+        assert body["snapshot"] == "rows.csv"
+        # The row rejection is auditable in the trace journal.
+        journal = workspace / ".ontology" / "trace.jsonl"
+        events = [
+            json.loads(line)
+            for line in journal.read_text().splitlines()
+        ]
+        rejected = next(
+            e for e in events if e["kind"] == "observation.rejected"
+        )
+        assert "INGEST.MISSING_ID" in rejected["data"]["codes"]
+
+    def test_ingest_unknown_source(self, roots, workspace) -> None:
+        body = post(
+            make_client(roots),
+            "ingest",
+            path=str(workspace),
+            snapshot={"text": "x\n", "source": "nope"},
+        )
+        assert body["ok"] is False
+        assert any(
+            d["code"].startswith("INGEST.") for d in body["diagnostics"]
+        )
+
+    def test_ingest_snapshot_text_required(self, roots, workspace) -> None:
+        for payload in (
+            {"path": str(workspace)},
+            {"path": str(workspace), "snapshot": {}},
+            {"path": str(workspace), "snapshot": {"text": 5}},
+        ):
+            response = make_client(roots).post(
+                "/api/v1/workspaces/ingest", json=payload
+            )
+            assert response.status_code == 422, payload
+            assert (
+                response.json()["error"]["code"]
+                == "API.MALFORMED_REQUEST"
+            )
+
+    # ------------------------------------------------ project
+
+    def test_project_same_candidates_as_cli(
+        self, roots, workspace, capsys
+    ) -> None:
+        for name in ("jobs-baseline", "jobs-current"):
+            cli(
+                capsys, "ingest", str(workspace),
+                str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+            )
+        body = post(
+            make_client(roots),
+            "project",
+            path=str(workspace),
+            as_of="2026-10-21T00:00:00Z",
+        )
+        assert body["ok"] is True
+        assert body["run_id"]
+        assert body["recorded"] is True
+        assert len(body["candidates"]) >= 1
+
+        other = apisupport.copy_example(roots, name="workspace-cli")
+        for name in ("jobs-baseline", "jobs-current"):
+            cli(
+                capsys, "ingest", str(other),
+                str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+            )
+        expected = cli_json(
+            capsys,
+            "project",
+            str(other),
+            "--as-of",
+            "2026-10-21T00:00:00Z",
+            "--json",
+        )
+        for key in (
+            "projection",
+            "as_of",
+            "definition_digest",
+            "inputs",
+            "recorded",
+        ):
+            assert body[key] == expected[key], key
+        # Candidates compare by their candidate content — the evidence
+        # ids embedded in each candidate are per-ingest run ids and
+        # differ across workspaces even for identical bytes.
+        def normalize(candidates: list[dict]) -> list[dict]:
+            out = []
+            for candidate in candidates:
+                candidate = dict(candidate)
+                candidate["evidence"] = {
+                    "fact_key": candidate["evidence"]["fact_key"]
+                }
+                out.append(candidate)
+            return out
+
+        assert normalize(body["candidates"]) == normalize(
+            expected["candidates"]
+        )
+
+    def test_project_twice_freezes_two_runs(
+        self, walked, roots
+    ) -> None:
+        client = make_client(roots)
+        first = post(
+            client, "project", path=str(walked.workspace),
+            as_of="2026-10-21T00:00:00Z",
+        )
+        second = post(
+            client, "project", path=str(walked.workspace),
+            as_of="2026-10-21T00:00:00Z",
+        )
+        assert first["run_id"] != second["run_id"]
+        assert first["candidates"] == second["candidates"]
+
+    def test_project_requires_as_of(self, roots, workspace) -> None:
+        body = post(
+            make_client(roots), "project", path=str(workspace)
+        )
+        assert body["ok"] is False
+        assert body["diagnostics"][0]["code"] == (
+            "PROJECTION.AS_OF_REQUIRED"
+        )
+
+    def test_project_rejects_naive_as_of(
+        self, roots, workspace
+    ) -> None:
+        body = post(
+            make_client(roots),
+            "project",
+            path=str(workspace),
+            as_of="2026-10-21T00:00:00",
+        )
+        assert body["ok"] is False
+        assert body["diagnostics"][0]["code"] == (
+            "PROJECTION.INVALID_AS_OF"
+        )
+
+    # ------------------------------------------------ diagnose
+
+    def test_diagnose_stub_same_run_as_cli(
+        self, roots, workspace, capsys
+    ) -> None:
+        for name in ("jobs-baseline", "jobs-current"):
+            cli(
+                capsys, "ingest", str(workspace),
+                str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+            )
+        body = post(
+            make_client(roots),
+            "diagnose",
+            path=str(workspace),
+            as_of="2026-10-21T00:00:00Z",
+            provider="stub",
+        )
+        assert body["ok"] is True
+        assert body["provider"] == "stub"
+        assert body["status"] == "ok"
+        assert body["candidate_count"] >= 1
+        assert len(body["proposals"]) >= 1
+        assert body["recorded"] is True
+
+        other = apisupport.copy_example(roots, name="workspace-cli")
+        for name in ("jobs-baseline", "jobs-current"):
+            cli(
+                capsys, "ingest", str(other),
+                str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+            )
+        expected = cli_json(
+            capsys,
+            "diagnose",
+            str(other),
+            "--as-of",
+            "2026-10-21T00:00:00Z",
+            "--provider",
+            "stub",
+            "--json",
+        )
+        for key in (
+            "provider",
+            "model",
+            "status",
+            "candidate_count",
+            "proposals",
+            "rejected",
+            "recorded",
+        ):
+            assert body[key] == expected[key], key
+
+    def test_diagnose_against_projection_run(
+        self, roots, workspace, capsys
+    ) -> None:
+        for name in ("jobs-baseline", "jobs-current"):
+            cli(
+                capsys, "ingest", str(workspace),
+                str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+            )
+        client = make_client(roots)
+        run = post(
+            client,
+            "project",
+            path=str(workspace),
+            as_of="2026-10-21T00:00:00Z",
+        )
+        body = post(
+            client,
+            "diagnose",
+            path=str(workspace),
+            run_id=run["run_id"],
+            provider="stub",
+        )
+        assert body["ok"] is True
+        assert body["projection_run_id"] == run["run_id"]
+
+    def test_diagnose_source_validation(
+        self, roots, workspace
+    ) -> None:
+        client = make_client(roots)
+        conflict = post(
+            client,
+            "diagnose",
+            path=str(workspace),
+            run_id="prj-x",
+            as_of="2026-10-21T00:00:00Z",
+            provider="stub",
+        )
+        assert conflict["diagnostics"][0]["code"] == (
+            "DIAGNOSIS.CONFLICTING_ARGS"
+        )
+        none = post(
+            client, "diagnose", path=str(workspace), provider="stub"
+        )
+        assert none["diagnostics"][0]["code"] == "DIAGNOSIS.NO_INPUT"
+        naive = post(
+            client,
+            "diagnose",
+            path=str(workspace),
+            as_of="2026-10-21",
+            provider="stub",
+        )
+        assert naive["diagnostics"][0]["code"] == (
+            "DIAGNOSIS.INVALID_AS_OF"
+        )
+
+    def test_diagnose_unknown_provider(
+        self, roots, workspace
+    ) -> None:
+        body = post(
+            make_client(roots),
+            "diagnose",
+            path=str(workspace),
+            as_of="2026-10-21T00:00:00Z",
+            provider="nope",
+        )
+        assert body["ok"] is False
+        assert body["diagnostics"][0]["code"] == (
+            "DIAGNOSIS.PROVIDER_ERROR"
+        )
+
+    def test_diagnose_openrouter_without_key(
+        self, roots, workspace, monkeypatch, capsys
+    ) -> None:
+        """The credential error is a domain diagnostic; the response
+        never carries the key material."""
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        for name in ("jobs-baseline", "jobs-current"):
+            cli(
+                capsys, "ingest", str(workspace),
+                str(DEMO_DATA / f"{name}.csv"), "--source", "jobs",
+            )
+        body = post(
+            make_client(roots),
+            "diagnose",
+            path=str(workspace),
+            as_of="2026-10-21T00:00:00Z",
+        )
+        assert body["ok"] is False
+        assert body["diagnostics"][0]["code"] == (
+            "DIAGNOSIS.PROVIDER_ERROR"
+        )
+        # The diagnostic is the CLI's fixed credential message — it
+        # names the env var but never carries secret material.
+        assert body["diagnostics"][0]["message"] == (
+            "OPENROUTER_API_KEY is not set; "
+            "see docs/diagnosis.md for credential setup"
+        )
+
+    # ------------------------------------------------ evaluate
+
+    def test_evaluate_same_report_as_cli(
+        self, walked, roots, capsys
+    ) -> None:
+        client = make_client(roots)
+        body = post(
+            client,
+            "evaluate",
+            path=str(walked.workspace),
+            boundary="2026-10-15T00:00:00Z",
+            as_of="2026-10-26T00:00:00Z",
+        )
+        assert body["ok"] is True
+        assert body["recorded"] is True
+        assert body["run_id"]
+        report = body["report"]
+        assert report["cohorts"]["baseline"]["aggregate"] is not None
+
+        # The frozen run is the same artifact the CLI reports.
+        expected = cli_json(
+            capsys,
+            "evaluate",
+            str(walked.workspace),
+            "--run",
+            body["run_id"],
+            "--json",
+        )
+        assert body["report"] == expected["run"]["report"]
+        assert body["run_id"] == expected["run"]["run_id"]
+
+    def test_evaluate_requires_args(self, roots, workspace) -> None:
+        body = post(
+            make_client(roots), "evaluate", path=str(workspace)
+        )
+        assert body["diagnostics"][0]["code"] == (
+            "EVALUATION.REQUIRED_ARGS"
+        )
+
+    def test_evaluate_rejects_naive_time(
+        self, roots, workspace
+    ) -> None:
+        body = post(
+            make_client(roots),
+            "evaluate",
+            path=str(workspace),
+            boundary="2026-10-15T00:00:00Z",
+            as_of="2026-10-26",
+        )
+        assert body["diagnostics"][0]["code"] == (
+            "EVALUATION.INVALID_TIME"
+        )
+
+    # ------------------------------------------------ execute
+
+    def _approve(self, client, workspace: Path, proposal_id: str) -> None:
+        post(
+            client,
+            "proposals/decide",
+            path=str(workspace),
+            proposal_id=proposal_id,
+            decision="approved",
+            reviewer="fde-sato",
+        )
+
+    def _reminder_rows(self, workspace: Path) -> list[str]:
+        csv_path = workspace / ".ontology" / "reminders.csv"
+        if not csv_path.exists():
+            return []
+        return [
+            line for line in csv_path.read_text().splitlines() if line
+        ]
+
+    def test_execute_unknown_proposal(self, roots, proposed) -> None:
+        body = post(
+            make_client(roots),
+            "execute",
+            path=str(proposed.workspace),
+            proposal_id="dgx-x-p9",
+        )
+        assert body["ok"] is False
+        assert any(
+            d["code"] == "EXECUTION.UNKNOWN_PROPOSAL"
+            for d in body["diagnostics"]
+        )
+
+    def test_execute_rejected_proposal_refused(
+        self, roots, proposed
+    ) -> None:
+        client = make_client(roots)
+        post(
+            client,
+            "proposals/decide",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+            decision="rejected",
+            reviewer="fde-hana",
+        )
+        body = post(
+            client,
+            "execute",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )
+        assert body["ok"] is False
+        assert any(
+            d["code"] == "DECISION.NOT_APPROVED"
+            for d in body["diagnostics"]
+        )
+        assert self._reminder_rows(proposed.workspace) == []
+
+    def test_execute_approved_and_replayed(
+        self, roots, proposed, capsys
+    ) -> None:
+        """An API-approved proposal executes through the API exactly as
+        the CLI would: one reminder row, a receipt, and a replayed
+        second call that appends nothing."""
+        client = make_client(roots)
+        self._approve(
+            client, proposed.workspace, proposed.proposal_id
+        )
+        body = post(
+            client,
+            "execute",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )
+        assert body["ok"] is True
+        assert body["status"] == "succeeded"
+        assert body["replayed"] is False
+        assert body["execution_id"]
+        assert body["receipt"]
+        rows = self._reminder_rows(proposed.workspace)
+        assert len(rows) == 2  # header + one reminder
+
+        again = post(
+            client,
+            "execute",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )
+        assert again["ok"] is True
+        assert again["replayed"] is True
+        assert again["execution_id"] == body["execution_id"]
+        assert self._reminder_rows(proposed.workspace) == rows
+
+        # The CLI sees the API execution as already executed — the
+        # execution is indistinguishable from a CLI one.
+        cli_body = cli_payload(
+            capsys,
+            "execute",
+            str(proposed.workspace),
+            proposed.proposal_id,
+            "--json",
+        )
+        assert cli_body["replayed"] is True
+        assert cli_body["execution_id"] == body["execution_id"]
+
+        # The run identity resolves in the trace view.
+        traced = post(
+            client,
+            "trace/run",
+            path=str(proposed.workspace),
+            run_id=body["execution_id"],
+        )
+        assert traced["trace"]["id"] == body["execution_id"]
+
+    def test_cli_approved_proposal_executes_via_api(
+        self, roots, proposed, capsys
+    ) -> None:
+        """Cross-surface: a CLI approval unlocks the API trigger."""
+        cli(
+            capsys,
+            "decide",
+            str(proposed.workspace),
+            proposed.proposal_id,
+            "--approve",
+            "--reviewer",
+            "fde-sato",
+        )
+        body = post(
+            make_client(roots),
+            "execute",
+            path=str(proposed.workspace),
+            proposal_id=proposed.proposal_id,
+        )
+        assert body["ok"] is True
+        assert body["status"] == "succeeded"
+
+    # ------------------------------------------------ write guards
+
+    def test_write_contention_is_503(
+        self, roots, proposed, monkeypatch
+    ) -> None:
+        """Every write trigger maps a lost busy wait to 503
+        STORAGE.WRITE_BUSY — here through the execute route."""
+        import ontology_api.service as service_module
+        from ontology_core import SqliteCanonicalStore
+
+        class FastBusyStore(SqliteCanonicalStore):
+            def __init__(self, runtime, **kwargs):
+                kwargs.setdefault("busy_timeout_ms", 50)
+                super().__init__(runtime, **kwargs)
+
+        monkeypatch.setattr(
+            service_module, "SqliteCanonicalStore", FastBusyStore
+        )
+
+        client = make_client(roots)
+        self._approve(
+            client, proposed.workspace, proposed.proposal_id
+        )
+        db = proposed.workspace / ".ontology" / "canon.db"
+        holder = sqlite3.connect(db)
+        holder.execute("BEGIN IMMEDIATE")
+        try:
+            response = client.post(
+                "/api/v1/workspaces/execute",
+                json={
+                    "path": str(proposed.workspace),
+                    "proposal_id": proposed.proposal_id,
+                },
+            )
+            assert response.status_code == 503
+            assert response.json()["error"]["code"] == (
+                "STORAGE.WRITE_BUSY"
+            )
+        finally:
+            holder.rollback()
+            holder.close()
+
+    def test_triggers_refuse_missing_workspace(self, roots) -> None:
+        for route, body in (
+            (
+                "ingest",
+                {"snapshot": {"text": "x", "source": "jobs"}},
+            ),
+            ("project", {"as_of": "2026-10-21T00:00:00Z"}),
+            ("diagnose", {"as_of": "2026-10-21T00:00:00Z"}),
+            (
+                "evaluate",
+                {
+                    "boundary": "2026-10-15T00:00:00Z",
+                    "as_of": "2026-10-26T00:00:00Z",
+                },
+            ),
+            ("execute", {"proposal_id": "p"}),
+        ):
+            response = make_client(roots).post(
+                f"/api/v1/workspaces/{route}",
+                json={"path": str(roots / "nope"), **body},
+            )
+            assert response.status_code == 404, route
+            assert response.json()["error"]["code"] == (
+                "API.WORKSPACE_NOT_FOUND"
+            )
+
+    def test_triggers_refuse_outside_roots(
+        self, roots, tmp_path
+    ) -> None:
+        outside = apisupport.copy_example(tmp_path, "outside")
+        response = make_client(roots).post(
+            "/api/v1/workspaces/execute",
+            json={"path": str(outside), "proposal_id": "p"},
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == (
+            "API.PATH_OUTSIDE_ROOTS"
+        )
+
+    def test_trigger_runtime_symlink_escape(
+        self, roots, proposed, tmp_path
+    ) -> None:
+        """Write triggers refuse a planted ``.ontology`` symlink before
+        any write — the same guard ``decide`` applies."""
+        runtime = proposed.workspace / ".ontology"
+        external = tmp_path / "outside-roots" / ".ontology"
+        external.parent.mkdir(parents=True)
+        runtime.rename(external)
+        try:
+            runtime.symlink_to(external)
+        except OSError:
+            pytest.skip("symlinks not supported on this platform")
+
+        response = make_client(roots).post(
+            "/api/v1/workspaces/execute",
+            json={
+                "path": str(proposed.workspace),
+                "proposal_id": proposed.proposal_id,
+            },
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == (
+            "API.RUNTIME_OUTSIDE_ROOTS"
+        )
+        assert not (external / "reminders.csv").exists()

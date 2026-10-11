@@ -3,11 +3,12 @@
  *
  * Lists every persisted proposal with its exact payload, digest,
  * grounding evidence, and AI rationale — labeled as hypothesis, never
- * fact — and records the human approve/reject through the API's single
- * write (`decide`, ADR 0003). The decision binds the shown payload
- * digest, so what the reviewer inspected is exactly what
- * `ontology execute` may later run. Execution stays CLI-only: this page
- * renders recorded attempts as status, it cannot start one.
+ * fact — and records the human approve/reject through `decide`
+ * (ADR 0003). The decision binds the shown payload digest, so what the
+ * reviewer inspected is exactly what execution may later run. An
+ * approved proposal executes from its card under an armed
+ * confirmation (ADR 0004) — the same core gate `ontology execute`
+ * enforces.
  */
 
 import { useEffect, useId, useRef, useState } from "react";
@@ -84,7 +85,9 @@ export default function ProposalsPage() {
         Each decision binds the exact payload digest shown and is recorded
         append-only under the reviewer identity below — latest decision
         wins. Rationale text is AI output: a hypothesis, not a verified
-        fact. Execution runs through <code>ontology execute</code> only.
+        fact. An approved proposal executes from its card after an
+        explicit confirm — the same core gate as{" "}
+        <code>ontology execute</code>.
       </p>
 
       <div className="form-field reviewer-field">

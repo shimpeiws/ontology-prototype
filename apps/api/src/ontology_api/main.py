@@ -25,16 +25,26 @@ from .schemas import (
     DecideRequest,
     DecisionResponse,
     DiagnosticOut,
+    DiagnoseRunRequest,
+    DiagnoseRunResponse,
     DraftPreviewRequest,
     DraftPreviewResponse,
     DraftValidateRequest,
     DraftValidateResponse,
     ErrorResponse,
+    EvaluateRunTriggerRequest,
+    EvaluateRunTriggerResponse,
     EvaluationRunRequest,
     EvaluationRunResponse,
     EvaluationRunsResponse,
+    ExecuteRequest,
+    ExecuteResponse,
+    IngestRequest,
+    IngestResponse,
     OpenRequest,
     OpenResponse,
+    ProjectRunRequest,
+    ProjectRunResponse,
     ProposalRequest,
     ProposalResponse,
     ProposalsResponse,
@@ -410,11 +420,10 @@ def create_app(
 
     # ------------------------------------------------- decision write
     #
-    # The one write the operational surface allows (ADR 0003): a human
-    # approve/reject through the core's `decide`. Domain outcomes stay
+    # The human approve/reject write (ADR 0003): a decision recorded
+    # through the core's `decide`. Domain outcomes stay
     # `ok`/`diagnostics` payloads; lock contention is transport-level —
-    # 503 STORAGE.WRITE_BUSY. Execution, run triggers, and write-back
-    # remain CLI-only and are never reachable here.
+    # 503 STORAGE.WRITE_BUSY.
 
     @app.post(
         f"{API_PREFIX}/workspaces/proposals/decide",
@@ -441,6 +450,138 @@ def create_app(
                 reviewer=payload.reviewer,
                 reason=payload.reason,
             ),
+        }
+
+    # --------------------------------------------------- run triggers
+    #
+    # ADR 0004: one trigger per loop stage, each returning the CLI's
+    # `--json` payload verbatim plus `api_version`. The same failure
+    # split applies as everywhere on this surface — domain outcomes are
+    # `ok`/`diagnostics` payloads, lock contention is 503
+    # STORAGE.WRITE_BUSY.
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/ingest",
+        response_model=IngestResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def ingest_snapshot_endpoint(
+        payload: IngestRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.ingest(
+                payload.path,
+                payload.snapshot.text,
+                source=payload.snapshot.source,
+                name=payload.snapshot.name,
+            ),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/project",
+        response_model=ProjectRunResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def project_run(
+        payload: ProjectRunRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.project(
+                payload.path,
+                payload.as_of,
+                projection=payload.projection,
+            ),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/diagnose",
+        response_model=DiagnoseRunResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def diagnose_run(
+        payload: DiagnoseRunRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.diagnose(
+                payload.path,
+                run_id=payload.run_id,
+                as_of=payload.as_of,
+                provider=payload.provider,
+                model=payload.model,
+            ),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/evaluate",
+        response_model=EvaluateRunTriggerResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def evaluate_run(
+        payload: EvaluateRunTriggerRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.evaluate(
+                payload.path,
+                boundary=payload.boundary,
+                as_of=payload.as_of,
+            ),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/execute",
+        response_model=ExecuteResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def execute_proposal(
+        payload: ExecuteRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.execute(payload.path, payload.proposal_id),
         }
 
     return app

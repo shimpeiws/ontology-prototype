@@ -188,4 +188,149 @@ describe("api client", () => {
     expect((err as ApiError).status).toBe(404);
     expect((err as ApiError).retryable).toBe(false);
   });
+
+  /* Loop-stage triggers (ADR 0004): each call posts the CLI-shaped
+   * request to its own route; a 200 `ok:false` body is a domain
+   * outcome, not an exception. */
+
+  it("posts the snapshot to the ingest trigger", async () => {
+    const fetchStub = vi.fn(
+      stubFetchJson(200, {
+        api_version: "v1",
+        workspace: "job-invoicing",
+        snapshot: "jobs.csv",
+        ok: true,
+        ingest_id: "ing-x",
+        diagnostics: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    const result = await api.ingest("job-invoicing", {
+      text: "id,status\n101,done",
+      name: "jobs.csv",
+      source: "jobs",
+    });
+    expect(result.ok).toBe(true);
+    const [url, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/workspaces/ingest");
+    expect(JSON.parse(init.body as string)).toEqual({
+      path: "job-invoicing",
+      snapshot: {
+        text: "id,status\n101,done",
+        name: "jobs.csv",
+        source: "jobs",
+      },
+    });
+  });
+
+  it("posts the projection trigger with as-of and projection", async () => {
+    const fetchStub = vi.fn(
+      stubFetchJson(200, {
+        api_version: "v1",
+        workspace: "job-invoicing",
+        ok: true,
+        run_id: "prj-x",
+        candidates: [],
+        diagnostics: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await api.project("job-invoicing", "2026-10-21T00:00:00Z", "MyProj");
+    const [url, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/workspaces/project");
+    expect(JSON.parse(init.body as string)).toEqual({
+      path: "job-invoicing",
+      as_of: "2026-10-21T00:00:00Z",
+      projection: "MyProj",
+    });
+  });
+
+  it("posts the diagnosis trigger with run_id source and provider", async () => {
+    const fetchStub = vi.fn(
+      stubFetchJson(200, {
+        api_version: "v1",
+        workspace: "job-invoicing",
+        ok: true,
+        run_id: "dgx-x",
+        diagnostics: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await api.diagnose(
+      "job-invoicing",
+      { runId: "prj-x" },
+      { provider: "stub", model: "m1" },
+    );
+    const [url, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/workspaces/diagnose");
+    expect(JSON.parse(init.body as string)).toEqual({
+      path: "job-invoicing",
+      run_id: "prj-x",
+      as_of: null,
+      provider: "stub",
+      model: "m1",
+    });
+  });
+
+  it("posts the evaluation trigger with boundary and as-of", async () => {
+    const fetchStub = vi.fn(
+      stubFetchJson(200, {
+        api_version: "v1",
+        workspace: "job-invoicing",
+        ok: true,
+        run_id: "evl-x",
+        diagnostics: [],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await api.evaluate(
+      "job-invoicing",
+      "2026-10-15T00:00:00Z",
+      "2026-10-26T00:00:00Z",
+    );
+    const [url, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/workspaces/evaluate");
+    expect(JSON.parse(init.body as string)).toEqual({
+      path: "job-invoicing",
+      boundary: "2026-10-15T00:00:00Z",
+      as_of: "2026-10-26T00:00:00Z",
+    });
+  });
+
+  it("posts the proposal id to the execute trigger", async () => {
+    const fetchStub = vi.fn(
+      stubFetchJson(200, {
+        api_version: "v1",
+        workspace: "job-invoicing",
+        ok: false,
+        diagnostics: [
+          {
+            severity: "error",
+            code: "DECISION.NOT_APPROVED",
+            message: "proposal is not approved",
+            file: null,
+            path: null,
+            line: null,
+            hint: null,
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    // A refusal is a 200 domain payload, not an exception.
+    const result = await api.execute("job-invoicing", "dgx-x-p0");
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics?.[0].code).toBe("DECISION.NOT_APPROVED");
+    const [url, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/v1/workspaces/execute");
+    expect(JSON.parse(init.body as string)).toEqual({
+      path: "job-invoicing",
+      proposal_id: "dgx-x-p0",
+    });
+  });
 });
