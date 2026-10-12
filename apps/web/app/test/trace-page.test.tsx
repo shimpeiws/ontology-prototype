@@ -6,6 +6,7 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
@@ -52,11 +53,16 @@ function cleanState(): WorkspaceState {
   });
 }
 
-function renderPage(state: WorkspaceState = cleanState()) {
+function renderPage(
+  state: WorkspaceState = cleanState(),
+  route = "/workspace/trace",
+) {
   render(
-    <WorkspaceProvider initial={state}>
-      <TracePage />
-    </WorkspaceProvider>,
+    <MemoryRouter initialEntries={[route]}>
+      <WorkspaceProvider initial={state}>
+        <TracePage />
+      </WorkspaceProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -315,5 +321,39 @@ describe("trace page subject lookup", () => {
 
     await user.type(screen.getByLabelText("Subject"), "2");
     await screen.findByText("stale");
+  });
+});
+
+describe("trace page deep links", () => {
+  it("?subject=Job/101 prefills and runs the subject lookup once", async () => {
+    // #97: references on the proposal card land on this route; the
+    // query runs the matching lookup, not just a prefill.
+    traceOverview.mockResolvedValue(SYNTHETIC_TRACE_OVERVIEW);
+    traceSubject.mockResolvedValue(SYNTHETIC_TRACE_SUBJECT_RESPONSE);
+    renderPage(cleanState(), "/workspace/trace?subject=Job%2F101");
+
+    await waitFor(() =>
+      expect(traceSubject).toHaveBeenCalledWith("job-invoicing", "Job/101"),
+    );
+    await waitFor(() =>
+      expect(document.querySelector(".trace-subject")).not.toBeNull(),
+    );
+    expect(screen.getByLabelText("Subject")).toHaveValue("Job/101");
+    expect(traceSubject).toHaveBeenCalledTimes(1);
+    expect(traceRun).not.toHaveBeenCalled();
+  });
+
+  it("?artifact=<id> prefills and runs the artifact lookup once", async () => {
+    traceOverview.mockResolvedValue(SYNTHETIC_TRACE_OVERVIEW);
+    traceRun.mockResolvedValue(SYNTHETIC_TRACE_RUN_RESPONSE);
+    renderPage(cleanState(), "/workspace/trace?artifact=dgx-x");
+
+    await waitFor(() =>
+      expect(traceRun).toHaveBeenCalledWith("job-invoicing", "dgx-x"),
+    );
+    await screen.findByText("diagnosis_run");
+    expect(screen.getByLabelText("Artifact id")).toHaveValue("dgx-x");
+    expect(traceRun).toHaveBeenCalledTimes(1);
+    expect(traceSubject).not.toHaveBeenCalled();
   });
 });

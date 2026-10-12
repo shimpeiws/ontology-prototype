@@ -454,6 +454,51 @@ export interface ProposalResponse extends OperationalResponse {
 }
 
 /**
+ * One hypothesis inside the diagnosis deliverables — model output,
+ * never an observed fact. `unverified_evidence` holds evidence ids the
+ * core could not match to a recorded artifact.
+ */
+export interface DiagnosisHypothesis {
+  statement?: string;
+  evidence?: string[];
+  unverified_evidence?: string[];
+}
+
+/**
+ * The diagnosis output contract (agent.task.deliverables): explanation,
+ * hypotheses, and follow-up questions — plus any extra keys a workspace
+ * contract adds, passed through untyped.
+ */
+export interface DiagnosisDeliverables {
+  explanation?: string;
+  hypotheses?: DiagnosisHypothesis[];
+  follow_up_questions?: string[];
+  [key: string]: unknown;
+}
+
+/** A persisted diagnosis run (`diagnosis_runs` store row). */
+export interface DiagnosisRunRecord {
+  run_id: string;
+  projection_run_id: string | null;
+  provider: string;
+  model: string;
+  status: string;
+  provider_called?: boolean;
+  prompt_version?: string;
+  input_digest?: string;
+  deliverables?: DiagnosisDeliverables;
+  proposals?: Record<string, unknown>[];
+  rejected?: Record<string, unknown>[];
+  diagnostics?: Diagnostic[];
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+export interface DiagnosisRunShowResponse extends OperationalResponse {
+  run?: DiagnosisRunRecord;
+}
+
+/**
  * The `decide --json` payload: `ok:false` with `diagnostics` is a domain
  * failure (invalid decision, unknown proposal, no reviewer); lock
  * contention never reaches here — it arrives as 503 STORAGE.WRITE_BUSY.
@@ -531,7 +576,7 @@ export interface DiagnoseRunResponse extends OperationalResponse {
   model?: string | null;
   status?: string | null;
   candidate_count?: number;
-  deliverables?: Record<string, unknown>;
+  deliverables?: DiagnosisDeliverables;
   /** Persisted proposal payloads (core proposal dicts). */
   proposals?: Record<string, unknown>[];
   rejected?: Record<string, unknown>[];

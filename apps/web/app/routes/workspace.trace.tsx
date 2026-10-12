@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useId, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Button, Input, Tag } from "antd";
 
 import { api, ApiError } from "../lib/api";
@@ -112,6 +113,30 @@ export default function TracePage() {
       });
     }
   };
+
+  // Deep links (#97): `?subject=E/Id` and `?artifact=<id>` prefill a
+  // lookup and run it — the references on the proposal card land here.
+  // Guarded so a state update inside runLookup cannot re-fire the same
+  // query.
+  const [searchParams] = useSearchParams();
+  const deepLinkKey = useRef<string | null>(null);
+  const deepLink = `${path}|${searchParams.get("subject") ?? ""}|${searchParams.get("artifact") ?? ""}`;
+  useEffect(() => {
+    if (!path) return;
+    if (deepLinkKey.current === deepLink) return;
+    deepLinkKey.current = deepLink;
+    const subject = searchParams.get("subject");
+    const artifact = searchParams.get("artifact");
+    if (subject) {
+      setSubjectInput(subject);
+      void runLookup("subject", subject);
+    } else if (artifact) {
+      setArtifactInput(artifact);
+      void runLookup("artifact", artifact);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runLookup
+    // is a stable request against `path`, which deepLink already keys.
+  }, [deepLink]);
 
   const followSubject = (subject: string) => {
     setSubjectInput(subject);

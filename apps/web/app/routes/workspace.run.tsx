@@ -27,6 +27,7 @@ import type {
   ProposalView,
   TraceOverviewResponse,
 } from "../lib/types";
+import { DiagnosisDeliverables } from "../components/DiagnosisDeliverables";
 import { DiagnosticsList } from "../components/DiagnosticsList";
 import { ExecuteControl } from "../components/ExecuteControl";
 import { EmptyState, ErrorState, LoadingState } from "../components/states";
@@ -748,17 +749,23 @@ export default function RunPage() {
             onRetry={() => void submitDiagnose()}
           >
             {(r) => (
-              <p>
-                run <code>{r.run_id}</code>{" "}
-                <StatusBadge status={r.status ?? null} /> — {r.candidate_count}{" "}
-                candidate(s), {r.proposals?.length ?? 0} proposal(s)
-                {r.proposals?.length ? (
-                  <>
-                    {" "}
-                    — <Link to="/workspace/proposals">review them</Link>
-                  </>
-                ) : null}
-              </p>
+              <>
+                <p>
+                  run <code>{r.run_id}</code>{" "}
+                  <StatusBadge status={r.status ?? null} /> —{" "}
+                  {r.candidate_count} candidate(s),{" "}
+                  {r.proposals?.length ?? 0} proposal(s)
+                  {r.proposals?.length ? (
+                    <>
+                      {" "}
+                      — <Link to="/workspace/proposals">review them</Link>
+                    </>
+                  ) : null}
+                </p>
+                {/* #95: the recorded model output is part of the result
+                    — shown even when the run proposed nothing. */}
+                <DiagnosisDeliverables deliverables={r.deliverables} />
+              </>
             )}
           </ResultBlock>
         </li>
