@@ -186,6 +186,9 @@ class TestContractSurface:
         assert operations["proposal"] == (
             "POST /api/v1/workspaces/proposals/show"
         )
+        assert operations["diagnosis_run"] == (
+            "POST /api/v1/workspaces/diagnosis-runs/show"
+        )
 
 
 def post(client: TestClient, route: str, **body) -> dict:
@@ -306,6 +309,25 @@ class TestCliParity:
         assert body == {"api_version": "v1", **expected}
         assert body["proposal"]["decisions"]
 
+    def test_diagnosis_run(self, walked, roots, capsys) -> None:
+        # #96: the recorded run — provider, model, and deliverables —
+        # reads back exactly like ``diagnose --inspect --json``.
+        expected = cli_json(
+            capsys,
+            "diagnose", str(walked.workspace),
+            "--inspect", walked.diagnosis_run_id, "--json",
+        )
+        body = post(
+            make_client(roots),
+            "diagnosis-runs/show",
+            path=str(walked.workspace),
+            run_id=walked.diagnosis_run_id,
+        )
+        assert body == {"api_version": "v1", **expected}
+        assert body["ok"] is True
+        assert body["run"]["provider"] == "stub"
+        assert body["run"]["deliverables"]
+
     def test_evaluation_run(self, walked, roots, capsys) -> None:
         expected = cli_json(
             capsys,
@@ -390,6 +412,10 @@ class TestContractFailures:
             ("evaluations/run", {"path": path, "run_id": "evl-nope"}),
             ("proposals", {"path": path}),
             ("proposals/show", {"path": path, "proposal_id": "x-p0"}),
+            (
+                "diagnosis-runs/show",
+                {"path": path, "run_id": "dgx-nope"},
+            ),
         ):
             post(client, route, **body)
         assert fingerprint(workspace) == before
@@ -413,6 +439,10 @@ class TestContractFailures:
             (
                 "proposals/show",
                 {"path": path, "proposal_id": walked.proposal_id},
+            ),
+            (
+                "diagnosis-runs/show",
+                {"path": path, "run_id": walked.diagnosis_run_id},
             ),
         ):
             post(client, route, **body)
@@ -473,6 +503,14 @@ class TestContractFailures:
         assert proposal["ok"] is False
         assert proposal["diagnostics"][0]["code"] == (
             "DECISION.UNKNOWN_PROPOSAL"
+        )
+
+        diagnosis = post(
+            client, "diagnosis-runs/show", path=path, run_id="dgx-nope"
+        )
+        assert diagnosis["ok"] is False
+        assert diagnosis["diagnostics"][0]["code"] == (
+            "DIAGNOSIS.UNKNOWN_RUN"
         )
 
     def test_trace_invalid_subject(self, walked, roots, capsys) -> None:
@@ -852,6 +890,7 @@ class TestPathGuards:
             ("evaluations/run", {"run_id": "evl-x"}),
             ("proposals", {}),
             ("proposals/show", {"proposal_id": "x"}),
+            ("diagnosis-runs/show", {"run_id": "dgx-x"}),
         ):
             response = client.post(
                 f"/api/v1/workspaces/{route}",
@@ -896,6 +935,9 @@ class TestPathGuards:
             ("proposals/show", {"path": "x"}),
             ("proposals/show", {"path": "x", "proposal_id": ""}),
             ("proposals/show", {"path": "x", "proposal_id": "p" * 2000}),
+            ("diagnosis-runs/show", {"path": "x"}),
+            ("diagnosis-runs/show", {"path": "x", "run_id": ""}),
+            ("diagnosis-runs/show", {"path": "x", "run_id": "r" * 2000}),
         ]
         for route, body in bad:
             response = client.post(
