@@ -3,8 +3,8 @@
  * for one persisted proposal.
  *
  * The card renders the exact persisted record — action, params, payload
- * digest, grounding evidence — so the reviewer decides on the same bytes
- * the approval binds to (`payload_digest`). The proposal's `reason` is
+ * digest, grounding evidence as inspectable references — so the reviewer
+ * decides on the same bytes the approval binds to (`payload_digest`). The proposal's `reason` is
  * AI output recorded at diagnosis time: it is labeled a hypothesis and
  * never presented as fact. An approved proposal can be executed from
  * this card (ADR 0004): the armed confirm runs the same core gate the
@@ -12,7 +12,8 @@
  * in place.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { Alert, Button, Input } from "antd";
 
 import { api, ApiError } from "../lib/api";
@@ -36,6 +37,221 @@ type DecideOutcome =
     }
   | { kind: "recorded"; response: DecisionResponse };
 
+/* Evidence fields rendered under their own labeled rows — ids as
+ * traceable references, `entity_updated_at` as the candidate's as-of
+ * stamp. Everything else recorded is passed through as context. */
+const EVIDENCE_ID_KEYS = new Set([
+  "fact_key",
+  "observation_ids",
+  "ingest_ids",
+  "entity_observation_id",
+  "entity_updated_at",
+]);
+
+function asId(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+function asIdList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((v): v is string => typeof v === "string" && v !== "")
+    : [];
+}
+
+/** A non-id value still shown under its label — never dropped silently. */
+function ScalarValue({ value }: { value: unknown }) {
+  return value === null || value === undefined ? (
+    <em className="preview-null">null</em>
+  ) : (
+    <code>{String(value)}</code>
+  );
+}
+
+/**
+ * One recorded reference — a deep link into the Trace screen
+ * (`?run=<artifact id>` or `?subject=Entity/Id`). When the core's link
+ * graph reports the target unresolved it stays shown, marked and
+ * unlinked — a link into a lookup that can only say "nothing found"
+ * would pretend navigability the console knows is absent.
+ */
+function EvidenceRef({
+  id,
+  kind,
+  unresolved,
+}: {
+  id: string;
+  kind: "run" | "subject";
+  unresolved: Set<string> | null;
+}) {
+  if (unresolved?.has(id)) {
+    return (
+      <span className="link-unresolved">
+        <code className="id-chip">{id}</code>{" "}
+        <StatusBadge status="unresolved" label="unresolved" />
+      </span>
+    );
+  }
+  const param = kind === "subject" ? "subject" : "run";
+  return (
+    <Link to={`/workspace/trace?${param}=${encodeURIComponent(id)}`}>
+      <code className="id-chip">{id}</code>
+    </Link>
+  );
+}
+
+function EvidenceRefList({
+  ids,
+  kind,
+  unresolved,
+}: {
+  ids: string[];
+  kind: "run" | "subject";
+  unresolved: Set<string> | null;
+}) {
+  return (
+    <>
+      {ids.map((id, i) => (
+        <EvidenceRef
+          key={`${id}-${i}`}
+          id={id}
+          kind={kind}
+          unresolved={unresolved}
+        />
+      ))}
+    </>
+  );
+}
+
+/** `dd` content for a single-id evidence field. */
+function IdValue({
+  value,
+  unresolved,
+}: {
+  value: unknown;
+  unresolved: Set<string> | null;
+}) {
+  const id = asId(value);
+  return id !== null ? (
+    <EvidenceRef id={id} kind="run" unresolved={unresolved} />
+  ) : (
+    <ScalarValue value={value} />
+  );
+}
+
+/** `dd` content for an id-list evidence field. */
+function IdListValue({
+  value,
+  unresolved,
+}: {
+  value: unknown;
+  unresolved: Set<string> | null;
+}) {
+  if (!Array.isArray(value)) return <ScalarValue value={value} />;
+  const ids = asIdList(value);
+  return ids.length ? (
+    <EvidenceRefList ids={ids} kind="run" unresolved={unresolved} />
+  ) : (
+    <em className="preview-null">none</em>
+  );
+}
+
+/**
+ * Grounding evidence (#97): the persisted evidence record as labeled,
+ * inspectable references instead of a JSON dump. Each id deep-links to
+ * the Trace screen; which targets resolve is the core's own verdict —
+ * read from the proposal's trace anchor (`trace/run`), never guessed
+ * client-side. A missing or failed anchor lookup leaves the references
+ * rendered and navigable, just unmarked.
+ */
+function GroundingEvidence({
+  unresolved,
+  proposal,
+}: {
+  unresolved: Set<string> | null;
+  proposal: ProposalView;
+}) {
+  const evidence = proposal.evidence;
+  const context = Object.fromEntries(
+    Object.entries(evidence).filter(([key]) => !EVIDENCE_ID_KEYS.has(key)),
+  );
+  const hasRefs = Object.keys(evidence).length > 0;
+
+  return (
+    <section className="proposal-evidence" aria-label="grounding evidence">
+      <h4>
+        Grounding evidence <NatureBadge nature="observed" />
+      </h4>
+      <p className="hint">
+        Grounding recorded at diagnosis time — each id opens the matching
+        artifact or subject on the Trace screen.
+      </p>
+      {hasRefs ? (
+        <>
+          <dl className="definition-facts">
+            {"fact_key" in evidence ? (
+              <>
+                <dt>Fact</dt>
+                <dd>
+                  <IdValue
+                    value={evidence.fact_key}
+                    unresolved={unresolved}
+                  />
+                </dd>
+              </>
+            ) : null}
+            {"observation_ids" in evidence ? (
+              <>
+                <dt>Observations</dt>
+                <dd>
+                  <IdListValue
+                    value={evidence.observation_ids}
+                    unresolved={unresolved}
+                  />
+                </dd>
+              </>
+            ) : null}
+            {"ingest_ids" in evidence ? (
+              <>
+                <dt>Ingest runs</dt>
+                <dd>
+                  <IdListValue
+                    value={evidence.ingest_ids}
+                    unresolved={unresolved}
+                  />
+                </dd>
+              </>
+            ) : null}
+            {"entity_observation_id" in evidence ? (
+              <>
+                <dt>Candidate entity observation</dt>
+                <dd>
+                  <IdValue
+                    value={evidence.entity_observation_id}
+                    unresolved={unresolved}
+                  />
+                </dd>
+              </>
+            ) : null}
+            {"entity_updated_at" in evidence ? (
+              <>
+                <dt>Candidate state as of</dt>
+                <dd>
+                  <ScalarValue value={evidence.entity_updated_at} />
+                </dd>
+              </>
+            ) : null}
+          </dl>
+          {Object.keys(context).length ? (
+            <RecordDetails record={context} />
+          ) : null}
+        </>
+      ) : (
+        <EmptyState title="No grounding evidence was recorded." />
+      )}
+    </section>
+  );
+}
+
 export function ProposalReviewCard({
   path,
   proposal,
@@ -57,6 +273,34 @@ export function ProposalReviewCard({
   // Single-flight per card: a superseded submission's late response is
   // discarded — never rendered as the answer to the newer attempt.
   const seq = useRef(0);
+  // Which rendered references the core's link graph cannot resolve —
+  // null until the proposal's trace anchor answers (or fails); refs
+  // stay rendered and navigable either way.
+  const [unresolved, setUnresolved] = useState<Set<string> | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api
+      .traceRun(path, proposal.proposal_id, controller.signal)
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        const trace = response.trace;
+        if (!response.ok || !trace) return;
+        setUnresolved(
+          new Set(
+            (trace.unresolved ?? [])
+              .filter((link) => link.from === proposal.proposal_id)
+              .map((link) => link.to),
+          ),
+        );
+      })
+      .catch(() => {
+        // Resolution marking is an enhancement — without it the
+        // references stay rendered and navigable, and the Trace screen
+        // still reports an id that resolves to nothing.
+      });
+    return () => controller.abort();
+  }, [path, proposal.proposal_id]);
 
   const submit = async (decision: "approved" | "rejected") => {
     const attempt = ++seq.current;
@@ -120,9 +364,17 @@ export function ProposalReviewCard({
           <>
             <dt>Canonical target</dt>
             <dd>
-              <code>
-                {proposal.subject_entity}/{proposal.subject_id}
-              </code>
+              {proposal.subject_entity && proposal.subject_id ? (
+                <EvidenceRef
+                  id={`${proposal.subject_entity}/${proposal.subject_id}`}
+                  kind="subject"
+                  unresolved={unresolved}
+                />
+              ) : (
+                <code>
+                  {proposal.subject_entity}/{proposal.subject_id}
+                </code>
+              )}
             </dd>
           </>
         ) : null}
@@ -131,16 +383,23 @@ export function ProposalReviewCard({
             <dt>Related entities</dt>
             <dd>
               {proposal.related_entities.map((e) => (
-                <code key={`${e.entity}/${e.id}`} className="id-chip">
-                  {e.entity}/{e.id}
-                </code>
+                <EvidenceRef
+                  key={`${e.entity}/${e.id}`}
+                  id={`${e.entity}/${e.id}`}
+                  kind="subject"
+                  unresolved={unresolved}
+                />
               ))}
             </dd>
           </>
         ) : null}
         <dt>Diagnosis run</dt>
         <dd>
-          <code>{proposal.diagnosis_run_id}</code>
+          <EvidenceRef
+            id={proposal.diagnosis_run_id}
+            kind="run"
+            unresolved={unresolved}
+          />
         </dd>
         <dt>Proposed at</dt>
         <dd>
@@ -170,11 +429,9 @@ export function ProposalReviewCard({
         ) : (
           <p className="hint">No rationale was recorded.</p>
         )}
-        <details className="record-json">
-          <summary>grounding evidence</summary>
-          <pre>{JSON.stringify(proposal.evidence, null, 2)}</pre>
-        </details>
       </section>
+
+      <GroundingEvidence unresolved={unresolved} proposal={proposal} />
 
       <section className="proposal-decisions" aria-label="decision history">
         <h4>

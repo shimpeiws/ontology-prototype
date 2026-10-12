@@ -1324,7 +1324,10 @@ export const SYNTHETIC_PROPOSAL_OPEN: ProposalView = {
   related_entities: [{ entity: "Person", id: "taro" }],
   evidence: {
     fact_key: "fact-s1",
-    fact: "JobCompleted",
+    observation_ids: ["obs-0001", "obs-0002"],
+    ingest_ids: ["ing-20261005T120000000000Z-aaaa0000"],
+    entity_observation_id: "obs-0002",
+    entity_updated_at: "2026-10-05T12:00:00Z",
     elapsed_days: 4,
     threshold_days: 2,
   },
@@ -1393,6 +1396,89 @@ export const SYNTHETIC_PROPOSALS_RESPONSE: ProposalsResponse = {
   workspace: "/abs/example/job-invoicing",
   ok: true,
   proposals: [SYNTHETIC_PROPOSAL_OPEN, SYNTHETIC_PROPOSAL_EXECUTED],
+};
+
+/** The open proposal's own trace anchor (`trace/run <proposal_id>`):
+ * every reference resolves except one cited observation, `obs-0002`,
+ * which the link graph reports unresolved. */
+export const SYNTHETIC_PROPOSAL_ANCHOR: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  trace: {
+    id: "dgx-20261005T120600000000Z-cccc2222-p0",
+    kind: "proposal",
+    nature: "ai",
+    record: null,
+    links: [
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "fact-s1",
+        via: "evidence",
+        resolved: true,
+      },
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "obs-0001",
+        via: "evidence",
+        resolved: true,
+      },
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "obs-0002",
+        via: "evidence",
+        resolved: false,
+      },
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "ing-20261005T120000000000Z-aaaa0000",
+        via: "evidence",
+        resolved: true,
+      },
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "dgx-20261005T120600000000Z-cccc2222",
+        via: "from_run",
+        resolved: true,
+      },
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "Job/101",
+        via: "subject",
+        resolved: true,
+      },
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "Person/taro",
+        via: "related",
+        resolved: true,
+      },
+    ],
+    unresolved: [
+      {
+        from: "dgx-20261005T120600000000Z-cccc2222-p0",
+        to: "obs-0002",
+        via: "evidence",
+        resolved: false,
+      },
+    ],
+    journal: [],
+  },
+  diagnostics: [],
+};
+
+/** A proposal anchor whose references all resolve. */
+export const SYNTHETIC_PROPOSAL_ANCHOR_RESOLVED: TraceViewResponse = {
+  ...SYNTHETIC_PROPOSAL_ANCHOR,
+  trace: SYNTHETIC_PROPOSAL_ANCHOR.trace
+    ? {
+        ...(SYNTHETIC_PROPOSAL_ANCHOR.trace as TraceAnchor),
+        links: (SYNTHETIC_PROPOSAL_ANCHOR.trace as TraceAnchor).links.map(
+          (link) => ({ ...link, resolved: true }),
+        ),
+        unresolved: [],
+      }
+    : undefined,
 };
 
 export const SYNTHETIC_PROPOSALS_EMPTY: ProposalsResponse = {

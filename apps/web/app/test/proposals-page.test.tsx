@@ -10,7 +10,8 @@
 
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
 import type { DecisionResponse, ProposalsResponse } from "../lib/types";
@@ -25,6 +26,7 @@ import {
   SYNTHETIC_DECIDE_DOMAIN_FAILURE,
   SYNTHETIC_DECIDE_RECORDED,
   SYNTHETIC_OPEN_RESPONSE,
+  SYNTHETIC_PROPOSAL_ANCHOR_RESOLVED,
   SYNTHETIC_PROPOSALS_AFTER_APPROVE,
   SYNTHETIC_PROPOSALS_EMPTY,
   SYNTHETIC_PROPOSALS_RESPONSE,
@@ -39,6 +41,7 @@ vi.mock("../lib/api", async (importOriginal) => {
       proposals: vi.fn(),
       decide: vi.fn(),
       execute: vi.fn(),
+      traceRun: vi.fn(),
     },
   };
 });
@@ -46,6 +49,7 @@ vi.mock("../lib/api", async (importOriginal) => {
 const proposals = vi.mocked(api.proposals);
 const decide = vi.mocked(api.decide);
 const execute = vi.mocked(api.execute);
+const traceRun = vi.mocked(api.traceRun);
 
 function cleanState(): WorkspaceState {
   return workspaceReducer(initialWorkspaceState, {
@@ -57,9 +61,11 @@ function cleanState(): WorkspaceState {
 
 function renderPage(state: WorkspaceState = cleanState()) {
   render(
-    <WorkspaceProvider initial={state}>
-      <ProposalsPage />
-    </WorkspaceProvider>,
+    <MemoryRouter>
+      <WorkspaceProvider initial={state}>
+        <ProposalsPage />
+      </WorkspaceProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -74,6 +80,13 @@ afterEach(() => {
   proposals.mockReset();
   decide.mockReset();
   execute.mockReset();
+  traceRun.mockReset();
+});
+
+beforeEach(() => {
+  // Cards resolve their evidence refs through the proposal's trace
+  // anchor; default it to all-resolved so listing tests stay quiet.
+  traceRun.mockResolvedValue(SYNTHETIC_PROPOSAL_ANCHOR_RESOLVED);
 });
 
 describe("proposals page", () => {
@@ -98,7 +111,18 @@ describe("proposals page", () => {
     expect(
       view.getByText("Job 101 completed 4 days ago without an invoice."),
     ).toBeInTheDocument();
-    expect(view.getByText("grounding evidence")).toBeInTheDocument();
+
+    // Grounding evidence renders as inspectable references deep-linking
+    // to the Trace screen — not a raw JSON dump.
+    const evidence = within(
+      view.getByLabelText("grounding evidence"),
+    );
+    expect(
+      evidence.getByRole("link", { name: "fact-s1" }),
+    ).toHaveAttribute("href", "/workspace/trace?run=fact-s1");
+    expect(
+      evidence.getByRole("link", { name: "obs-0001" }),
+    ).toBeInTheDocument();
 
     // Undecided proposals show an empty decision history.
     expect(

@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useId, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import { Button, Input, Tag } from "antd";
 
 import { api, ApiError } from "../lib/api";
@@ -62,6 +63,9 @@ export default function TracePage() {
   const path = state.workspace?.requestedPath ?? null;
   const subjectId = useId();
   const artifactId = useId();
+  const [searchParams] = useSearchParams();
+  const subjectParam = searchParams.get("subject")?.trim() ?? "";
+  const runParam = searchParams.get("run")?.trim() ?? "";
 
   const [overview, setOverview] = useState<OverviewState>({
     status: "loading",
@@ -117,6 +121,27 @@ export default function TracePage() {
     setSubjectInput(subject);
     void runLookup("subject", subject);
   };
+
+  // Deep links — `?subject=Entity/Id` or `?run=<artifact id>` — prefill
+  // the matching input and run the same lookup a typed submission would,
+  // so other screens (e.g. proposal evidence) can point straight at a
+  // recorded subject or artifact. Values go through `runLookup` verbatim:
+  // trimmed, blank-skipped, server-owned TRACE.* domain outcomes.
+  useEffect(() => {
+    if (subjectParam) {
+      setSubjectInput(subjectParam);
+    } else if (runParam) {
+      setArtifactInput(runParam);
+    }
+    if (!path) return;
+    if (subjectParam) {
+      void runLookup("subject", subjectParam);
+    } else if (runParam) {
+      void runLookup("artifact", runParam);
+    }
+    // runLookup is re-created each render; the lookup inputs are the
+    // workspace path and the two param values.
+  }, [path, subjectParam, runParam]);
 
   // A shown result answers exactly the input it was submitted with —
   // editing the field afterwards makes the result stale, not wrong.

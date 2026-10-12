@@ -116,7 +116,11 @@ The Web app is presentation only:
   `payload_digest` a decision binds, the canonical target and related
   entities, the grounding evidence, and the recorded AI rationale —
   labeled as model hypothesis, never as fact — plus the append-only
-  decision history and recorded execution attempts.
+  decision history and recorded execution attempts. Grounding evidence
+  renders as labeled references (#97), not a JSON blob: fact key,
+  observation and ingest ids, and the candidate's entity observation /
+  state stamp each deep-link into the Trace screen's lookups, and ids
+  the link graph cannot resolve stay shown, marked `unresolved`.
   A page-level reviewer identity (self-asserted, recorded verbatim on
   every decision) gates the Approve/Reject pair on each card; the
   decision posts to `POST /api/v1/workspaces/proposals/decide` and the
@@ -146,7 +150,10 @@ The Web app is presentation only:
   nature labels. Failed stages, unindexed proposals, corrupt journal
   lines, and unresolved links render in place as evidence; lookup
   inputs are sent verbatim so `TRACE.INVALID_SUBJECT`/`TRACE.UNKNOWN_ID`
-  stay server-owned domain diagnostics. The Reports page lists frozen
+  stay server-owned domain diagnostics. The lookups are deep-linkable:
+  `?subject=Entity/Id` or `?run=<artifact id>` prefill the matching
+  input and run the same lookup a typed submission would (#97). The
+  Reports page lists frozen
   evaluation runs and renders each stored report verbatim: cohort
   pairing (paired/pending/invalid/ambiguous/excluded), medians and
   counts, the target verdict, guardrail verdicts with evidence, and the
