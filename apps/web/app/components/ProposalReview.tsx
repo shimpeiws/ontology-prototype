@@ -52,12 +52,6 @@ function asId(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
 
-function asIdList(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((v): v is string => typeof v === "string" && v !== "")
-    : [];
-}
-
 /** A non-id value still shown under its label — never dropped silently. */
 function ScalarValue({ value }: { value: unknown }) {
   return value === null || value === undefined ? (
@@ -99,29 +93,6 @@ function EvidenceRef({
   );
 }
 
-function EvidenceRefList({
-  ids,
-  kind,
-  unresolved,
-}: {
-  ids: string[];
-  kind: "run" | "subject";
-  unresolved: Set<string> | null;
-}) {
-  return (
-    <>
-      {ids.map((id, i) => (
-        <EvidenceRef
-          key={`${id}-${i}`}
-          id={id}
-          kind={kind}
-          unresolved={unresolved}
-        />
-      ))}
-    </>
-  );
-}
-
 /** `dd` content for a single-id evidence field. */
 function IdValue({
   value,
@@ -138,7 +109,8 @@ function IdValue({
   );
 }
 
-/** `dd` content for an id-list evidence field. */
+/** `dd` content for an id-list evidence field — string members link,
+ * anything else stays shown as its recorded value. */
 function IdListValue({
   value,
   unresolved,
@@ -147,11 +119,22 @@ function IdListValue({
   unresolved: Set<string> | null;
 }) {
   if (!Array.isArray(value)) return <ScalarValue value={value} />;
-  const ids = asIdList(value);
-  return ids.length ? (
-    <EvidenceRefList ids={ids} kind="run" unresolved={unresolved} />
-  ) : (
-    <em className="preview-null">none</em>
+  if (!value.length) return <em className="preview-null">none</em>;
+  return (
+    <>
+      {value.map((v, i) =>
+        typeof v === "string" && v !== "" ? (
+          <EvidenceRef
+            key={`${v}-${i}`}
+            id={v}
+            kind="run"
+            unresolved={unresolved}
+          />
+        ) : (
+          <ScalarValue key={i} value={v} />
+        ),
+      )}
+    </>
   );
 }
 
@@ -280,6 +263,10 @@ export function ProposalReviewCard({
 
   useEffect(() => {
     const controller = new AbortController();
+    // The verdict belongs to this workspace/proposal pair — drop any
+    // stale marking before the new anchor answers, so a failed lookup
+    // never silences links the old verdict suppressed.
+    setUnresolved(null);
     api
       .traceRun(path, proposal.proposal_id, controller.signal)
       .then((response) => {

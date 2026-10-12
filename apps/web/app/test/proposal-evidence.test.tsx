@@ -135,6 +135,59 @@ describe("proposal grounding evidence", () => {
     );
   });
 
+  it("drops a stale verdict when the workspace/proposal pair changes", async () => {
+    traceRun.mockResolvedValue(SYNTHETIC_PROPOSAL_ANCHOR);
+    const { rerender } = render(
+      <MemoryRouter>
+        <ProposalReviewCard
+          path="job-invoicing"
+          proposal={SYNTHETIC_PROPOSAL_OPEN}
+          reviewer="fde-hana"
+          onDecided={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    await screen.findAllByText("unresolved");
+
+    // Workspace switch, same proposal id: the new anchor lookup fails —
+    // the previous workspace's verdict must not keep silencing links.
+    traceRun.mockRejectedValue(new Error("API down"));
+    rerender(
+      <MemoryRouter>
+        <ProposalReviewCard
+          path="other-workspace"
+          proposal={SYNTHETIC_PROPOSAL_OPEN}
+          reviewer="fde-hana"
+          onDecided={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(screen.queryByText("unresolved")).toBeNull());
+    for (const link of screen.getAllByRole("link", { name: "obs-0002" })) {
+      expect(link).toHaveAttribute("href", "/workspace/trace?run=obs-0002");
+    }
+  });
+
+  it("shows every recorded list member, id or not", async () => {
+    traceRun.mockResolvedValue(SYNTHETIC_PROPOSAL_ANCHOR_RESOLVED);
+    const proposal: ProposalView = {
+      ...SYNTHETIC_PROPOSAL_OPEN,
+      evidence: {
+        observation_ids: ["obs-0001", 42],
+        ingest_ids: [null],
+      },
+    };
+    const section = renderCard(proposal);
+    const view = within(section as HTMLElement);
+
+    // The string member links; the recorded non-id values stay visible
+    // instead of being filtered into silence.
+    await view.findByRole("link", { name: "obs-0001" });
+    expect(view.getByText("42")).toBeInTheDocument();
+    expect(view.getByText("null")).toBeInTheDocument();
+  });
+
   it("renders absent or mistyped evidence values as context", async () => {
     traceRun.mockResolvedValue(SYNTHETIC_PROPOSAL_ANCHOR_RESOLVED);
     const proposal: ProposalView = {
