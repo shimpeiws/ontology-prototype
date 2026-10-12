@@ -186,6 +186,7 @@ export function workspaceReducer(
         ...state,
         drafts: { ...state.drafts, [action.file]: active },
         draftRevision: state.draftRevision + 1,
+        saveNotice: noticeAfterRevert(state.saveNotice),
       };
     }
     case "revertedAll": {
@@ -197,6 +198,7 @@ export function workspaceReducer(
         ...state,
         drafts,
         draftRevision: state.draftRevision + 1,
+        saveNotice: noticeAfterRevert(state.saveNotice),
       };
     }
     case "validationStarted":
@@ -339,6 +341,23 @@ export function workspaceReducer(
         saveError: action.error,
       };
   }
+}
+
+/**
+ * What a save notice means after a revert, per outcome (#94): `invalid`
+ * and `failed` describe a save attempt whose draft content no longer
+ * exists, so they are dropped; `conflict` still describes the live
+ * on-disk digest and its reload offer, and `saved` still describes the
+ * active bundle, so both stay.
+ */
+function noticeAfterRevert(notice: SaveNotice | null): SaveNotice | null {
+  if (
+    notice &&
+    (notice.outcome === "invalid" || notice.outcome === "failed")
+  ) {
+    return null;
+  }
+  return notice;
 }
 
 /** Draft files as the validate endpoint expects them: absent files omitted. */
