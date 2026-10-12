@@ -35,6 +35,7 @@ from ontology_core import (
     bundle_digest,
     decide,
     execute,
+    get_diagnosis_run,
     get_evaluation_run,
     ingest_snapshot,
     load_workspace,
@@ -181,6 +182,8 @@ class WorkspaceService(Protocol):
     def proposals(self, path: str) -> dict[str, Any]: ...
 
     def proposal(self, path: str, proposal_id: str) -> dict[str, Any]: ...
+
+    def diagnosis_run(self, path: str, run_id: str) -> dict[str, Any]: ...
 
     def decide(
         self,
@@ -505,6 +508,47 @@ class CoreWorkspaceService:
                 "persisted proposals",
             )
         return {"workspace": str(resolved), "ok": True, "proposal": view}
+
+    def diagnosis_run(self, path: str, run_id: str) -> dict[str, Any]:
+        """The ``ontology diagnose --inspect <id> --json`` payload (#96).
+
+        Like proposal inspection, the read goes through a valid
+        workspace bundle — ``get_diagnosis_run`` needs the workspace
+        identity — over the same readonly store.
+        """
+        resolved = self._workspace_dir(path)
+        loaded = load_workspace(resolved)
+        if not loaded.ok:
+            return {
+                "workspace": str(resolved),
+                "ok": False,
+                "diagnostics": [d.to_dict() for d in loaded.diagnostics],
+            }
+        try:
+            store = self._readonly_store(resolved)
+            try:
+                assert loaded.workspace is not None
+                record = get_diagnosis_run(
+                    loaded.workspace, run_id, store=store
+                )
+            finally:
+                store.close()
+        except ApiError:
+            raise
+        except Exception as exc:
+            return _failure(
+                resolved,
+                store_error_code(exc, "DIAGNOSIS.STORE_ERROR"),
+                f"cannot read canonical store: {exc}",
+            )
+        if record is None:
+            return _failure(
+                resolved,
+                "DIAGNOSIS.UNKNOWN_RUN",
+                f"no recorded diagnosis run {run_id!r}",
+                hint="run 'ontology diagnose <workspace>' to record one",
+            )
+        return {"workspace": str(resolved), "ok": True, "run": record}
 
     # ------------------------------------------------- decision write
     #
@@ -1198,6 +1242,7 @@ def contract_metadata() -> dict[str, Any]:
             "evaluation_run": f"POST /api/{API_VERSION}/workspaces/evaluations/run",
             "proposals": f"POST /api/{API_VERSION}/workspaces/proposals",
             "proposal": f"POST /api/{API_VERSION}/workspaces/proposals/show",
+            "diagnosis_run": f"POST /api/{API_VERSION}/workspaces/diagnosis-runs/show",
             "decide": f"POST /api/{API_VERSION}/workspaces/proposals/decide",
             "ingest": f"POST /api/{API_VERSION}/workspaces/ingest",
             "project": f"POST /api/{API_VERSION}/workspaces/project",

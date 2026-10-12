@@ -247,7 +247,11 @@ export default function WorkspaceLayout() {
             {state.saveError ? (
               <ErrorState
                 error={state.saveError}
-                onRetry={() => void saveDraft()}
+                onRetry={
+                  state.saveErrorSource === "reload"
+                    ? () => void reloadActive()
+                    : () => void saveDraft()
+                }
               />
             ) : null}
             {state.saveNotice ? (

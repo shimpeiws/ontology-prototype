@@ -8,12 +8,18 @@
  * that shows the receipt or the refusal diagnostics in place.
  */
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
-import type { DecisionResponse, ProposalsResponse } from "../lib/types";
+import type {
+  DecisionResponse,
+  DiagnosisRunShowResponse,
+  ProposalsResponse,
+} from "../lib/types";
+import { ProposalReviewCard } from "../components/ProposalReview";
 import ProposalsPage from "../routes/workspace.proposals";
 import { WorkspaceProvider } from "../workspace/context";
 import {
@@ -22,12 +28,18 @@ import {
 } from "../workspace/store";
 import type { WorkspaceState } from "../workspace/store";
 import {
+  SYNTHETIC_ANCHOR_GENERIC,
   SYNTHETIC_DECIDE_DOMAIN_FAILURE,
   SYNTHETIC_DECIDE_RECORDED,
+  SYNTHETIC_DIAGNOSIS_RUN_RESPONSE,
+  SYNTHETIC_DIAGNOSIS_UNKNOWN_RUN,
   SYNTHETIC_OPEN_RESPONSE,
   SYNTHETIC_PROPOSALS_AFTER_APPROVE,
   SYNTHETIC_PROPOSALS_EMPTY,
   SYNTHETIC_PROPOSALS_RESPONSE,
+  SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE,
+  SYNTHETIC_PROPOSAL_OPEN,
+  SYNTHETIC_TRACE_UNKNOWN_ID,
 } from "./fixtures";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -39,6 +51,8 @@ vi.mock("../lib/api", async (importOriginal) => {
       proposals: vi.fn(),
       decide: vi.fn(),
       execute: vi.fn(),
+      diagnosisRun: vi.fn(),
+      traceRun: vi.fn(),
     },
   };
 });
@@ -46,6 +60,28 @@ vi.mock("../lib/api", async (importOriginal) => {
 const proposals = vi.mocked(api.proposals);
 const decide = vi.mocked(api.decide);
 const execute = vi.mocked(api.execute);
+const diagnosisRun = vi.mocked(api.diagnosisRun);
+const traceRun = vi.mocked(api.traceRun);
+
+/** The provenance reads (#96/#97): the open proposal's run resolves
+ *  with its recorded deliverables, other ids report unknown; traceRun
+ *  hands back the proposal's recorded links. */
+function mockProvenance() {
+  diagnosisRun.mockImplementation((_path, runId) =>
+    Promise.resolve(
+      runId === "dgx-20261005T120600000000Z-cccc2222"
+        ? SYNTHETIC_DIAGNOSIS_RUN_RESPONSE
+        : SYNTHETIC_DIAGNOSIS_UNKNOWN_RUN,
+    ),
+  );
+  traceRun.mockImplementation((_path, runId) =>
+    Promise.resolve(
+      runId === "dgx-20261005T120600000000Z-cccc2222-p0"
+        ? SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE
+        : SYNTHETIC_ANCHOR_GENERIC,
+    ),
+  );
+}
 
 function cleanState(): WorkspaceState {
   return workspaceReducer(initialWorkspaceState, {
@@ -57,23 +93,31 @@ function cleanState(): WorkspaceState {
 
 function renderPage(state: WorkspaceState = cleanState()) {
   render(
-    <WorkspaceProvider initial={state}>
-      <ProposalsPage />
-    </WorkspaceProvider>,
+    <MemoryRouter>
+      <WorkspaceProvider initial={state}>
+        <ProposalsPage />
+      </WorkspaceProvider>
+    </MemoryRouter>,
   );
 }
 
 /** The card region for one proposal id. */
-function cardFor(proposalId: string): HTMLElement {
-  const heading = screen.getByRole("heading", { name: (content) =>
+async function cardFor(proposalId: string): Promise<HTMLElement> {
+  const heading = await screen.findByRole("heading", { name: (content) =>
     content.includes(proposalId) });
   return heading.closest("article") as HTMLElement;
 }
+
+beforeEach(() => {
+  mockProvenance();
+});
 
 afterEach(() => {
   proposals.mockReset();
   decide.mockReset();
   execute.mockReset();
+  diagnosisRun.mockReset();
+  traceRun.mockReset();
 });
 
 describe("proposals page", () => {
@@ -90,20 +134,298 @@ describe("proposals page", () => {
     expect(view.getByText("SendReminder")).toBeInTheDocument();
     expect(view.getByText("sha256:9f4c2d1e…payload")).toBeInTheDocument();
     expect(view.getByText("taro")).toBeInTheDocument();
-    expect(view.getByText("Job/101")).toBeInTheDocument();
+    // The subject shows both as the canonical target and as the
+    // candidate reference inside the evidence section.
+    expect(view.getAllByText("Job/101").length).toBeGreaterThan(0);
     expect(view.getByText("Person/taro")).toBeInTheDocument();
 
     // AI rationale is labeled a hypothesis — never presented as fact.
-    expect(view.getByText(/hypothesis/)).toBeInTheDocument();
+    expect(
+      view.getAllByText(/hypothesis/).length,
+    ).toBeGreaterThan(0);
     expect(
       view.getByText("Job 101 completed 4 days ago without an invoice."),
     ).toBeInTheDocument();
-    expect(view.getByText("grounding evidence")).toBeInTheDocument();
+    expect(
+      view.getByRole("heading", { name: /Grounding evidence/ }),
+    ).toBeInTheDocument();
 
     // Undecided proposals show an empty decision history.
     expect(
       view.getByText("No human decisions recorded."),
     ).toBeInTheDocument();
+  });
+
+  it("shows the proposing run's provider, model, and recorded output", async () => {
+    // #96: the card reads the persisted diagnosis run back — provider/
+    // model plus the run's deliverables survive a page reload.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const view = within(card);
+
+    await waitFor(() =>
+      expect(diagnosisRun).toHaveBeenCalledWith(
+        "job-invoicing",
+        "dgx-20261005T120600000000Z-cccc2222",
+        expect.any(AbortSignal),
+      ),
+    );
+    const section = await view.findByLabelText("proposing diagnosis run");
+
+    // Provider/model with the stub marked as a test double, not a live
+    // model.
+    expect(
+      within(section).getByText(/stub\/stub-offline/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText(/deterministic test double/),
+    ).toBeInTheDocument();
+
+    // The run's recorded model output — labeled hypothesis, not fact.
+    expect(
+      within(section).getByText(/Hypotheses the provider recorded/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText(
+        /deterministic response listing the 1 candidate/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText(/awaiting a manual invoicing step/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText("Was a manual invoice held for review?"),
+    ).toBeInTheDocument();
+  });
+
+  it("marks a live provider without the stub test-double flag", async () => {
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    diagnosisRun.mockResolvedValue({
+      ...SYNTHETIC_DIAGNOSIS_RUN_RESPONSE,
+      run: {
+        ...SYNTHETIC_DIAGNOSIS_RUN_RESPONSE.run!,
+        provider: "openrouter",
+        model: "openai/gpt-4o-mini",
+      },
+    });
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const section = await within(card).findByLabelText(
+      "proposing diagnosis run",
+    );
+    expect(
+      await within(section).findByText(/openrouter\/openai\/gpt-4o-mini/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).queryByText(/test double/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders evidence as labeled, linked references — unresolved ids marked", async () => {
+    // #97: fact keys, observation and ingest ids become trace links;
+    // an id that resolves to nothing stays visible, marked unresolved.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const view = within(card);
+    const section = await view.findByLabelText("grounding evidence");
+
+    // The recorded references render under their labels…
+    expect(within(section).getByText("Fact")).toBeInTheDocument();
+    expect(
+      within(section).getByText("Entity observation"),
+    ).toBeInTheDocument();
+    expect(within(section).getByText("Observations")).toBeInTheDocument();
+    expect(within(section).getByText("Ingest runs")).toBeInTheDocument();
+    expect(
+      within(section).getByText("Entity state observed at"),
+    ).toBeInTheDocument();
+
+    // …each linked into the Trace lookup…
+    expect(
+      within(section).getByRole("link", { name: "fact-s1" }),
+    ).toHaveAttribute("href", "/workspace/trace?artifact=fact-s1");
+    expect(
+      within(section).getByRole("link", {
+        name: "ing-20261005T120000000000Z-aaaa0000",
+      }),
+    ).toHaveAttribute(
+      "href",
+      "/workspace/trace?artifact=ing-20261005T120000000000Z-aaaa0000",
+    );
+    expect(
+      within(section).getByRole("link", { name: "Job/101" }),
+    ).toHaveAttribute("href", "/workspace/trace?subject=Job%2F101");
+
+    // …and the id resolving to no recorded artifact is still shown,
+    // marked unresolved.
+    const missing = within(section).getByRole("link", {
+      name: /obs-missing/,
+    });
+    expect(missing).toHaveAttribute(
+      "href",
+      "/workspace/trace?artifact=obs-missing",
+    );
+    expect(
+      within(missing).getByText("unresolved"),
+    ).toBeInTheDocument();
+  });
+
+  it("marks evidence unverified — not resolvable — when the anchor is unreadable", async () => {
+    // FIND-001: an anchor the trace cannot resolve means the links are
+    // unknown, not empty — the ids must not render as plain resolvable
+    // references.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    traceRun.mockResolvedValue(SYNTHETIC_TRACE_UNKNOWN_ID);
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const section = await within(card).findByLabelText(
+      "grounding evidence",
+    );
+    expect(
+      within(section).getByText(/could not be verified/),
+    ).toBeInTheDocument();
+    // Every reference carries the unverified badge — none reads as a
+    // confirmed resolvable link, and none claims "unresolved" either.
+    expect(
+      within(section).getAllByText("unverified").length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(section).queryByText("unresolved"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the run provenance when the trace anchor read fails", async () => {
+    // FIND-002: the two read-backs settle independently — a failed
+    // anchor lookup must not discard the recorded run.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    traceRun.mockRejectedValue(
+      new ApiError("WEB.API_UNREACHABLE", "API is down", null, true),
+    );
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const section = await within(card).findByLabelText(
+      "proposing diagnosis run",
+    );
+    expect(
+      await within(section).findByText(/stub\/stub-offline/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText(/deterministic response listing the 1 candidate/),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByLabelText("grounding evidence"),
+    ).toHaveTextContent(/could not be verified/);
+  });
+
+  it("shows the recorded run without waiting for the trace anchor", async () => {
+    // Devin Review: the two read-backs settle into separate state — a
+    // slow trace lookup must not hold the already-settled run record
+    // hostage, and pending references get no verdict badge yet.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    let resolveAnchor!: (r: typeof SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE) => void;
+    traceRun.mockImplementation((_p, runId) =>
+      runId === "dgx-20261005T120600000000Z-cccc2222-p0"
+        ? new Promise<typeof SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE>((r) => {
+            resolveAnchor = r;
+          })
+        : Promise.resolve(SYNTHETIC_ANCHOR_GENERIC),
+    );
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const section = await within(card).findByLabelText(
+      "proposing diagnosis run",
+    );
+    expect(
+      await within(section).findByText(/stub\/stub-offline/),
+    ).toBeInTheDocument();
+
+    const evidence = within(card).getByLabelText("grounding evidence");
+    expect(
+      within(evidence).getByText(/Verifying the recorded references/),
+    ).toBeInTheDocument();
+    expect(
+      within(evidence).queryByText("unverified"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(evidence).queryByText("unresolved"),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveAnchor(SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE);
+      await Promise.resolve();
+    });
+    await within(evidence).findByText("unresolved");
+  });
+
+  it("a superseded provenance response never renders", async () => {
+    // INV-003: the card's path changes (workspace switch) while the
+    // first read is in flight — the stale response is discarded.
+    let resolveStale!: (r: DiagnosisRunShowResponse) => void;
+    diagnosisRun.mockImplementationOnce(
+      () =>
+        new Promise<DiagnosisRunShowResponse>((r) => {
+          resolveStale = r;
+        }),
+    );
+    diagnosisRun.mockResolvedValue(SYNTHETIC_DIAGNOSIS_UNKNOWN_RUN);
+    const { rerender } = render(
+      <MemoryRouter>
+        <ProposalReviewCard
+          path="ws-a"
+          proposal={SYNTHETIC_PROPOSAL_OPEN}
+          reviewer=""
+          onDecided={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    rerender(
+      <MemoryRouter>
+        <ProposalReviewCard
+          path="ws-b"
+          proposal={SYNTHETIC_PROPOSAL_OPEN}
+          reviewer=""
+          onDecided={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    // The stale ws-a response resolves late — it must not appear.
+    resolveStale(SYNTHETIC_DIAGNOSIS_RUN_RESPONSE);
+    const section = await screen.findByLabelText("proposing diagnosis run");
+    await within(section).findByText(/no longer readable/);
+    expect(
+      within(section).queryByText(/stub\/stub-offline/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the payload reason param and the AI rationale distinct", async () => {
+    // #96: the action's `reason` param is payload content; the AI
+    // rationale is model output — they render under different labels.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const view = within(card);
+
+    const payload = view.getByLabelText("exact payload");
+    expect(payload).toHaveTextContent(
+      "Job exceeded the two-day threshold.",
+    );
+    expect(payload).toHaveTextContent(
+      /payload argument, not the model's rationale/,
+    );
+    expect(
+      view.getByLabelText("AI rationale"),
+    ).toHaveTextContent(
+      "Job 101 completed 4 days ago without an invoice.",
+    );
   });
 
   it("shows the armed execute affordance on approved proposals only", async () => {
@@ -289,10 +611,11 @@ describe("proposals page", () => {
     // (confirmation + decision history).
     await screen.findAllByText("dec-20261005T140000000000Z-gggg8888");
     await waitFor(() => expect(proposals).toHaveBeenCalledTimes(2));
-    await waitFor(() =>
+    await waitFor(async () =>
       expect(
-        within(cardFor("dgx-20261005T120600000000Z-cccc2222-p0"))
-          .getByText(/fde-hana/),
+        within(
+          await cardFor("dgx-20261005T120600000000Z-cccc2222-p0"),
+        ).getByText(/fde-hana/),
       ).toBeInTheDocument(),
     );
   });

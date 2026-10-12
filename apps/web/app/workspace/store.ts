@@ -80,6 +80,11 @@ export interface WorkspaceState {
   saveNotice: SaveNotice | null;
   /** Transport-level save/reload failure — never a validation finding. */
   saveError: ApiError | null;
+  /** Which operation produced `saveError`: a save error describes the
+   *  (possibly discarded) draft, so a revert drops it; a reload error
+   *  describes the on-disk bundle the conflict path still needs, so it
+   *  survives until a reload succeeds. */
+  saveErrorSource: "save" | "reload" | null;
 }
 
 export const initialWorkspaceState: WorkspaceState = {
@@ -95,6 +100,7 @@ export const initialWorkspaceState: WorkspaceState = {
   reloading: false,
   saveNotice: null,
   saveError: null,
+  saveErrorSource: null,
 };
 
 export type WorkspaceAction =
@@ -186,6 +192,11 @@ export function workspaceReducer(
         ...state,
         drafts: { ...state.drafts, [action.file]: active },
         draftRevision: state.draftRevision + 1,
+        saveNotice: noticeAfterRevert(state.saveNotice),
+        saveError:
+          state.saveErrorSource === "save" ? null : state.saveError,
+        saveErrorSource:
+          state.saveErrorSource === "save" ? null : state.saveErrorSource,
       };
     }
     case "revertedAll": {
@@ -197,6 +208,11 @@ export function workspaceReducer(
         ...state,
         drafts,
         draftRevision: state.draftRevision + 1,
+        saveNotice: noticeAfterRevert(state.saveNotice),
+        saveError:
+          state.saveErrorSource === "save" ? null : state.saveError,
+        saveErrorSource:
+          state.saveErrorSource === "save" ? null : state.saveErrorSource,
       };
     }
     case "validationStarted":
@@ -236,6 +252,7 @@ export function workspaceReducer(
         lastSaveRequestId: action.requestId,
         saveNotice: null,
         saveError: null,
+        saveErrorSource: null,
       };
     case "saveFinished": {
       // A response for a superseded save is discarded, same rule as
@@ -246,6 +263,7 @@ export function workspaceReducer(
         ...state,
         saving: false,
         saveError: null,
+        saveErrorSource: null,
         saveNotice: {
           outcome: response.outcome,
           digest: response.digest,
@@ -292,6 +310,7 @@ export function workspaceReducer(
         ...state,
         saving: false,
         saveError: action.error,
+        saveErrorSource: "save",
       };
     }
     case "reloadStarted":
@@ -299,6 +318,7 @@ export function workspaceReducer(
         ...state,
         reloading: true,
         saveError: null,
+        saveErrorSource: null,
       };
     case "reloaded": {
       // The conflict path's "reload": the active baseline updates to what
@@ -325,6 +345,7 @@ export function workspaceReducer(
         },
         saveNotice: null,
         saveError: null,
+        saveErrorSource: null,
       };
     }
     case "reloadFailed":
@@ -337,8 +358,26 @@ export function workspaceReducer(
         ...state,
         reloading: false,
         saveError: action.error,
+        saveErrorSource: "reload",
       };
   }
+}
+
+/**
+ * What a save notice means after a revert, per outcome (#94): `invalid`
+ * and `failed` describe a save attempt whose draft content no longer
+ * exists, so they are dropped; `conflict` still describes the live
+ * on-disk digest and its reload offer, and `saved` still describes the
+ * active bundle, so both stay.
+ */
+function noticeAfterRevert(notice: SaveNotice | null): SaveNotice | null {
+  if (
+    notice &&
+    (notice.outcome === "invalid" || notice.outcome === "failed")
+  ) {
+    return null;
+  }
+  return notice;
 }
 
 /** Draft files as the validate endpoint expects them: absent files omitted. */

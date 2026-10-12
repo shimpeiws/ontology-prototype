@@ -291,9 +291,9 @@ store error. Every `.ontology/` entry must also resolve inside the
 configured roots — a symlink escaping them is refused with
 `API.RUNTIME_OUTSIDE_ROOTS` rather than read.
 
-The seven read endpoints take `{"path": "<workspace under a configured
+The eight read endpoints take `{"path": "<workspace under a configured
 root>"}` plus the extra field listed; `path` follows the same
-root-containment rules as every other endpoint. The eighth row in the
+root-containment rules as every other endpoint. The ninth row in the
 table is the human-decision write documented under
 [Human decisions](#human-decisions); the five run triggers added by
 ADR 0004 are documented under
@@ -308,6 +308,7 @@ ADR 0004 are documented under
 | `POST /api/v1/workspaces/evaluations/run` | `evaluate --run <id> --json` | `run` — the frozen evaluation report |
 | `POST /api/v1/workspaces/proposals` | `proposals --json` | `proposals` — every persisted proposal with `status`, `decisions`, and `executions` |
 | `POST /api/v1/workspaces/proposals/show` | `proposals --show <id> --json` | `proposal` — one proposal with `status`, `decisions`, and `executions` |
+| `POST /api/v1/workspaces/diagnosis-runs/show` | `diagnose --inspect <id> --json` | `run` — the recorded diagnosis run (provider, model, deliverables, proposals) |
 | `POST /api/v1/workspaces/proposals/decide` | `decide <id> --approve/--reject --json` | the decision outcome — see below |
 
 Extra request fields:
@@ -317,6 +318,7 @@ Extra request fields:
 - `trace/run`: `{"run_id": "<id>"}`.
 - `evaluations/run`: `{"run_id": "<id>"}`.
 - `proposals/show`: `{"proposal_id": "<id>"}`.
+- `diagnosis-runs/show`: `{"run_id": "<id>"}`.
 
 Domain failures the payload can report (`ok: false`, `diagnostics`):
 
@@ -329,12 +331,15 @@ Domain failures the payload can report (`ok: false`, `diagnostics`):
 | `EVALUATION.UNKNOWN_RUN` | No frozen evaluation report with that `run_id` |
 | `DECISION.STORE_ERROR` | The canonical store could not be opened for reading |
 | `DECISION.UNKNOWN_PROPOSAL` | No persisted proposal with that `proposal_id` |
-| `WORKSPACE.*` | Proposal inspection loads the workspace bundle (like the CLI), so invalid definitions surface their own diagnostics |
+| `DIAGNOSIS.STORE_ERROR` | The canonical store could not be opened for reading |
+| `DIAGNOSIS.UNKNOWN_RUN` | No recorded diagnosis run with that `run_id` |
+| `WORKSPACE.*` | Proposal and diagnosis-run inspection load the workspace bundle (like the CLI), so invalid definitions surface their own diagnostics |
 
 Trace and evaluation endpoints never load the definition files — a
 frozen report or recorded run stays inspectable after a later edit
-breaks the workspace; only proposal inspection validates the bundle,
-matching what `ontology proposals` requires.
+breaks the workspace; only proposal and diagnosis-run inspection
+validate the bundle, matching what `ontology proposals` and
+`ontology diagnose --inspect` require.
 
 One divergence from the CLI is deliberate: proposals recorded only in a
 diagnosis run — never indexed into the `proposals` table, e.g. by a

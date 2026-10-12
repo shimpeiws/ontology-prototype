@@ -12,12 +12,21 @@
  * in place.
  */
 
-import { useRef, useState } from "react";
-import { Alert, Button, Input } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
+import { Alert, Button, Input, Tag } from "antd";
 
 import { api, ApiError } from "../lib/api";
-import type { DecisionResponse, Diagnostic, ProposalView } from "../lib/types";
+import type {
+  DecisionResponse,
+  Diagnostic,
+  DiagnosisRunRecord,
+  ProposalView,
+  TraceLink,
+} from "../lib/types";
+import { DiagnosisDeliverables } from "./DiagnosisDeliverables";
 import { DiagnosticsList } from "./DiagnosticsList";
+import { EvidenceReferences } from "./EvidenceReferences";
 import { ExecuteControl } from "./ExecuteControl";
 import { EmptyState, ErrorState } from "./states";
 import { NatureBadge, StatusBadge } from "./StatusBadge";
@@ -35,6 +44,25 @@ type DecideOutcome =
       error: ApiError | Error;
     }
   | { kind: "recorded"; response: DecisionResponse };
+
+/** Read-back of the proposing diagnosis run — provenance for the card
+ *  (#96). Settles on its own: a slow or failed trace-anchor read never
+ *  delays or discards the run record. */
+type RunState =
+  | { status: "loading" }
+  | {
+      status: "done";
+      run: DiagnosisRunRecord | null;
+      diagnostics: Diagnostic[];
+      error: ApiError | Error | null;
+    };
+
+/** The proposal's recorded trace links — evidence resolution (#97).
+ *  Settles independently of the run read. `links === null` means the
+ *  anchor could not be read: resolution is unverified, not unresolved. */
+type LinksState =
+  | { status: "loading" }
+  | { status: "done"; links: TraceLink[] | null };
 
 export function ProposalReviewCard({
   path,
@@ -57,6 +85,62 @@ export function ProposalReviewCard({
   // Single-flight per card: a superseded submission's late response is
   // discarded — never rendered as the answer to the newer attempt.
   const seq = useRef(0);
+
+  // Provenance read-back (#96/#97): the diagnosis run that produced the
+  // proposal and the trace links that resolve its evidence ids. The two
+  // reads settle into separate state so one slow request never delays
+  // the other; a superseded response is never rendered.
+  const [runState, setRunState] = useState<RunState>({ status: "loading" });
+  const [linksState, setLinksState] = useState<LinksState>({
+    status: "loading",
+  });
+  const provSeq = useRef(0);
+  useEffect(() => {
+    const request = ++provSeq.current;
+    const controller = new AbortController();
+    const fresh = () =>
+      !controller.signal.aborted && request === provSeq.current;
+    setRunState({ status: "loading" });
+    setLinksState({ status: "loading" });
+    api
+      .diagnosisRun(path, proposal.diagnosis_run_id, controller.signal)
+      .then((response) => {
+        if (!fresh()) return;
+        setRunState({
+          status: "done",
+          run: response.ok ? (response.run ?? null) : null,
+          diagnostics: response.ok ? [] : (response.diagnostics ?? []),
+          error: null,
+        });
+      })
+      .catch((err: unknown) => {
+        if (!fresh()) return;
+        setRunState({
+          status: "done",
+          run: null,
+          diagnostics: [],
+          error: toError(err),
+        });
+      });
+    api
+      .traceRun(path, proposal.proposal_id, controller.signal)
+      .then((response) => {
+        if (!fresh()) return;
+        const anchor = response.trace;
+        setLinksState({
+          status: "done",
+          links:
+            response.ok && anchor && "links" in anchor
+              ? anchor.links
+              : null,
+        });
+      })
+      .catch(() => {
+        if (!fresh()) return;
+        setLinksState({ status: "done", links: null });
+      });
+    return () => controller.abort();
+  }, [path, proposal.diagnosis_run_id, proposal.proposal_id]);
 
   const submit = async (decision: "approved" | "rejected") => {
     const attempt = ++seq.current;
@@ -148,11 +232,58 @@ export function ProposalReviewCard({
         </dd>
       </dl>
 
+      <section
+        className="proposal-provenance"
+        aria-label="proposing diagnosis run"
+      >
+        <h4>
+          Proposing diagnosis run <NatureBadge nature="ai" />
+        </h4>
+        {runState.status === "loading" ? (
+          <p className="hint">Loading the recorded run…</p>
+        ) : runState.error ? (
+          <p className="hint" role="status">
+            The recorded run could not be loaded:{" "}
+            {runState.error.message}
+          </p>
+        ) : runState.run ? (
+          <>
+            <p>
+              <Link
+                to={`/workspace/trace?artifact=${encodeURIComponent(proposal.diagnosis_run_id)}`}
+              >
+                <code>{proposal.diagnosis_run_id}</code>
+              </Link>{" "}
+              — {runState.run.provider}/{runState.run.model}{" "}
+              {runState.run.provider === "stub" ? (
+                <Tag className="badge" color="warning">
+                  stub — deterministic test double, not a live model
+                </Tag>
+              ) : null}
+            </p>
+            <DiagnosisDeliverables
+              deliverables={runState.run.deliverables}
+            />
+          </>
+        ) : (
+          <>
+            <p className="hint">
+              The recorded run is no longer readable — the diagnostics
+              explain why.
+            </p>
+            <DiagnosticsList diagnostics={runState.diagnostics} />
+          </>
+        )}
+      </section>
+
       <section className="proposal-payload" aria-label="exact payload">
         <h4>Exact payload</h4>
         <p className="hint">
           The approval binds to the digest of exactly these fields — a
           changed payload fails the execution gate.
+          {"reason" in proposal.params
+            ? " A `reason` key here is the action's own payload argument, not the model's rationale below."
+            : ""}
         </p>
         <RecordDetails record={proposal.params} />
       </section>
@@ -170,10 +301,29 @@ export function ProposalReviewCard({
         ) : (
           <p className="hint">No rationale was recorded.</p>
         )}
-        <details className="record-json">
-          <summary>grounding evidence</summary>
-          <pre>{JSON.stringify(proposal.evidence, null, 2)}</pre>
-        </details>
+      </section>
+
+      <section className="proposal-evidence" aria-label="grounding evidence">
+        <h4>
+          Grounding evidence <NatureBadge nature="observed" />
+        </h4>
+        <p className="hint">
+          The recorded references the diagnosis cited — each id opens the
+          corresponding artifact on the Trace screen.
+        </p>
+        <EvidenceReferences
+          evidence={proposal.evidence}
+          links={
+            linksState.status === "done"
+              ? linksState.links
+              : undefined
+          }
+          fromId={proposal.proposal_id}
+          subject={{
+            entity: proposal.subject_entity,
+            id: proposal.subject_id,
+          }}
+        />
       </section>
 
       <section className="proposal-decisions" aria-label="decision history">

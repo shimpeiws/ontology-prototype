@@ -27,6 +27,8 @@ from .schemas import (
     DiagnosticOut,
     DiagnoseRunRequest,
     DiagnoseRunResponse,
+    DiagnosisRunShowRequest,
+    DiagnosisRunShowResponse,
     DraftPreviewRequest,
     DraftPreviewResponse,
     DraftValidateRequest,
@@ -416,6 +418,27 @@ def create_app(
         return {
             "api_version": API_VERSION,
             **service.proposal(payload.path, payload.proposal_id),
+        }
+
+    @app.post(
+        f"{API_PREFIX}/workspaces/diagnosis-runs/show",
+        response_model=DiagnosisRunShowResponse,
+        response_model_exclude_unset=True,
+        responses={
+            400: {"model": ErrorResponse},
+            403: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    def diagnosis_run(
+        payload: DiagnosisRunShowRequest,
+        service: WorkspaceService = Depends(get_service),
+    ) -> dict:
+        return {
+            "api_version": API_VERSION,
+            **service.diagnosis_run(payload.path, payload.run_id),
         }
 
     # ------------------------------------------------- decision write

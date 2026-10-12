@@ -14,6 +14,7 @@ import type {
   ContractResponse,
   DecisionResponse,
   DiagnoseRunResponse,
+  DiagnosisRunShowResponse,
   DraftPreviewResponse,
   DraftValidateResponse,
   EvaluateRunTriggerResponse,
@@ -238,6 +239,12 @@ export const api = {
     post<ProposalResponse>(
       "/workspaces/proposals/show",
       { path, proposal_id: proposalId },
+      signal,
+    ),
+  diagnosisRun: (path: string, runId: string, signal?: AbortSignal) =>
+    post<DiagnosisRunShowResponse>(
+      "/workspaces/diagnosis-runs/show",
+      { path, run_id: runId },
       signal,
     ),
 

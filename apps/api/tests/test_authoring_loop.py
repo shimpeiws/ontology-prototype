@@ -311,6 +311,9 @@ def test_contract_lists_every_operation(roots) -> None:
         "evaluation_run",
         "proposals",
         "proposal",
+        # Issue #96: recorded diagnosis-run read-back — provenance for
+        # the proposal card.
+        "diagnosis_run",
         # Issue #63: the human decision write — bound to a persisted
         # proposal's payload digest.
         "decide",

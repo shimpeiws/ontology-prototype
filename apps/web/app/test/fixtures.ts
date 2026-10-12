@@ -12,6 +12,7 @@ import type {
   ContractResponse,
   DecisionResponse,
   Diagnostic,
+  DiagnosisRunShowResponse,
   DraftPreviewResponse,
   DraftValidateResponse,
   EvaluationReport,
@@ -1041,6 +1042,24 @@ export const SYNTHETIC_TRACE_INVALID_SUBJECT: TraceViewResponse = {
   ],
 };
 
+/** An artifact lookup that resolves to no recorded artifact. */
+export const SYNTHETIC_TRACE_UNKNOWN_ID: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: false,
+  diagnostics: [
+    {
+      severity: "error",
+      code: "TRACE.UNKNOWN_ID",
+      message: "no recorded artifact 'dgx-nope'",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    },
+  ],
+};
+
 /** A frozen report whose after cohort missed the strict target. */
 export const SYNTHETIC_EVALUATION_REPORT: EvaluationReport = {
   evaluation: "completion-to-invoice-latency",
@@ -1325,6 +1344,10 @@ export const SYNTHETIC_PROPOSAL_OPEN: ProposalView = {
   evidence: {
     fact_key: "fact-s1",
     fact: "JobCompleted",
+    entity_observation_id: "obs-0001",
+    entity_updated_at: "2026-10-05T12:00:00Z",
+    observation_ids: ["obs-0001", "obs-missing"],
+    ingest_ids: ["ing-20261005T120000000000Z-aaaa0000"],
     elapsed_days: 4,
     threshold_days: 2,
   },
@@ -1410,6 +1433,141 @@ export const SYNTHETIC_DECIDE_RECORDED: DecisionResponse = {
   proposal_id: "dgx-20261005T120600000000Z-cccc2222-p0",
   decision: "approved",
   recorded: true,
+  diagnostics: [],
+};
+
+/* ---- Diagnosis run read-back (#96) and proposal evidence links (#97) ---- */
+
+/** The persisted run record for the open proposal's diagnosis — stub
+ *  provider, so the card marks it as a test double. */
+export const SYNTHETIC_DIAGNOSIS_RUN_RESPONSE: DiagnosisRunShowResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  run: {
+    run_id: "dgx-20261005T120600000000Z-cccc2222",
+    projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+    provider: "stub",
+    model: "stub-offline",
+    status: "ok",
+    provider_called: true,
+    prompt_version: "v1",
+    input_digest: "sha256:input",
+    deliverables: {
+      explanation:
+        "stub provider: deterministic response listing the 1 candidate(s) supplied",
+      hypotheses: [
+        {
+          statement:
+            "stub hypothesis (unconfirmed): the job may be awaiting a manual invoicing step",
+          evidence: ["fact-s1"],
+        },
+      ],
+      follow_up_questions: ["Was a manual invoice held for review?"],
+    },
+    proposals: [],
+    rejected: [],
+    diagnostics: [],
+    created_at: "2026-10-05T12:06:00Z",
+  },
+};
+
+export const SYNTHETIC_DIAGNOSIS_UNKNOWN_RUN: DiagnosisRunShowResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: false,
+  diagnostics: [
+    {
+      severity: "error",
+      code: "DIAGNOSIS.UNKNOWN_RUN",
+      message: "no recorded diagnosis run 'dgx-…'",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    },
+  ],
+};
+
+/** Trace anchor for the open proposal — its evidence links resolve
+ *  except one observation id that was never stored. */
+export const SYNTHETIC_PROPOSAL_ANCHOR: TraceAnchor = {
+  id: "dgx-20261005T120600000000Z-cccc2222-p0",
+  kind: "proposal",
+  nature: "ai",
+  record: null,
+  links: [
+    {
+      from: "dgx-20261005T120600000000Z-cccc2222-p0",
+      to: "dgx-20261005T120600000000Z-cccc2222",
+      via: "from_run",
+      resolved: true,
+    },
+    {
+      from: "dgx-20261005T120600000000Z-cccc2222-p0",
+      to: "fact-s1",
+      via: "evidence",
+      resolved: true,
+    },
+    {
+      from: "dgx-20261005T120600000000Z-cccc2222-p0",
+      to: "obs-0001",
+      via: "evidence",
+      resolved: true,
+    },
+    {
+      from: "dgx-20261005T120600000000Z-cccc2222-p0",
+      to: "obs-missing",
+      via: "evidence",
+      resolved: false,
+    },
+    {
+      from: "dgx-20261005T120600000000Z-cccc2222-p0",
+      to: "ing-20261005T120000000000Z-aaaa0000",
+      via: "evidence",
+      resolved: true,
+    },
+    {
+      from: "dgx-20261005T120600000000Z-cccc2222-p0",
+      to: "Job/101",
+      via: "subject",
+      resolved: true,
+    },
+  ],
+  unresolved: [
+    {
+      from: "dgx-20261005T120600000000Z-cccc2222-p0",
+      to: "obs-missing",
+      via: "evidence",
+      resolved: false,
+    },
+  ],
+  journal: [],
+};
+
+export const SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  trace: SYNTHETIC_PROPOSAL_ANCHOR,
+  diagnostics: [],
+};
+
+/** Default anchor for any other proposal id — resolved subject link
+ *  only, no evidence entries. */
+export const SYNTHETIC_ANCHOR_GENERIC: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: true,
+  trace: {
+    id: "dgx-x",
+    kind: "proposal",
+    nature: "ai",
+    record: null,
+    links: [],
+    unresolved: [],
+    journal: [],
+  },
   diagnostics: [],
 };
 

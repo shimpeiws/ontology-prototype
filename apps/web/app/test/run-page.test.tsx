@@ -481,6 +481,123 @@ describe("run page", () => {
     expect(within(stage).getByText("review them")).toBeInTheDocument();
   });
 
+  it("renders the diagnosis deliverables, labeled as model output", async () => {
+    // #95: explanation, hypotheses with evidence ids, and follow-up
+    // questions from the trigger response — labeled hypothesis, never
+    // fact.
+    ready();
+    diagnose.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: true,
+      run_id: "dgx-new",
+      projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+      provider: "stub",
+      model: "stub-offline",
+      status: "ok",
+      candidate_count: 1,
+      deliverables: {
+        explanation:
+          "stub provider: deterministic response listing the 1 candidate(s) supplied",
+        hypotheses: [
+          {
+            statement:
+              "stub hypothesis (unconfirmed): the job may be awaiting a manual invoicing step",
+            // The core keeps unverified ids inside `evidence` too.
+            evidence: ["fact-s1", "obs-gone"],
+            unverified_evidence: ["obs-gone"],
+          },
+        ],
+        follow_up_questions: ["Was a manual invoice held for review?"],
+      },
+      proposals: [],
+      rejected: [],
+      recorded: true,
+      diagnostics: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("stage 3 diagnose");
+    await user.click(
+      screen.getByRole("button", { name: "Run diagnosis" }),
+    );
+
+    const stage = screen.getByLabelText("stage 3 diagnose");
+    const output = await within(stage).findByLabelText(
+      "diagnosis model output",
+    );
+    expect(
+      within(output).getByText(/Hypotheses the provider recorded/),
+    ).toBeInTheDocument();
+    expect(
+      within(output).getByText(/deterministic response listing the 1 candidate/),
+    ).toBeInTheDocument();
+    expect(
+      within(output).getByText(/awaiting a manual invoicing step/),
+    ).toBeInTheDocument();
+    // Evidence ids link into the Trace lookup; unverified ones are
+    // marked unresolved — and appear only under that label, never as a
+    // plain verified citation a second time.
+    expect(
+      within(output).getByRole("link", { name: "fact-s1" }),
+    ).toHaveAttribute("href", "/workspace/trace?artifact=fact-s1");
+    expect(within(output).getByText("unverified evidence:")).toBeInTheDocument();
+    expect(within(output).getByText("unresolved")).toBeInTheDocument();
+    expect(
+      within(output).getAllByRole("link", { name: "obs-gone" }),
+    ).toHaveLength(1);
+    expect(
+      within(output).getByText("Was a manual invoice held for review?"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the recorded explanation even with no candidates", async () => {
+    // #95: an empty candidate set still carries the recorded
+    // explanation — nothing is invented in its place.
+    ready();
+    diagnose.mockResolvedValue({
+      api_version: "v1",
+      workspace: "job-invoicing",
+      ok: true,
+      run_id: "dgx-empty",
+      projection_run_id: "prj-20261005T120500000000Z-bbbb1111",
+      provider: "stub",
+      model: "stub-offline",
+      status: "ok",
+      candidate_count: 0,
+      deliverables: {
+        explanation:
+          "stub provider: deterministic response listing the 0 candidate(s) supplied",
+        hypotheses: [],
+        follow_up_questions: [],
+      },
+      proposals: [],
+      rejected: [],
+      recorded: true,
+      diagnostics: [],
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText("stage 3 diagnose");
+    await pickOption(
+      user,
+      screen.getByLabelText("Candidate source"),
+      "as-of timestamp",
+    );
+    await user.type(screen.getByLabelText("As-of"), "2026-10-21T00:00:00Z");
+    await user.click(
+      screen.getByRole("button", { name: "Run diagnosis" }),
+    );
+
+    const stage = screen.getByLabelText("stage 3 diagnose");
+    const output = await within(stage).findByLabelText(
+      "diagnosis model output",
+    );
+    expect(
+      within(output).getByText(/listing the 0 candidate/),
+    ).toBeInTheDocument();
+  });
+
   it("runs an evaluation and links the frozen report", async () => {
     ready();
     evaluate.mockResolvedValue({

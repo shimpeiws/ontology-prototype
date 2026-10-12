@@ -124,6 +124,13 @@ class ProposalRequest(WorkspacePathRequest):
     proposal_id: str = Field(min_length=1, max_length=1024)
 
 
+class DiagnosisRunShowRequest(WorkspacePathRequest):
+    """Read back a recorded diagnosis run — like the CLI's
+    ``diagnose --inspect``."""
+
+    run_id: str = Field(min_length=1, max_length=1024)
+
+
 class IngestSnapshot(BaseModel):
     """A snapshot submitted as text — the console's equivalent of the
     snapshot file the CLI reads. ``name`` is an optional label echoed in
@@ -363,6 +370,19 @@ class ProposalResponse(BaseModel):
     workspace: str
     ok: bool
     proposal: dict[str, Any] | None = None
+    diagnostics: list[dict[str, Any]] | None = None
+
+
+class DiagnosisRunShowResponse(BaseModel):
+    """The ``diagnose --inspect`` JSON payload plus ``api_version``:
+    ``run`` on success, ``diagnostics`` on a domain failure."""
+
+    model_config = ConfigDict(extra="allow")
+
+    api_version: str
+    workspace: str
+    ok: bool
+    run: dict[str, Any] | None = None
     diagnostics: list[dict[str, Any]] | None = None
 
 

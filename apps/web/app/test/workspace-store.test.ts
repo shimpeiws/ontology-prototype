@@ -241,6 +241,131 @@ describe("workspace store", () => {
     expect(isValidationStale(state)).toBe(true);
   });
 
+  it("reverting the draft clears a save notice describing the discarded content", () => {
+    // #94: an invalid save notice names draft content that no longer
+    // exists once the draft is reverted — the alert must not outlive it.
+    for (const outcome of ["invalid", "failed"] as const) {
+      let state = dirtyState();
+      state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
+      state = workspaceReducer(state, {
+        type: "saveFinished",
+        requestId: 1,
+        revision: state.draftRevision,
+        files: draftFilesForRequest(state.drafts),
+        response: saveResponse({
+          outcome,
+          valid: outcome !== "invalid" ? true : false,
+          message: outcome === "failed" ? "disk full" : null,
+        }),
+      });
+      expect(state.saveNotice?.outcome).toBe(outcome);
+
+      state = workspaceReducer(state, { type: "revertedAll" });
+      expect(state.saveNotice).toBeNull();
+    }
+  });
+
+  it("reverting keeps notices that still describe live state", () => {
+    // A conflict still names the on-disk digest the reload path needs,
+    // and a saved notice still describes the active bundle.
+    for (const outcome of ["conflict", "saved"] as const) {
+      let state = dirtyState();
+      state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
+      state = workspaceReducer(state, {
+        type: "saveFinished",
+        requestId: 1,
+        revision: state.draftRevision,
+        files: draftFilesForRequest(state.drafts),
+        response: saveResponse({
+          outcome,
+          digest: outcome === "conflict" ? "on-disk-now" : "saved-digest",
+        }),
+      });
+
+      state = workspaceReducer(state, { type: "revertedAll" });
+      expect(state.saveNotice?.outcome).toBe(outcome);
+    }
+  });
+
+  it("reverting clears a transport save error naming the discarded draft", () => {
+    // A transport failure is about the discarded draft too: its Retry
+    // button must not outlive the content it would re-send.
+    for (const revert of [
+      { type: "revertedAll" } as const,
+      { type: "reverted", file: "domain.yaml" } as const,
+    ]) {
+      let state = dirtyState();
+      state = workspaceReducer(state, {
+        type: "saveStarted",
+        requestId: 1,
+      });
+      state = workspaceReducer(state, {
+        type: "saveFailed",
+        requestId: 1,
+        error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+      });
+      expect(state.saveError?.code).toBe("WEB.API_UNREACHABLE");
+
+      state = workspaceReducer(state, revert);
+      expect(state.saveError).toBeNull();
+    }
+  });
+
+  it("reverting keeps a reload failure — it describes the live bundle", () => {
+    // Devin Review: a failed conflict reload names the on-disk digest
+    // the reviewer still needs — dropping it with the draft hides the
+    // failure while the conflict stays unresolved.
+    let state = dirtyState();
+    state = workspaceReducer(state, { type: "reloadStarted" });
+    state = workspaceReducer(state, {
+      type: "reloadFailed",
+      requestedPath: "job-invoicing",
+      error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+    });
+    expect(state.saveErrorSource).toBe("reload");
+
+    for (const revert of [
+      { type: "revertedAll" } as const,
+      { type: "reverted", file: "domain.yaml" } as const,
+    ]) {
+      const reverted = workspaceReducer(state, revert);
+      expect(reverted.saveError?.code).toBe("WEB.API_UNREACHABLE");
+      expect(reverted.saveErrorSource).toBe("reload");
+    }
+  });
+
+  it("a per-file revert clears the invalid notice too", () => {
+    let state = dirtyState();
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
+    state = workspaceReducer(state, {
+      type: "saveFinished",
+      requestId: 1,
+      revision: state.draftRevision,
+      files: draftFilesForRequest(state.drafts),
+      response: saveResponse({
+        outcome: "invalid",
+        valid: false,
+        diagnostics: [SYNTHETIC_DIAGNOSTIC],
+      }),
+    });
+
+    state = workspaceReducer(state, {
+      type: "reverted",
+      file: "domain.yaml",
+    });
+    expect(state.saveNotice).toBeNull();
+    // A newly attempted save still produces its own notice.
+    state = workspaceReducer(state, { type: "saveStarted", requestId: 2 });
+    state = workspaceReducer(state, {
+      type: "saveFinished",
+      requestId: 2,
+      revision: state.draftRevision,
+      files: draftFilesForRequest(state.drafts),
+      response: saveResponse({}),
+    });
+    expect(state.saveNotice?.outcome).toBe("saved");
+  });
+
   it("revertedAll restores every file to the exact active text", () => {
     let state = opened();
     state = workspaceReducer(state, {
