@@ -8,7 +8,7 @@
  * that shows the receipt or the refusal diagnostics in place.
  */
 
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -322,6 +322,47 @@ describe("proposals page", () => {
     expect(
       within(card).getByLabelText("grounding evidence"),
     ).toHaveTextContent(/could not be verified/);
+  });
+
+  it("shows the recorded run without waiting for the trace anchor", async () => {
+    // Devin Review: the two read-backs settle into separate state — a
+    // slow trace lookup must not hold the already-settled run record
+    // hostage, and pending references get no verdict badge yet.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    let resolveAnchor!: (r: typeof SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE) => void;
+    traceRun.mockImplementation((_p, runId) =>
+      runId === "dgx-20261005T120600000000Z-cccc2222-p0"
+        ? new Promise<typeof SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE>((r) => {
+            resolveAnchor = r;
+          })
+        : Promise.resolve(SYNTHETIC_ANCHOR_GENERIC),
+    );
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const section = await within(card).findByLabelText(
+      "proposing diagnosis run",
+    );
+    expect(
+      await within(section).findByText(/stub\/stub-offline/),
+    ).toBeInTheDocument();
+
+    const evidence = within(card).getByLabelText("grounding evidence");
+    expect(
+      within(evidence).getByText(/Verifying the recorded references/),
+    ).toBeInTheDocument();
+    expect(
+      within(evidence).queryByText("unverified"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(evidence).queryByText("unresolved"),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveAnchor(SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE);
+      await Promise.resolve();
+    });
+    await within(evidence).findByText("unresolved");
   });
 
   it("a superseded provenance response never renders", async () => {

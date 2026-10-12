@@ -59,28 +59,38 @@ export function DiagnosisDeliverables({
       ) : null}
       {hypotheses.length ? (
         <ul className="trace-list">
-          {hypotheses.map((h, i) => (
-            <li key={i}>
-              <p>{h.statement ?? "…"}</p>
-              {h.evidence?.length ? (
-                <p className="hint">
-                  evidence:{" "}
-                  {h.evidence.map((id) => (
-                    <EvidenceChip key={id} id={id} />
-                  ))}
-                </p>
-              ) : null}
-              {h.unverified_evidence?.length ? (
-                <p className="hint">
-                  unverified evidence:{" "}
-                  {h.unverified_evidence.map((id) => (
-                    <EvidenceChip key={id} id={id} />
-                  ))}
-                  <StatusBadge status="unresolved" label="unresolved" />
-                </p>
-              ) : null}
-            </li>
-          ))}
+          {hypotheses.map((h, i) => {
+            // The core keeps unverified ids inside `evidence` too —
+            // render them only under the unverified label so a citation
+            // never reads as verified in one row and unresolved in the
+            // next.
+            const unverified = h.unverified_evidence ?? [];
+            const verifiedEvidence = (h.evidence ?? []).filter(
+              (id) => !unverified.includes(id),
+            );
+            return (
+              <li key={i}>
+                <p>{h.statement ?? "…"}</p>
+                {verifiedEvidence.length ? (
+                  <p className="hint">
+                    evidence:{" "}
+                    {verifiedEvidence.map((id) => (
+                      <EvidenceChip key={id} id={id} />
+                    ))}
+                  </p>
+                ) : null}
+                {unverified.length ? (
+                  <p className="hint">
+                    unverified evidence:{" "}
+                    {unverified.map((id) => (
+                      <EvidenceChip key={id} id={id} />
+                    ))}
+                    <StatusBadge status="unresolved" label="unresolved" />
+                  </p>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       {questions.length ? (

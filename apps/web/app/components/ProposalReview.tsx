@@ -45,21 +45,24 @@ type DecideOutcome =
     }
   | { kind: "recorded"; response: DecisionResponse };
 
-/** Read-back of the proposing diagnosis run plus the proposal's
- *  recorded trace links — provenance for the card (#96/#97). The two
- *  reads settle independently: an unreadable run still shows the
- *  recorded links, and an unreadable anchor still shows the run —
- *  `links === null` means resolution could not be verified, which is
- *  different from "verified unresolved". */
-type Provenance =
+/** Read-back of the proposing diagnosis run — provenance for the card
+ *  (#96). Settles on its own: a slow or failed trace-anchor read never
+ *  delays or discards the run record. */
+type RunState =
   | { status: "loading" }
   | {
       status: "done";
       run: DiagnosisRunRecord | null;
-      runDiagnostics: Diagnostic[];
-      runError: ApiError | Error | null;
-      links: TraceLink[] | null;
+      diagnostics: Diagnostic[];
+      error: ApiError | Error | null;
     };
+
+/** The proposal's recorded trace links — evidence resolution (#97).
+ *  Settles independently of the run read. `links === null` means the
+ *  anchor could not be read: resolution is unverified, not unresolved. */
+type LinksState =
+  | { status: "loading" }
+  | { status: "done"; links: TraceLink[] | null };
 
 export function ProposalReviewCard({
   path,
@@ -84,49 +87,57 @@ export function ProposalReviewCard({
   const seq = useRef(0);
 
   // Provenance read-back (#96/#97): the diagnosis run that produced the
-  // proposal and the trace links that resolve its evidence ids. One
-  // flight per card; a superseded response is never rendered.
-  const [provenance, setProvenance] = useState<Provenance>({
+  // proposal and the trace links that resolve its evidence ids. The two
+  // reads settle into separate state so one slow request never delays
+  // the other; a superseded response is never rendered.
+  const [runState, setRunState] = useState<RunState>({ status: "loading" });
+  const [linksState, setLinksState] = useState<LinksState>({
     status: "loading",
   });
   const provSeq = useRef(0);
   useEffect(() => {
     const request = ++provSeq.current;
     const controller = new AbortController();
-    setProvenance({ status: "loading" });
-    Promise.allSettled([
-      api.diagnosisRun(path, proposal.diagnosis_run_id, controller.signal),
-      api.traceRun(path, proposal.proposal_id, controller.signal),
-    ])
-      .then(([runResult, anchorResult]) => {
-        if (controller.signal.aborted || request !== provSeq.current)
-          return;
-        const anchor =
-          anchorResult.status === "fulfilled"
-            ? anchorResult.value.trace
-            : undefined;
-        const links =
-          anchorResult.status === "fulfilled" &&
-          anchorResult.value.ok &&
-          anchor &&
-          "links" in anchor
-            ? anchor.links
-            : null;
-        const runResponse =
-          runResult.status === "fulfilled" ? runResult.value : null;
-        setProvenance({
+    const fresh = () =>
+      !controller.signal.aborted && request === provSeq.current;
+    setRunState({ status: "loading" });
+    setLinksState({ status: "loading" });
+    api
+      .diagnosisRun(path, proposal.diagnosis_run_id, controller.signal)
+      .then((response) => {
+        if (!fresh()) return;
+        setRunState({
           status: "done",
-          run: runResponse?.ok ? (runResponse.run ?? null) : null,
-          runDiagnostics:
-            runResponse && !runResponse.ok
-              ? (runResponse.diagnostics ?? [])
-              : [],
-          runError:
-            runResult.status === "rejected"
-              ? toError(runResult.reason)
-              : null,
-          links,
+          run: response.ok ? (response.run ?? null) : null,
+          diagnostics: response.ok ? [] : (response.diagnostics ?? []),
+          error: null,
         });
+      })
+      .catch((err: unknown) => {
+        if (!fresh()) return;
+        setRunState({
+          status: "done",
+          run: null,
+          diagnostics: [],
+          error: toError(err),
+        });
+      });
+    api
+      .traceRun(path, proposal.proposal_id, controller.signal)
+      .then((response) => {
+        if (!fresh()) return;
+        const anchor = response.trace;
+        setLinksState({
+          status: "done",
+          links:
+            response.ok && anchor && "links" in anchor
+              ? anchor.links
+              : null,
+        });
+      })
+      .catch(() => {
+        if (!fresh()) return;
+        setLinksState({ status: "done", links: null });
       });
     return () => controller.abort();
   }, [path, proposal.diagnosis_run_id, proposal.proposal_id]);
@@ -228,14 +239,14 @@ export function ProposalReviewCard({
         <h4>
           Proposing diagnosis run <NatureBadge nature="ai" />
         </h4>
-        {provenance.status === "loading" ? (
+        {runState.status === "loading" ? (
           <p className="hint">Loading the recorded run…</p>
-        ) : provenance.runError ? (
+        ) : runState.error ? (
           <p className="hint" role="status">
             The recorded run could not be loaded:{" "}
-            {provenance.runError.message}
+            {runState.error.message}
           </p>
-        ) : provenance.run ? (
+        ) : runState.run ? (
           <>
             <p>
               <Link
@@ -243,15 +254,15 @@ export function ProposalReviewCard({
               >
                 <code>{proposal.diagnosis_run_id}</code>
               </Link>{" "}
-              — {provenance.run.provider}/{provenance.run.model}{" "}
-              {provenance.run.provider === "stub" ? (
+              — {runState.run.provider}/{runState.run.model}{" "}
+              {runState.run.provider === "stub" ? (
                 <Tag className="badge" color="warning">
                   stub — deterministic test double, not a live model
                 </Tag>
               ) : null}
             </p>
             <DiagnosisDeliverables
-              deliverables={provenance.run.deliverables}
+              deliverables={runState.run.deliverables}
             />
           </>
         ) : (
@@ -260,7 +271,7 @@ export function ProposalReviewCard({
               The recorded run is no longer readable — the diagnostics
               explain why.
             </p>
-            <DiagnosticsList diagnostics={provenance.runDiagnostics} />
+            <DiagnosticsList diagnostics={runState.diagnostics} />
           </>
         )}
       </section>
@@ -303,7 +314,9 @@ export function ProposalReviewCard({
         <EvidenceReferences
           evidence={proposal.evidence}
           links={
-            provenance.status === "done" ? provenance.links : undefined
+            linksState.status === "done"
+              ? linksState.links
+              : undefined
           }
           fromId={proposal.proposal_id}
           subject={{

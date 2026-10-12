@@ -187,6 +187,7 @@ export function workspaceReducer(
         drafts: { ...state.drafts, [action.file]: active },
         draftRevision: state.draftRevision + 1,
         saveNotice: noticeAfterRevert(state.saveNotice),
+        saveError: null,
       };
     }
     case "revertedAll": {
@@ -199,6 +200,7 @@ export function workspaceReducer(
         drafts,
         draftRevision: state.draftRevision + 1,
         saveNotice: noticeAfterRevert(state.saveNotice),
+        saveError: null,
       };
     }
     case "validationStarted":

@@ -287,6 +287,30 @@ describe("workspace store", () => {
     }
   });
 
+  it("reverting clears a transport save error naming the discarded draft", () => {
+    // A transport failure is about the discarded draft too: its Retry
+    // button must not outlive the content it would re-send.
+    for (const revert of [
+      { type: "revertedAll" } as const,
+      { type: "reverted", file: "domain.yaml" } as const,
+    ]) {
+      let state = dirtyState();
+      state = workspaceReducer(state, {
+        type: "saveStarted",
+        requestId: 1,
+      });
+      state = workspaceReducer(state, {
+        type: "saveFailed",
+        requestId: 1,
+        error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+      });
+      expect(state.saveError?.code).toBe("WEB.API_UNREACHABLE");
+
+      state = workspaceReducer(state, revert);
+      expect(state.saveError).toBeNull();
+    }
+  });
+
   it("a per-file revert clears the invalid notice too", () => {
     let state = dirtyState();
     state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });

@@ -34,8 +34,9 @@ const REF_LIST_KEYS: { key: string; label: string }[] = [
 const artifactHref = (id: string) =>
   `/workspace/trace?artifact=${encodeURIComponent(id)}`;
 
-/** How sure the card is about one reference's target. */
-type Resolution = "resolved" | "unresolved" | "unverified";
+/** How sure the card is about one reference's target. "pending" means
+ *  the anchor read is still in flight — no verdict badge yet. */
+type Resolution = "resolved" | "unresolved" | "unverified" | "pending";
 
 function RefLink({
   id,
@@ -66,7 +67,8 @@ export function EvidenceReferences({
   /** The proposal's own recorded links (from the trace anchor); the
    *  `resolved` flag marks ids pointing at no recorded artifact.
    *  `null` means the anchor could not be read — resolution is then
-   *  unverified, not unresolved. `undefined` renders like null. */
+   *  unverified, not unresolved. `undefined` means the anchor read is
+   *  still in flight — no badge is shown yet. */
   links?: TraceLink[] | null;
   /** The artifact the links were issued from (the proposal id). */
   fromId?: string;
@@ -74,6 +76,7 @@ export function EvidenceReferences({
   subject?: { entity: string | null; id: string | null };
 }) {
   const linksKnown = Array.isArray(links);
+  const linksPending = links === undefined;
   const resolvedByTo = new Map<string, boolean>();
   for (const link of links ?? []) {
     if (!fromId || link.from === fromId) {
@@ -81,11 +84,13 @@ export function EvidenceReferences({
     }
   }
   const resolutionFor = (id: string): Resolution =>
-    !linksKnown
-      ? "unverified"
-      : resolvedByTo.get(id) === true
-        ? "resolved"
-        : "unresolved";
+    linksPending
+      ? "pending"
+      : linksKnown
+        ? resolvedByTo.get(id) === true
+          ? "resolved"
+          : "unresolved"
+        : "unverified";
 
   const handled = new Set<string>();
   const rows: { label: string; ids: string[] }[] = [];
@@ -128,7 +133,11 @@ export function EvidenceReferences({
 
   return (
     <div className="evidence-refs">
-      {!linksKnown ? (
+      {linksPending ? (
+        <p className="hint">
+          Verifying the recorded references against the trace…
+        </p>
+      ) : !linksKnown ? (
         <p className="hint">
           The proposal's trace anchor is not readable, so whether these
           references resolve could not be verified.
@@ -144,7 +153,7 @@ export function EvidenceReferences({
                 to={`/workspace/trace?subject=${encodeURIComponent(subjectRef)}`}
               >
                 <code>{subjectRef}</code>
-                {!linksKnown ? (
+                {linksPending ? null : !linksKnown ? (
                   <StatusBadge status="unverified" label="unverified" />
                 ) : resolvedByTo.get(subjectRef) === false ? (
                   <StatusBadge status="unresolved" label="unresolved" />

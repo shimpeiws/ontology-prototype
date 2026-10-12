@@ -503,7 +503,8 @@ describe("run page", () => {
           {
             statement:
               "stub hypothesis (unconfirmed): the job may be awaiting a manual invoicing step",
-            evidence: ["fact-s1"],
+            // The core keeps unverified ids inside `evidence` too.
+            evidence: ["fact-s1", "obs-gone"],
             unverified_evidence: ["obs-gone"],
           },
         ],
@@ -535,12 +536,16 @@ describe("run page", () => {
       within(output).getByText(/awaiting a manual invoicing step/),
     ).toBeInTheDocument();
     // Evidence ids link into the Trace lookup; unverified ones are
-    // marked unresolved.
+    // marked unresolved — and appear only under that label, never as a
+    // plain verified citation a second time.
     expect(
       within(output).getByRole("link", { name: "fact-s1" }),
     ).toHaveAttribute("href", "/workspace/trace?artifact=fact-s1");
     expect(within(output).getByText("unverified evidence:")).toBeInTheDocument();
     expect(within(output).getByText("unresolved")).toBeInTheDocument();
+    expect(
+      within(output).getAllByRole("link", { name: "obs-gone" }),
+    ).toHaveLength(1);
     expect(
       within(output).getByText("Was a manual invoice held for review?"),
     ).toBeInTheDocument();

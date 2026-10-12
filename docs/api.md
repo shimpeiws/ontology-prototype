@@ -291,9 +291,9 @@ store error. Every `.ontology/` entry must also resolve inside the
 configured roots — a symlink escaping them is refused with
 `API.RUNTIME_OUTSIDE_ROOTS` rather than read.
 
-The seven read endpoints take `{"path": "<workspace under a configured
+The eight read endpoints take `{"path": "<workspace under a configured
 root>"}` plus the extra field listed; `path` follows the same
-root-containment rules as every other endpoint. The eighth row in the
+root-containment rules as every other endpoint. The ninth row in the
 table is the human-decision write documented under
 [Human decisions](#human-decisions); the five run triggers added by
 ADR 0004 are documented under
