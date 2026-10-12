@@ -311,6 +311,29 @@ describe("workspace store", () => {
     }
   });
 
+  it("reverting keeps a reload failure — it describes the live bundle", () => {
+    // Devin Review: a failed conflict reload names the on-disk digest
+    // the reviewer still needs — dropping it with the draft hides the
+    // failure while the conflict stays unresolved.
+    let state = dirtyState();
+    state = workspaceReducer(state, { type: "reloadStarted" });
+    state = workspaceReducer(state, {
+      type: "reloadFailed",
+      requestedPath: "job-invoicing",
+      error: new ApiError("WEB.API_UNREACHABLE", "down", null, true),
+    });
+    expect(state.saveErrorSource).toBe("reload");
+
+    for (const revert of [
+      { type: "revertedAll" } as const,
+      { type: "reverted", file: "domain.yaml" } as const,
+    ]) {
+      const reverted = workspaceReducer(state, revert);
+      expect(reverted.saveError?.code).toBe("WEB.API_UNREACHABLE");
+      expect(reverted.saveErrorSource).toBe("reload");
+    }
+  });
+
   it("a per-file revert clears the invalid notice too", () => {
     let state = dirtyState();
     state = workspaceReducer(state, { type: "saveStarted", requestId: 1 });
