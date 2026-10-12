@@ -174,7 +174,7 @@ describe("proposal grounding evidence", () => {
     const proposal: ProposalView = {
       ...SYNTHETIC_PROPOSAL_OPEN,
       evidence: {
-        observation_ids: ["obs-0001", 42],
+        observation_ids: ["obs-0001", 42, { source: "manual", id: 42 }],
         ingest_ids: [null],
       },
     };
@@ -182,10 +182,14 @@ describe("proposal grounding evidence", () => {
     const view = within(section as HTMLElement);
 
     // The string member links; the recorded non-id values stay visible
-    // instead of being filtered into silence.
+    // instead of being filtered into silence — objects as JSON, not
+    // "[object Object]".
     await view.findByRole("link", { name: "obs-0001" });
     expect(view.getByText("42")).toBeInTheDocument();
     expect(view.getByText("null")).toBeInTheDocument();
+    expect(
+      view.getByText('{"source":"manual","id":42}'),
+    ).toBeInTheDocument();
   });
 
   it("renders absent or mistyped evidence values as context", async () => {

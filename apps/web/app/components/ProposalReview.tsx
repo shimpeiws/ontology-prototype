@@ -54,11 +54,13 @@ function asId(value: unknown): string | null {
 
 /** A non-id value still shown under its label — never dropped silently. */
 function ScalarValue({ value }: { value: unknown }) {
-  return value === null || value === undefined ? (
-    <em className="preview-null">null</em>
-  ) : (
-    <code>{String(value)}</code>
-  );
+  if (value === null || value === undefined) {
+    return <em className="preview-null">null</em>;
+  }
+  if (typeof value === "object") {
+    return <code>{JSON.stringify(value)}</code>;
+  }
+  return <code>{String(value)}</code>;
 }
 
 /**
