@@ -6,8 +6,11 @@
  * ids) with derived context (elapsed days, event names). References
  * link into the Trace lookup (`?artifact=`); ids the recorded links
  * mark as resolving to nothing stay visible with an `unresolved`
- * badge — they are never silently dropped. Everything else renders as
- * plain recorded context through the generic record renderer.
+ * badge — they are never silently dropped. When the proposal's trace
+ * anchor could not be read, `links` is null: the ids render with an
+ * `unverified` badge instead, since unknown is not unresolved.
+ * Everything else renders as plain recorded context through the
+ * generic record renderer.
  */
 
 import { Link } from "react-router";
@@ -31,18 +34,23 @@ const REF_LIST_KEYS: { key: string; label: string }[] = [
 const artifactHref = (id: string) =>
   `/workspace/trace?artifact=${encodeURIComponent(id)}`;
 
+/** How sure the card is about one reference's target. */
+type Resolution = "resolved" | "unresolved" | "unverified";
+
 function RefLink({
   id,
-  resolved,
+  resolution,
 }: {
   id: string;
-  resolved: boolean | undefined;
+  resolution: Resolution;
 }) {
   return (
     <Link className="id-chip" to={artifactHref(id)}>
       <code>{id}</code>
-      {resolved === false ? (
+      {resolution === "unresolved" ? (
         <StatusBadge status="unresolved" label="unresolved" />
+      ) : resolution === "unverified" ? (
+        <StatusBadge status="unverified" label="unverified" />
       ) : null}
     </Link>
   );
@@ -56,19 +64,28 @@ export function EvidenceReferences({
 }: {
   evidence: Record<string, unknown>;
   /** The proposal's own recorded links (from the trace anchor); the
-   *  `resolved` flag marks ids pointing at no recorded artifact. */
-  links?: TraceLink[];
+   *  `resolved` flag marks ids pointing at no recorded artifact.
+   *  `null` means the anchor could not be read — resolution is then
+   *  unverified, not unresolved. `undefined` renders like null. */
+  links?: TraceLink[] | null;
   /** The artifact the links were issued from (the proposal id). */
   fromId?: string;
   /** The candidate subject, shown as a subject reference. */
   subject?: { entity: string | null; id: string | null };
 }) {
+  const linksKnown = Array.isArray(links);
   const resolvedByTo = new Map<string, boolean>();
   for (const link of links ?? []) {
     if (!fromId || link.from === fromId) {
       resolvedByTo.set(link.to, link.resolved);
     }
   }
+  const resolutionFor = (id: string): Resolution =>
+    !linksKnown
+      ? "unverified"
+      : resolvedByTo.get(id) === true
+        ? "resolved"
+        : "unresolved";
 
   const handled = new Set<string>();
   const rows: { label: string; ids: string[] }[] = [];
@@ -111,6 +128,12 @@ export function EvidenceReferences({
 
   return (
     <div className="evidence-refs">
+      {!linksKnown ? (
+        <p className="hint">
+          The proposal's trace anchor is not readable, so whether these
+          references resolve could not be verified.
+        </p>
+      ) : null}
       <dl className="definition-facts">
         {subjectRef ? (
           <div className="record-field" style={{ display: "contents" }}>
@@ -121,7 +144,9 @@ export function EvidenceReferences({
                 to={`/workspace/trace?subject=${encodeURIComponent(subjectRef)}`}
               >
                 <code>{subjectRef}</code>
-                {resolvedByTo.get(subjectRef) === false ? (
+                {!linksKnown ? (
+                  <StatusBadge status="unverified" label="unverified" />
+                ) : resolvedByTo.get(subjectRef) === false ? (
                   <StatusBadge status="unresolved" label="unresolved" />
                 ) : null}
               </Link>
@@ -133,7 +158,7 @@ export function EvidenceReferences({
             <dt>{label}</dt>
             <dd>
               {ids.map((id) => (
-                <RefLink key={id} id={id} resolved={resolvedByTo.get(id)} />
+                <RefLink key={id} id={id} resolution={resolutionFor(id)} />
               ))}
             </dd>
           </div>
@@ -148,10 +173,10 @@ export function EvidenceReferences({
         ) : null}
       </dl>
       {Object.keys(leftovers).length ? (
-        <details className="record-json">
-          <summary>recorded context</summary>
+        <>
+          <p className="hint">recorded context</p>
           <RecordDetails record={leftovers} />
-        </details>
+        </>
       ) : null}
     </div>
   );

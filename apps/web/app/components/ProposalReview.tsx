@@ -46,15 +46,19 @@ type DecideOutcome =
   | { kind: "recorded"; response: DecisionResponse };
 
 /** Read-back of the proposing diagnosis run plus the proposal's
- *  recorded trace links — provenance for the card (#96/#97). */
+ *  recorded trace links — provenance for the card (#96/#97). The two
+ *  reads settle independently: an unreadable run still shows the
+ *  recorded links, and an unreadable anchor still shows the run —
+ *  `links === null` means resolution could not be verified, which is
+ *  different from "verified unresolved". */
 type Provenance =
   | { status: "loading" }
-  | { status: "failed"; error: ApiError | Error }
   | {
       status: "done";
       run: DiagnosisRunRecord | null;
       runDiagnostics: Diagnostic[];
-      links: TraceLink[];
+      runError: ApiError | Error | null;
+      links: TraceLink[] | null;
     };
 
 export function ProposalReviewCard({
@@ -90,31 +94,39 @@ export function ProposalReviewCard({
     const request = ++provSeq.current;
     const controller = new AbortController();
     setProvenance({ status: "loading" });
-    Promise.all([
+    Promise.allSettled([
       api.diagnosisRun(path, proposal.diagnosis_run_id, controller.signal),
       api.traceRun(path, proposal.proposal_id, controller.signal),
     ])
-      .then(([runResponse, anchorResponse]) => {
+      .then(([runResult, anchorResult]) => {
         if (controller.signal.aborted || request !== provSeq.current)
           return;
-        const anchor = anchorResponse.trace;
+        const anchor =
+          anchorResult.status === "fulfilled"
+            ? anchorResult.value.trace
+            : undefined;
         const links =
-          anchorResponse.ok && anchor && "links" in anchor
+          anchorResult.status === "fulfilled" &&
+          anchorResult.value.ok &&
+          anchor &&
+          "links" in anchor
             ? anchor.links
-            : [];
+            : null;
+        const runResponse =
+          runResult.status === "fulfilled" ? runResult.value : null;
         setProvenance({
           status: "done",
-          run: runResponse.ok ? (runResponse.run ?? null) : null,
-          runDiagnostics: runResponse.ok
-            ? []
-            : (runResponse.diagnostics ?? []),
+          run: runResponse?.ok ? (runResponse.run ?? null) : null,
+          runDiagnostics:
+            runResponse && !runResponse.ok
+              ? (runResponse.diagnostics ?? [])
+              : [],
+          runError:
+            runResult.status === "rejected"
+              ? toError(runResult.reason)
+              : null,
           links,
         });
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted || request !== provSeq.current)
-          return;
-        setProvenance({ status: "failed", error: toError(err) });
       });
     return () => controller.abort();
   }, [path, proposal.diagnosis_run_id, proposal.proposal_id]);
@@ -218,10 +230,10 @@ export function ProposalReviewCard({
         </h4>
         {provenance.status === "loading" ? (
           <p className="hint">Loading the recorded run…</p>
-        ) : provenance.status === "failed" ? (
+        ) : provenance.runError ? (
           <p className="hint" role="status">
             The recorded run could not be loaded:{" "}
-            {provenance.error.message}
+            {provenance.runError.message}
           </p>
         ) : provenance.run ? (
           <>

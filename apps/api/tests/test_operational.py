@@ -826,6 +826,13 @@ class TestPathGuards:
             ("trace", {"path": str(walked.workspace)}),
             ("evaluations", {"path": str(walked.workspace)}),
             ("proposals", {"path": str(walked.workspace)}),
+            (
+                "diagnosis-runs/show",
+                {
+                    "path": str(walked.workspace),
+                    "run_id": walked.diagnosis_run_id,
+                },
+            ),
         ):
             response = client.post(
                 f"/api/v1/workspaces/{route}", json=body

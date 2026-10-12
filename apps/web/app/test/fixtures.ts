@@ -1042,6 +1042,24 @@ export const SYNTHETIC_TRACE_INVALID_SUBJECT: TraceViewResponse = {
   ],
 };
 
+/** An artifact lookup that resolves to no recorded artifact. */
+export const SYNTHETIC_TRACE_UNKNOWN_ID: TraceViewResponse = {
+  api_version: "v1",
+  workspace: "/abs/example/job-invoicing",
+  ok: false,
+  diagnostics: [
+    {
+      severity: "error",
+      code: "TRACE.UNKNOWN_ID",
+      message: "no recorded artifact 'dgx-nope'",
+      file: null,
+      path: null,
+      line: null,
+      hint: null,
+    },
+  ],
+};
+
 /** A frozen report whose after cohort missed the strict target. */
 export const SYNTHETIC_EVALUATION_REPORT: EvaluationReport = {
   evaluation: "completion-to-invoice-latency",

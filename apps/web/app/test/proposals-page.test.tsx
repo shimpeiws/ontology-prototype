@@ -14,7 +14,12 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, ApiError } from "../lib/api";
-import type { DecisionResponse, ProposalsResponse } from "../lib/types";
+import type {
+  DecisionResponse,
+  DiagnosisRunShowResponse,
+  ProposalsResponse,
+} from "../lib/types";
+import { ProposalReviewCard } from "../components/ProposalReview";
 import ProposalsPage from "../routes/workspace.proposals";
 import { WorkspaceProvider } from "../workspace/context";
 import {
@@ -33,6 +38,8 @@ import {
   SYNTHETIC_PROPOSALS_EMPTY,
   SYNTHETIC_PROPOSALS_RESPONSE,
   SYNTHETIC_PROPOSAL_ANCHOR_RESPONSE,
+  SYNTHETIC_PROPOSAL_OPEN,
+  SYNTHETIC_TRACE_UNKNOWN_ID,
 } from "./fixtures";
 
 vi.mock("../lib/api", async (importOriginal) => {
@@ -266,6 +273,95 @@ describe("proposals page", () => {
     expect(
       within(missing).getByText("unresolved"),
     ).toBeInTheDocument();
+  });
+
+  it("marks evidence unverified — not resolvable — when the anchor is unreadable", async () => {
+    // FIND-001: an anchor the trace cannot resolve means the links are
+    // unknown, not empty — the ids must not render as plain resolvable
+    // references.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    traceRun.mockResolvedValue(SYNTHETIC_TRACE_UNKNOWN_ID);
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const section = await within(card).findByLabelText(
+      "grounding evidence",
+    );
+    expect(
+      within(section).getByText(/could not be verified/),
+    ).toBeInTheDocument();
+    // Every reference carries the unverified badge — none reads as a
+    // confirmed resolvable link, and none claims "unresolved" either.
+    expect(
+      within(section).getAllByText("unverified").length,
+    ).toBeGreaterThan(0);
+    expect(
+      within(section).queryByText("unresolved"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the run provenance when the trace anchor read fails", async () => {
+    // FIND-002: the two read-backs settle independently — a failed
+    // anchor lookup must not discard the recorded run.
+    proposals.mockResolvedValue(SYNTHETIC_PROPOSALS_RESPONSE);
+    traceRun.mockRejectedValue(
+      new ApiError("WEB.API_UNREACHABLE", "API is down", null, true),
+    );
+    renderPage();
+
+    const card = await cardFor("dgx-20261005T120600000000Z-cccc2222-p0");
+    const section = await within(card).findByLabelText(
+      "proposing diagnosis run",
+    );
+    expect(
+      await within(section).findByText(/stub\/stub-offline/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).getByText(/deterministic response listing the 1 candidate/),
+    ).toBeInTheDocument();
+    expect(
+      within(card).getByLabelText("grounding evidence"),
+    ).toHaveTextContent(/could not be verified/);
+  });
+
+  it("a superseded provenance response never renders", async () => {
+    // INV-003: the card's path changes (workspace switch) while the
+    // first read is in flight — the stale response is discarded.
+    let resolveStale!: (r: DiagnosisRunShowResponse) => void;
+    diagnosisRun.mockImplementationOnce(
+      () =>
+        new Promise<DiagnosisRunShowResponse>((r) => {
+          resolveStale = r;
+        }),
+    );
+    diagnosisRun.mockResolvedValue(SYNTHETIC_DIAGNOSIS_UNKNOWN_RUN);
+    const { rerender } = render(
+      <MemoryRouter>
+        <ProposalReviewCard
+          path="ws-a"
+          proposal={SYNTHETIC_PROPOSAL_OPEN}
+          reviewer=""
+          onDecided={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    rerender(
+      <MemoryRouter>
+        <ProposalReviewCard
+          path="ws-b"
+          proposal={SYNTHETIC_PROPOSAL_OPEN}
+          reviewer=""
+          onDecided={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    // The stale ws-a response resolves late — it must not appear.
+    resolveStale(SYNTHETIC_DIAGNOSIS_RUN_RESPONSE);
+    const section = await screen.findByLabelText("proposing diagnosis run");
+    await within(section).findByText(/no longer readable/);
+    expect(
+      within(section).queryByText(/stub\/stub-offline/),
+    ).not.toBeInTheDocument();
   });
 
   it("keeps the payload reason param and the AI rationale distinct", async () => {
